@@ -19,4 +19,4 @@
 
 ## Team Contract
 
-Our team contract can be found [here](docs/contract/COSC 499 Team 12 Contract.docx).
+Our team contract can be found [here](docs/contract/team-contract.docx).
