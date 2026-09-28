@@ -20,3 +20,7 @@
 ## Team Contract
 
 Our team contract can be found [here](docs/contract/team-contract.docx).
+
+## Project Proposal
+
+Our project proposal can be found [here](docs/proposal/project-proposal.docx)
