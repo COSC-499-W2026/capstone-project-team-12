@@ -1,0 +1,34 @@
+[project]
+name = "hunt-api"
+version = "0.1.0"
+description = "Backend API for the Japanese Scavenger Hunt Game (COSC 499, Team 12)"
+requires-python = ">=3.11,<3.12"
+# pinned versions live in requirements.txt
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.2",
+    "alembic>=1.13",
+    "pydantic-settings>=2.4",
+]
+
+[project.optional-dependencies]
+# pinned versions live in requirements-dev.txt
+dev = [
+    "pytest>=8.3",
+    "httpx>=0.27",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["../../tests/backend"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["app"]
