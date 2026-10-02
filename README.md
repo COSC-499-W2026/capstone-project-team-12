@@ -22,6 +22,24 @@
 └── README.md
 ```
 
+## Running Locally
+
+Requirements: Docker Desktop (Mac or Windows) or Docker Engine (Linux).
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+| Service | URL | Purpose |
+|---|---|---|
+| api | http://localhost:8000/health, http://localhost:8000/docs | FastAPI backend and its OpenAPI docs |
+| db | localhost:5432 | PostgreSQL 16 |
+| mailpit | http://localhost:8025 | Catches emails sent in development |
+| scheduler | (no port) | Runs scheduled jobs with supercronic |
+
+Database migrations run automatically when the api container starts.
+
 ## Backend Development
 
 The backend uses Python 3.11 in a virtual environment (venv).
@@ -36,6 +54,15 @@ pytest                               # tests (in tests/backend)
 ruff check . ../../tests/backend     # lint
 ruff format . ../../tests/backend    # format
 mypy                                 # type check (strict)
+alembic revision --autogenerate -m "describe change"   # new migration
+```
+
+To run the API from the venv with live reload (database and Mailpit still in Docker):
+
+```bash
+docker compose up -d db mailpit
+alembic upgrade head
+uvicorn app.main:app --reload        # http://localhost:8000/docs
 ```
 
 Adding a package: add it to `dependencies` (or `dev`) in `pyproject.toml`, install it with `pip install`,
