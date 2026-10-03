@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: hunt
+          POSTGRES_PASSWORD: hunt
+          POSTGRES_DB: hunt_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hunt -d hunt_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+psycopg://hunt:hunt@localhost:5432/hunt_test
+
+    defaults:
+      run:
+        working-directory: src/backend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: Mypy
+        run: mypy app
+
+      - name: Alembic upgrade
+        run: alembic upgrade head
+
+      - name: Run tests with coverage
+        run: pytest --cov=app --cov-report=term-missing
