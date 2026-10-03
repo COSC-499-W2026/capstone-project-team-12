@@ -1,35 +1,31 @@
-"""Shared fixtures for backend tests (database fixtures come with the CI task)."""
-
 """Shared fixtures for backend tests."""
 
-import os
 from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.main import create_app
 
-TEST_DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+psycopg://hunt:hunt@localhost:5432/hunt_test",
-)
+
+@pytest.fixture(scope="session")
+def test_engine() -> Iterator[Engine]:
+    engine = create_engine(get_settings().database_url, pool_pre_ping=True)
+    yield engine
+    engine.dispose()
 
 
 @pytest.fixture
-def client() -> TestClient:
-    return TestClient(create_app())
-
-
-@pytest.fixture
-def db() -> Iterator[Session]:
-    engine = create_engine(TEST_DATABASE_URL)
-    connection = engine.connect()
+def db(test_engine: Engine) -> Iterator[Session]:
+    connection = test_engine.connect()
     transaction = connection.begin()
-
-    session = Session(bind=connection)
+    session = Session(
+        bind=connection,
+        join_transaction_mode="create_savepoint",
+    )
 
     try:
         yield session
@@ -37,4 +33,9 @@ def db() -> Iterator[Session]:
         session.close()
         transaction.rollback()
         connection.close()
-        engine.dispose()
+
+
+@pytest.fixture
+def client() -> TestClient:
+    # TODO: Override get_db with the test session when database-backed API tests are added.
+    return TestClient(create_app())
