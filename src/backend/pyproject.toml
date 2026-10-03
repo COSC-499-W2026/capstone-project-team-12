@@ -23,12 +23,12 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["../../tests/backend"]
-pythonpath = ["."]
+testpaths = ["../../tests/backend", "../../tests/utils"]
+pythonpath = [".", "../../utils"]
 addopts = "-q"
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
 plugins = ["pydantic.mypy"]
-files = ["app"]
+files = ["app", "../../utils"]
