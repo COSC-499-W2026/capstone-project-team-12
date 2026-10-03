@@ -11,9 +11,14 @@
 │   ├── minutes              # Minutes from team meetings
 │   ├── logs                 # Team and individual Logs
 │   └── ...
-├── src                      # Source files (alternatively `app`)
+├── src                      # Source files
+│   ├── backend              # FastAPI service (M1)
+│   └── frontend             # React + TypeScript web app (M2)
 ├── tests                    # Automated tests
-├── utils                    # Utility files
+│   ├── backend              # pytest
+│   ├── frontend             # Vitest component tests (M2)
+│   └── e2e                  # Playwright end-to-end tests (M2)
+├── utils                    # Utility scripts (e.g., GPS replay)
 └── README.md
 ```
 
