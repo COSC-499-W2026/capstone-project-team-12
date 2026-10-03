@@ -6,7 +6,7 @@ Usage (from the repo root):
 
 Components follow the architecture diagram and DFDs:
     accounts (1.0), game (2.0), verification (3.0), engagement (4.0), content (5.0)
-plus shared code (core: app.config, app.db) and the entry layer (app.main, app.api).
+plus shared code (core: app.config, app.db) and the entry layer (app.main, app.api, app.cli).
 
 Rules:
   1. A component may use another component only through its interface module
@@ -36,7 +36,7 @@ COMPONENTS = {
     "content": "5.0 Content Management",
 }
 CORE = {"config", "db"}
-ENTRY = {"main", "api"}
+ENTRY = {"main", "api", "cli"}  # HTTP API and command-line jobs
 
 Graph = dict[str, set[str]]
 

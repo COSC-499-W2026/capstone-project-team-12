@@ -31,6 +31,7 @@ def test_real_backend_follows_the_rules() -> None:
         ("app.content.interface", "content"),
         ("app.db", "core"),
         ("app.api.v1", "entry"),
+        ("app.cli", "entry"),
         ("app.helpers", "other"),
     ],
 )
@@ -94,6 +95,11 @@ def test_rule5_module_outside_any_group(tmp_path: Path) -> None:
     assert problems_of(tmp_path, {"helpers.py": ""}) == [
         "rule 5: app.helpers is not in a component, CORE or ENTRY"
     ]
+
+
+def test_cli_module_counts_as_entry_layer(tmp_path: Path) -> None:
+    # crontab runs `python -m app.cli send-emails`, so app.cli must not trip rule 5
+    assert problems_of(tmp_path, {"db.py": "", "cli.py": "import app.db"}) == []
 
 
 def test_check_flag_sets_exit_code(
