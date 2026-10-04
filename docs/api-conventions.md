@@ -71,7 +71,7 @@ API error responses must not expose stack traces, database errors, internal host
 
 |Code|Meaning|Example|
 |---|---|---|
-|400|Bad Request|Invalid parameter|
+|400|Bad Request|Invalid parameter, token, wrong password|
 |401|Missing authorization|Missing authentication|
 |403|Forbidden|Authenticated but not permitted|
 |404|Not found|Resource doesn't exist|
