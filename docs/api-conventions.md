@@ -86,7 +86,7 @@ The following query parameters are standard:
 |Parameter|Type|Required|Default|Maximum|
 |---|---|---|---|---|
 |page|int|no|1|-|
-|pageSize|int|no|30|100|
+|pageSize|int|no|20|100|
 
 - page -> page number
 - pageSize -> number of records requested
@@ -94,8 +94,8 @@ The following query parameters are standard:
 Page is a 1-based page number. The first page is `page=1`.s
 
 If `page` is omitted, the API must use `page=1`.
-If `pageSize` is omitted, the API must use the default size of 30.
-Requesting an invalid page returns a bad request error.
+If `pageSize` is omitted, the API must use the default size of 20.
+Requesting an invalid page returns empty `items`.
 Requesting a pageSize larger than the maximum of 100 returns a bad request error.
 Invalid parameters (such as negative) must return a bad request error.
 
