@@ -7,7 +7,8 @@ Usage (from the repo root):
 
 Components follow the architecture diagram and DFDs:
     accounts (1.0), game (2.0), verification (3.0), engagement (4.0), content (5.0)
-plus shared code (core: app.config, app.db) and the entry layer (app.main, app.api, app.cli).
+plus shared code (core: app.config, app.db, app.models, app.services) and the entry layer
+(app.main, app.api, app.cli).
 
 Rules:
   1. A component may use another component only through its interface module
@@ -37,7 +38,8 @@ COMPONENTS = {
     "engagement": "4.0 Class & Engagement",
     "content": "5.0 Content Management",
 }
-CORE = {"config", "db"}
+# models: all ORM models (shared schema); services: services used by several components
+CORE = {"config", "db", "models", "services"}
 ENTRY = {"main", "api", "cli"}  # HTTP API and command-line jobs
 
 Graph = dict[str, set[str]]
@@ -169,7 +171,11 @@ def node_id(module: str) -> str:
 
 def mermaid(modules: set[str], edges: Graph) -> str:
     """Draw the modules as a Mermaid flowchart, one box per component or layer."""
-    titles = {**COMPONENTS, "core": "Shared (config, db)", "entry": "Entry (main, api, cli)"}
+    titles = {
+        **COMPONENTS,
+        "core": "Shared (config, db, models, services)",
+        "entry": "Entry (main, api, cli)",
+    }
     lines = ["```mermaid", "flowchart LR"]
     for name in ["entry", *COMPONENTS, "core", "other"]:
         members = sorted(m for m in modules if group(m) == name and m != "app")

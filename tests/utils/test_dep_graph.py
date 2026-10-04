@@ -30,6 +30,8 @@ def test_real_backend_follows_the_rules() -> None:
         ("app.game.service", "game"),
         ("app.content.interface", "content"),
         ("app.db", "core"),
+        ("app.models.users", "core"),
+        ("app.services.storage", "core"),
         ("app.api.v1", "entry"),
         ("app.cli", "entry"),
         ("app.helpers", "other"),
@@ -94,6 +96,23 @@ def test_rule4_component_imports_the_entry_layer(tmp_path: Path) -> None:
 def test_rule5_module_outside_any_group(tmp_path: Path) -> None:
     assert problems_of(tmp_path, {"helpers.py": ""}) == [
         "rule 5: app.helpers is not in a component, CORE or ENTRY"
+    ]
+
+
+def test_components_share_models_and_services(tmp_path: Path) -> None:
+    files = {
+        "models/users.py": "",
+        "services/storage.py": "",
+        "game/service.py": "from app.models.users import User\nfrom app.services import storage",
+        "engagement/service.py": "from app.models.users import User",
+    }
+    assert problems_of(tmp_path, files) == []
+
+
+def test_rule3_models_must_not_import_a_component(tmp_path: Path) -> None:
+    files = {"game/interface.py": "", "models/users.py": "import app.game.interface"}
+    assert problems_of(tmp_path, files) == [
+        "rule 3: shared module app.models.users imports app.game.interface"
     ]
 
 

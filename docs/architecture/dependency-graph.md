@@ -31,7 +31,7 @@ flowchart LR
     app_content["app.content"]
     app_content_interface["app.content.interface"]
   end
-  subgraph core["Shared (config, db)"]
+  subgraph core["Shared (config, db, models, services)"]
     app_config["app.config"]
     app_db["app.db"]
   end
