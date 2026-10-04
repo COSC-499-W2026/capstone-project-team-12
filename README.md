@@ -47,7 +47,7 @@ The backend uses Python 3.11 in a virtual environment (venv).
 ```bash
 cd src/backend
 python3.11 -m venv .venv
-source .venv/bin/activate            # Windows: .venv\Scripts\activate
+source .venv/bin/activate            # Windows: see below
 pip install -r requirements-dev.txt  # pinned runtime and development packages
 
 pytest                               # tests (in tests/backend)
@@ -64,6 +64,12 @@ docker compose up -d db mailpit
 alembic upgrade head
 uvicorn app.main:app --reload        # http://localhost:8000/docs
 ```
+
+On Windows, use these steps to create and activate the venv. The other commands are the same, and paths like `../../tests/backend` work with forward slashes on Windows too.
+
+- Create: `py -3.11 -m venv .venv`
+- Activate in cmd: `.venv\Scripts\activate.bat`
+- Activate in PowerShell: `.venv\Scripts\Activate.ps1` (if PowerShell blocks the script, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once)
 
 Adding a package: add it to `dependencies` (or `dev`) in `pyproject.toml`, install it with `pip install`,
 then add its exact version (`pip freeze`) to `requirements.txt` or `requirements-dev.txt` in the same commit.
