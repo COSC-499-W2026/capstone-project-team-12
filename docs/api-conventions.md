@@ -33,6 +33,7 @@ Example:
 ### Operation IDs
 Every OpenAPI operation must define an explicit, unique operationId
 The operationId must use camelCase and follow the pattern:
+
 |Operation|Convention|Example|
 |---|---|---|
 |List|list{Resource}|listUsers|
@@ -40,6 +41,13 @@ The operationId must use camelCase and follow the pattern:
 |Create|create{Resource}|createUser|
 |Update|update{Resource}|updateUser|
 |Delete|delete{Resource}|deleteUser|
+
+If an API call performs a function not listed, its operationId must follow a verbNoun structure. For example:
+
+```
+POST /session/{id}/pause
+```
+operationId -> `pauseSession`
 
 ## Error Handling
 
@@ -67,7 +75,7 @@ API error responses must not expose stack traces, database errors, internal host
 |401|Missing authorization|Missing authentication|
 |403|Forbidden|Authenticated but not permitted|
 |404|Not found|Resource doesn't exist|
-|409|Conflict|Duplicate resource|
+|409|Conflict|Duplicate resource or state conflict|
 |413|Content Too Large|Requst body exceeds server limit|
 |415|Unsupported media type|Media format not accepted, so reject the request|
 |422|Unprocessable Content|Semantic errors|
