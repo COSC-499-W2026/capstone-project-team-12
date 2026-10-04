@@ -45,9 +45,9 @@ The operationId must use camelCase and follow the pattern:
 If an API call performs a function not listed, its operationId must follow a verbNoun structure. For example:
 
 ```
-POST /session/{id}/pause
+POST /games/{id}/pause
 ```
-operationId -> `pauseSession`
+operationId -> `pauseGame`
 
 ## Error Handling
 
@@ -71,19 +71,19 @@ API error responses must not expose stack traces, database errors, internal host
 
 |Code|Meaning|Example|
 |---|---|---|
-|400|Bad Request|Invalid parameter, token, wrong password|
-|401|Missing authorization|Missing authentication|
+|400|Bad Request|Invalid parameter entry, verification or reset link is invalid|
+|401|Missing authorization|Missing, invalid or expired access token; wrong email or password|
 |403|Forbidden|Authenticated but not permitted|
 |404|Not found|Resource doesn't exist|
 |409|Conflict|Duplicate resource or state conflict|
-|413|Content Too Large|Requst body exceeds server limit|
+|413|Content Too Large|Request body exceeds server limit|
 |415|Unsupported media type|Media format not accepted, so reject the request|
 |422*|Unprocessable Content|Semantic errors|
 |429|Too many requests|Rate limit exceeded|
 |500|Internal server error|Unexpected failure|
 |503|Service Unavailable|OCR or server is unavailable|
 
-*FastAPI sends 422 with `{"detail":{...}}` by default. Convert to `{"error":{...}}` format with one exception handler, and decide if it is `400` or `422`.
+*FastAPI sends 422 with `{"detail":[...]}` by default. Convert to `{"error":{...}}` format with one exception handler.
 
 ### Application Error Code Naming
 Error codes should be written in UPPER_SNAKE_CASE
