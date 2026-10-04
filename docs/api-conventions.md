@@ -107,7 +107,7 @@ Page is a 1-based page number. The first page is `page=1`.
 
 If `page` is omitted, the API must use `page=1`.
 If `page_size` is omitted, the API must use the default size of 20.
-Requesting an invalid page returns empty `items`.
+Requesting a page past the last page returns empty `items`.
 Requesting a page_size larger than the maximum of 100 returns a bad request error.
 Invalid parameters (such as negative) must return a bad request error.
 
