@@ -5,7 +5,7 @@
 - Plural nouns for collections
 - Use hyphens for multi-word names
 - Use path parameters for identifying a single resource
-- Path and query parameters should follow the same rules as JSON property naming (camelCase)
+- Path and query parameters should follow the same rules as JSON property naming (snake_case)
 - Do not put implementation info such as database table names in URL
 
 ### HTTP Methods
@@ -17,14 +17,14 @@
 |DELETE|Delete a resource|
 
 ### JSON Property Naming
-Use camelCase.
+Use snake_case
 Example:
 ```
 {
-  "userId": "123",
-  "firstName": "John",
-  "lastName": "Smith",
-  "createdAt": "2026-10-03T10:00:00Z"
+  "user_id": "123",
+  "first_name": "John",
+  "last_name": "Smith",
+  "created_at": "2026-10-03T10:00:00Z"
 }
 ```
 
