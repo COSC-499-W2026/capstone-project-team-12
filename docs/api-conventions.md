@@ -1,3 +1,4 @@
+# API Conventions
 ## General Naming
 ### URL/Path Naming
 - Lowercase
@@ -30,7 +31,7 @@ Example:
 
 ### Operation IDs
 Every OpenAPI operation must define an explicit, unique operationId
-The operationId must use camelCase and follow the patther:
+The operationId must use camelCase and follow the pattern:
 |Operation|Convention|Example|
 |---|---|---|
 |List|list{Resource}|listUsers|
@@ -53,7 +54,7 @@ The operationId must use camelCase and follow the patther:
 ```
 - Code -> For the software
 - Message -> Human readable. For clients and developers.
-- Details -> Additional structured information
+- Details -> (optional) Additional structured information
 
 API error responses must not expose stack traces, database errors, internal hostnames, SQL statements, framework exception names, or other implementation details.
 
@@ -91,7 +92,7 @@ The following query parameters are standard:
 - page -> page number
 - pageSize -> number of records requested
 
-Page is a 1-based page number. The first page is `page=1`.s
+Page is a 1-based page number. The first page is `page=1`.
 
 If `page` is omitted, the API must use `page=1`.
 If `pageSize` is omitted, the API must use the default size of 20.
