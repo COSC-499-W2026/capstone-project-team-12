@@ -11,7 +11,9 @@ src/backend/
 │   ├── api/v1/        # /api/v1 routers (one per feature area)
 │   ├── accounts/      # 1.0 Auth & Accounts (Kaedyn)
 │   ├── game/          # 2.0 Game Session (Mia)
-│   └── verification/  # 3.0 Photo Verification (Eddy)
+│   ├── verification/  # 3.0 Photo Verification (Eddy)
+│   ├── engagement/    # 4.0 Class & Engagement (Fabiha)
+│   └── content/       # 5.0 Content Management (Eddy)
 ├── alembic/           # database migrations
 ├── crontab            # scheduled jobs for the scheduler container
 ├── Dockerfile
