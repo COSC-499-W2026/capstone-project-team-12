@@ -14,6 +14,7 @@
 |---|---|
 |GET|Retrieve a resource|
 |POST|Create resource or perform an action|
+|PUT|Replaces a resource|
 |PATCH|Partially update a resource|
 |DELETE|Delete a resource|
 
@@ -87,22 +88,22 @@ The following query parameters are standard:
 |Parameter|Type|Required|Default|Maximum|
 |---|---|---|---|---|
 |page|int|no|1|-|
-|pageSize|int|no|20|100|
+|page_size|int|no|20|100|
 
 - page -> page number
-- pageSize -> number of records requested
+- page_size -> number of records requested
 
 Page is a 1-based page number. The first page is `page=1`.
 
 If `page` is omitted, the API must use `page=1`.
-If `pageSize` is omitted, the API must use the default size of 20.
+If `page_size` is omitted, the API must use the default size of 20.
 Requesting an invalid page returns empty `items`.
-Requesting a pageSize larger than the maximum of 100 returns a bad request error.
+Requesting a page_size larger than the maximum of 100 returns a bad request error.
 Invalid parameters (such as negative) must return a bad request error.
 
 Example:
 ```
-GET /users?page=2&pageSize=25
+GET /users?page=2&page_size=25
 ```
 
 ### Pagination Response
@@ -111,15 +112,15 @@ Paginated collection responses must use the following structure:
 {
   "items": [],
   "page": 1,
-  "pageSize": 25,
+  "page_size": 25,
   "total": 137,
-  "hasNextPage": true
+  "has_next_page": true
 }
 ```
 |Property|Description|
 |---|---|
 |items|Resources returned for current page|
 |page|Current 1-based page number|
-|pageSize|Effective page size|
+|page_size|Effective page size|
 |total|Total number of resources matching request filter|
-|hasNextPage|Indicates whether another page is available|
+|has_next_page|Indicates whether another page is available|
