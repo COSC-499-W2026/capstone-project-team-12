@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environment
+.env
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Frontend (M2)
+node_modules/
+dist/

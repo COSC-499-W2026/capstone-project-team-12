@@ -1,0 +1,12 @@
+# Shared lint/format settings for src/backend and tests/backend
+line-length = 100
+src = ["src/backend"]
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[lint.isort]
+# the local alembic/ folder would otherwise be mistaken for first-party code
+known-third-party = ["alembic"]
+known-first-party = ["app"]

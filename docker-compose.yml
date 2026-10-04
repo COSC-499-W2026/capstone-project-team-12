@@ -1,0 +1,65 @@
+# Local development stack: api, db, scheduler, Mailpit.
+# Start with:  cp .env.example .env && docker compose up --build
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hunt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hunt}
+      POSTGRES_DB: ${POSTGRES_DB:-hunt}
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hunt} -d ${POSTGRES_DB:-hunt}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./src/backend
+    image: hunt-api:dev   # same image as the scheduler; the second build is served from cache
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-hunt}:${POSTGRES_PASSWORD:-hunt}@db:5432/${POSTGRES_DB:-hunt}
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
+    ports:
+      - "8000:8000"
+    volumes:
+      - media:/data/media
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  scheduler:
+    build: ./src/backend
+    image: hunt-api:dev
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-hunt}:${POSTGRES_PASSWORD:-hunt}@db:5432/${POSTGRES_DB:-hunt}
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+    command: ["/usr/local/bin/supercronic", "/app/crontab"]
+    volumes:
+      - media:/data/media
+    depends_on:
+      api:
+        condition: service_healthy
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025"   # web UI for emails sent in development
+      - "1025:1025"   # SMTP
+
+volumes:
+  db-data:
+  media:
