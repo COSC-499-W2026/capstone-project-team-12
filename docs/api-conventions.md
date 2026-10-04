@@ -66,8 +66,12 @@ API error responses must not expose stack traces, database errors, internal host
 |403|Forbidden|Authenticated but not permitted|
 |404|Not found|Resource doesn't exist|
 |409|Conflict|Duplicate resource|
+|413|Content Too Large|Requst body exceeds server limit|
+|415|Unsupported media type|Media format not accepted, so reject the request|
+|422|Unprocessable Content|Semantic errors|
 |429|Too many requests|Rate limit exceeded|
 |500|Internal server error|Unexpected failure|
+|503|Service Unavailable|OCR or server is unavailable|
 
 ### Application Error Code Naming
 Error codes should be written in UPPER_SNAKE_CASE
