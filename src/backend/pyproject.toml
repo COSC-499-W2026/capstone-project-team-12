@@ -20,6 +20,7 @@ dev = [
     "httpx2>=2.0",  # Starlette TestClient backend (plain httpx is deprecated)
     "ruff>=0.6",
     "mypy>=1.11",
+    "pytest-cov>=7.0",
 ]
 
 [tool.pytest.ini_options]

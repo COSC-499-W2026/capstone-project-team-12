@@ -9,8 +9,8 @@
 │   ├── proposal            # Project proposal
 │   ├── design               # UI mocks
 │   ├── minutes              # Minutes from team meetings
-│   ├── logs                 # Team and individual Logs
 │   └── ...
+├── logs                     # Weekly logs: logs/<StudentName>/week-K.md, logs/team/week-K.md
 ├── src                      # Source files
 │   ├── backend              # FastAPI service (M1)
 │   └── frontend             # React + TypeScript web app (M2)
