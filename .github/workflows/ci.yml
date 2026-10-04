@@ -46,17 +46,16 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: Ruff lint
-        run: ruff check . ../../tests/backend
+        run: ruff check . ../../tests ../../utils
 
       - name: Ruff format check
-        run: ruff format --check . ../../tests/backend
+        run: ruff format --check . ../../tests ../../utils
 
       - name: Mypy
-        run: mypy app
+        run: mypy  # files come from pyproject.toml
 
       - name: Alembic upgrade
         run: alembic upgrade head
 
       - name: Run tests with coverage
         run: pytest --cov=app --cov-report=term-missing
-        
