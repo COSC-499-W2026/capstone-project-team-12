@@ -1,0 +1,8 @@
+# Scheduled jobs run by supercronic in the scheduler container.
+# Jobs are added as they are implemented (see Technical Specification, Scheduled Jobs):
+# * * * * *   python -m app.cli send-emails
+# */10 * * * * python -m app.cli expire-sessions
+# 0 3 * * *   python -m app.cli purge-media
+
+# Placeholder so the scheduler has one job until the real ones exist; remove it then.
+0 * * * * echo "scheduler is running"
