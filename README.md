@@ -79,9 +79,11 @@ Never commit `.venv/`.
 ### Module dependencies
 
 Feature code goes in one package per component from the architecture diagram: `accounts` (1.0),
-`game` (2.0), `verification` (3.0), `engagement` (4.0) and `content` (5.0). Shared code (`config`,
-`db`) and the entry layer (`main`, `api`, and `cli` for the scheduled jobs) sit next to them.
-A component may use another component only through its `interface.py`.
+`game` (2.0), `verification` (3.0), `engagement` (4.0) and `content` (5.0). Shared code sits next
+to them: `config`, `db`, `models` (all ORM models, since the schema is shared) and `services`
+(services used by several components, such as storage and email). So does the entry layer (`main`,
+`api`, and `cli` for the scheduled jobs). A component may use another component only through its
+`interface.py`; when two components need to notify each other, the router or CLI command calls both.
 
 ```bash
 python utils/dep_graph.py --check   # fail if a dependency rule is broken
