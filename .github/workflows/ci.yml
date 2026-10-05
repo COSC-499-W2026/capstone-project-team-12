@@ -40,7 +40,9 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: src/backend/requirements-dev.txt
+          cache-dependency-path: |
+            src/backend/requirements.txt
+            src/backend/requirements-dev.txt
 
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
@@ -53,6 +55,9 @@ jobs:
 
       - name: Mypy
         run: mypy  # files come from pyproject.toml
+
+      - name: Dependency rules
+        run: python ../../utils/dep_graph.py --check
 
       - name: Alembic upgrade
         run: alembic upgrade head

@@ -51,9 +51,10 @@ source .venv/bin/activate            # Windows: see below
 pip install -r requirements-dev.txt  # pinned runtime and development packages
 
 pytest                               # tests (in tests/backend)
-ruff check . ../../tests/backend     # lint
-ruff format . ../../tests/backend    # format
+ruff check . ../../tests ../../utils   # lint
+ruff format . ../../tests ../../utils  # format
 mypy                                 # type check (strict)
+python ../../utils/dep_graph.py      # dependency rules between components
 alembic revision --autogenerate -m "describe change"   # new migration
 ```
 
@@ -74,6 +75,22 @@ On Windows, use these steps to create and activate the venv. The other commands 
 Adding a package: add it to `dependencies` (or `dev`) in `pyproject.toml`, install it with `pip install`,
 then add its exact version (`pip freeze`) to `requirements.txt` or `requirements-dev.txt` in the same commit.
 Never commit `.venv/`.
+
+### Module dependencies
+
+Feature code goes in one package per component from the architecture diagram: `accounts` (1.0),
+`game` (2.0), `verification` (3.0), `engagement` (4.0) and `content` (5.0). Shared code sits next
+to them: `config`, `db`, `models` (all ORM models, since the schema is shared) and `services`
+(services used by several components, such as storage and email). So does the entry layer (`main`,
+`api`, and `cli` for the scheduled jobs). A component may use another component only through its
+`interface.py`; when two components need to notify each other, the router or CLI command calls both.
+
+```bash
+python utils/dep_graph.py --check   # fail if a dependency rule is broken
+python utils/dep_graph.py --graph   # redraw docs/architecture/dependency-graph.md
+```
+
+The current graph is in [docs/architecture/dependency-graph.md](docs/architecture/dependency-graph.md).
 
 ## Team Contract
 
