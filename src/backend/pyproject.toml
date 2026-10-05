@@ -36,3 +36,7 @@ python_version = "3.11"
 strict = true
 plugins = ["pydantic.mypy"]
 files = ["app"]
+
+[[tool.mypy.overrides]]
+module = ["easyocr"]
+ignore_missing_imports = true  # EasyOCR ships no type information
