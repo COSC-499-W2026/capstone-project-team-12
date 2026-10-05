@@ -2,11 +2,14 @@
 
 The Dockerfile bakes the models into the image and sets EASYOCR_MODULE_PATH. Outside the image
 that variable is unset, so these tests are skipped and CI never downloads models.
-Run them in the image (from the repo root):
+Run them in the image (from the repo root, any shell):
 
-        docker compose run --rm --no-deps -v ./tests:/tests:ro api sh -c 
-        "pip install -q -r requirements-dev.txt && pytest -c pyproject.toml 
-        /tests/backend/test_ocr_smoke.py -v"
+    docker compose run --rm --no-deps -v ./tests:/tests:ro api sh
+
+then, inside the container:
+
+    pip install -q -r requirements-dev.txt
+    pytest -c pyproject.toml /tests/backend/test_ocr_smoke.py -v
 """
 
 import io
