@@ -76,6 +76,20 @@ Adding a package: add it to `dependencies` (or `dev`) in `pyproject.toml`, insta
 then add its exact version (`pip freeze`) to `requirements.txt` or `requirements-dev.txt` in the same commit.
 Never commit `.venv/`.
 
+### Module dependencies
+
+Feature code goes in one package per component from the architecture diagram: `accounts` (1.0),
+`game` (2.0), `verification` (3.0), `engagement` (4.0) and `content` (5.0). Shared code (`config`,
+`db`) and the entry layer (`main`, `api`, and `cli` for the scheduled jobs) sit next to them.
+A component may use another component only through its `interface.py`.
+
+```bash
+python utils/dep_graph.py --check   # fail if a dependency rule is broken
+python utils/dep_graph.py --graph   # redraw docs/architecture/dependency-graph.md
+```
+
+The current graph is in [docs/architecture/dependency-graph.md](docs/architecture/dependency-graph.md).
+
 ## Team Contract
 
 Our team contract can be found [here](docs/contract/team-contract.docx).

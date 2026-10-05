@@ -109,3 +109,29 @@ def test_check_flag_sets_exit_code(
     assert dep_graph.main([]) == 0
     assert dep_graph.main(["--check"]) == 1
     assert "rule 5: app.helpers" in capsys.readouterr().out
+
+
+def test_mermaid_draws_groups_and_edges(tmp_path: Path) -> None:
+    files = {"content/interface.py": "", "game/service.py": "import app.content.interface"}
+    chart = dep_graph.mermaid(*dep_graph.collect(make_app(tmp_path, files)))
+    assert chart.startswith("```mermaid\nflowchart LR")
+    assert '  subgraph game["2.0 Game Session"]' in chart
+    assert '    app_game_service["app.game.service"]' in chart
+    assert "  app_game_service --> app_content_interface" in chart
+    assert "subgraph accounts" not in chart  # empty groups are left out
+    assert 'app["app"]' not in chart  # the root package is not drawn
+
+
+def test_report_lists_the_rule_check() -> None:
+    assert "All dependency rules pass." in dep_graph.report(set(), {}, [])
+    assert "- rule 5: app.x is bad" in dep_graph.report(set(), {}, ["rule 5: app.x is bad"])
+
+
+def test_graph_flag_writes_the_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    graph_file = tmp_path / "docs" / "dependency-graph.md"
+    monkeypatch.setattr(dep_graph, "APP_DIR", make_app(tmp_path, {"db.py": ""}))
+    monkeypatch.setattr(dep_graph, "GRAPH_FILE", graph_file)
+    dep_graph.main([])
+    assert not graph_file.exists()
+    assert dep_graph.main(["--graph"]) == 0
+    assert '    app_db["app.db"]' in graph_file.read_text()
