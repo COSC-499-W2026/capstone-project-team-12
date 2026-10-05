@@ -13,7 +13,7 @@ This week (Sept. 27th), I focused on establishing the conventions that will be u
 - Pagination standards, defaults, and behavior
 Mia was an excellent help during this with her PR suggestions.
 
-Otherwise, my aim was to stay on top of PR reviews consistently and quickly to help move the foundational steps of the project forward, as well as work on the data flow diagram for the authentication system, which Mia assisted greatly in.
+Otherwise, my aim was to stay on top of PR reviews consistently and quickly to help move the foundational steps of the project forward, as well as work on the data flow diagram for the authentication system with assistance from Mia.
 
 ## Issues:
 Project proposal - Issue [#2]
