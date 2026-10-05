@@ -2,9 +2,8 @@
 
 Check made early because EasyOCR is the riskiest dependency (PyTorch, model download, arm64).
 The image changes are in the first PR for this issue; this note records what we measured and the
-risks we found. All numbers come from the build log or from running `utils/ocr_spike.py` (see
-"How to reproduce"). Two items are still open and marked **to fill**: the image size and the
-linux/arm64 build.
+risks we found. The numbers come from the build log, from running `utils/ocr_spike.py` (see
+"How to reproduce"), and from the first PR's image checks on amd64 and arm64.
 
 ## Build (linux/amd64)
 
@@ -22,9 +21,21 @@ The log has no overall wall-clock time, so the total is the sum of its step time
 
 - The CPU-only wheel is `torch-2.8.0+cpu`, 184.1 MB to download; the `torch.version.cuda is None`
   check in the Dockerfile passed.
-- Image size on amd64: **to fill** (`docker image ls hunt-api:dev`).
-- linux/arm64 (Mac) build and build time: **to fill** (`docker buildx build --platform linux/arm64
-  src/backend`). Not run yet, so arm64 support is unverified.
+- Image size on amd64: 2.31 GB.
+
+## Build (linux/arm64)
+
+From the first PR, on a MacBook Air M1 (macOS 15.6.1): the image builds with no package problems
+and the 5 smoke tests pass (5.36 s). The base image was cached, as in the amd64 log.
+
+| Step | Time |
+|---|---|
+| `pip install -r requirements.txt` | 46.2 s |
+| Bake EasyOCR models | 13.2 s |
+| **Total build** | **95.6 s** |
+
+- Image size on arm64: 1.91 GB on disk (466 MB of content).
+- The OCR timings below are from amd64 only. The sign photos were not read on the arm64 image.
 
 ## Real sign photos
 
@@ -98,15 +109,16 @@ space, hyphen).
 
 ## How to reproduce
 
-Put the photos (provided in our Discord) and a `labels.csv` (columns `file,expected`, for example `COM316`) in one folder,
+Put the photos and a `labels.csv` (columns `file,expected`, for example `COM316`) in one folder,
 then from the repo root (the first command builds the image if it is missing):
 
 ```bash
 docker compose build api
 docker compose run --rm --no-deps \
-    -v ./utils:/utils:ro -v [insert path to photos here]:/photos:ro api \
+    -v ./utils:/utils:ro -v /path/to/photos:/photos:ro api \
     python /utils/ocr_spike.py /photos
 docker image ls hunt-api:dev
 ```
 
-Repeat on a Mac (arm64) and on an amd64 machine, and note which one each result is from.
+On Git Bash for Windows, prefix the `docker compose run` line with `MSYS_NO_PATHCONV=1`. Results
+depend on the machine, so note which one each run is from.
