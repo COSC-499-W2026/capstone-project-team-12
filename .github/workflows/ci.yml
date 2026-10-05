@@ -54,6 +54,9 @@ jobs:
       - name: Mypy
         run: mypy  # files come from pyproject.toml
 
+      - name: Dependency rules
+        run: python ../../utils/dep_graph.py --check
+
       - name: Alembic upgrade
         run: alembic upgrade head
 

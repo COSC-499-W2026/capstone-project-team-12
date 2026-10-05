@@ -51,9 +51,10 @@ source .venv/bin/activate            # Windows: see below
 pip install -r requirements-dev.txt  # pinned runtime and development packages
 
 pytest                               # tests (in tests/backend)
-ruff check . ../../tests/backend     # lint
-ruff format . ../../tests/backend    # format
+ruff check . ../../tests ../../utils   # lint
+ruff format . ../../tests ../../utils  # format
 mypy                                 # type check (strict)
+python ../../utils/dep_graph.py      # dependency rules between components
 alembic revision --autogenerate -m "describe change"   # new migration
 ```
 
