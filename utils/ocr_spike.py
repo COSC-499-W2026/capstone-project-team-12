@@ -19,7 +19,6 @@ import csv
 import os
 import platform
 import re
-import resource
 import statistics
 import time
 from collections.abc import Sequence
@@ -65,6 +64,8 @@ class PhotoResult(NamedTuple):
 
 def peak_rss_mb() -> float:
     """Peak resident memory of this process so far, in MiB (ru_maxrss is KiB on Linux)."""
+    import resource  # not available on Windows, so only imported when the script measures
+
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / KIB_PER_MIB
 
 
