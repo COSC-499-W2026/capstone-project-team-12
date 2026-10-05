@@ -90,13 +90,18 @@ space, hyphen).
   The spec says evaluation photos must come from the in-app camera (720p to 1080p, no HDR or focus
   processing). Treat 10 of 11 as a smoke check; the real MATCH rate comes from the OCR evaluation
   with in-app frames.
-- **Memory is higher than the spec's estimate leaves room for.** One process used 1660 MiB, and the
-  first photo alone added about 780 MiB on top of the 853 MiB after loading the reader. The spec
-  allows 2 OCR jobs at once and estimates about 2 GB for EasyOCR, so measure memory with 2
-  concurrent jobs in the load test and size the server from that.
+- **Two concurrent jobs probably need more than the spec's 2 GB.** One job used 1660 MiB: 853 MiB
+  after loading the reader, plus about 807 MiB while reading photos. The spec allows 2 OCR jobs at
+  once and estimates about 2 GB for EasyOCR. If both jobs share one loaded reader, that is about
+  2.4 GiB (853 + 2 x 807 MiB); if each job loads its own, up to about 3.2 GiB (2 x 1660 MiB). Both
+  figures are calculated from the single-job run, not measured, and leave out PostgreSQL, the rest
+  of the API and the operating system. Share one reader between jobs, measure memory with 2
+  concurrent jobs in the load test, and size the server from that.
 - **Torch uses many threads by default.** Torch used 8 threads on this machine. With 2 concurrent
   jobs they compete for the same CPUs, which affects the p95 target under load (load test
-  scenario 2, 10 simultaneous uploads).
+  scenario 2, 10 simultaneous uploads). Next step: on a 4 vCPU server try
+  `torch.set_num_threads(2)` so that 2 jobs use 4 threads in total (check that the setting takes
+  effect in the worker threads that run OCR), and compare p95 with and without it in the load test.
 - **Pinned packages come from two indexes.** `requirements.txt` uses `--extra-index-url` for the
   PyTorch CPU wheels. The build log shows `Jinja2 3.1.6` and `MarkupSafe 3.0.3` were downloaded from
   `download.pytorch.org`, not PyPI. Versions are pinned, but pip may pick either index for any
@@ -109,8 +114,11 @@ space, hyphen).
 
 ## How to reproduce
 
-Put the photos and a `labels.csv` (columns `file,expected`, for example `COM316`) in one folder,
-then from the repo root (the first command builds the image if it is missing):
+Put the photos in one folder and copy `docs/ocr-spike-labels.csv` into it as `labels.csv`. It lists
+the expected room number for each of the 11 photos (columns `file,expected`, for example `COM316`),
+so photo files must keep their original names. The photos are not in the repo (some show people
+through the glass); to use your own, list them in a `labels.csv` the same way. Then, from the repo
+root (the first command builds the image if it is missing):
 
 ```bash
 docker compose build api
