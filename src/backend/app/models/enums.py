@@ -34,5 +34,5 @@ class ClassStaffRole(StrEnum):
 
 class EnrollmentEndReason(StrEnum):
     LEFT = "left"  # the student left; they can rejoin later with a code
-    REMOVED = "removed"  # by the class owner; rejoining with a code is refused, the owner can restore
+    REMOVED = "removed"  # by the owner; can't rejoin with a code, but the owner can restore
     ARCHIVED = "archived"
