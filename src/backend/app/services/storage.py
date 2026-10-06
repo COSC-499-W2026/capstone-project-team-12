@@ -21,10 +21,6 @@ class MediaUrlError(Exception):
     """The signed link was tampered with or has expired (the router answers 403)."""
 
 
-class MediaNotFoundError(Exception):
-    """No clip exists for the requested feedback code or clue audio asset."""
-
-
 class StorageService:
     def __init__(
         self,
