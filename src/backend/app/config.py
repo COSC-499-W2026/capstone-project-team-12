@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     smtp_host: str = "localhost"
     smtp_port: int = 1025
     media_dir: str = "/data/media"
+    gps_radius_meters: int = 30
 
 
 @lru_cache
