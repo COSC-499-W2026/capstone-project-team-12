@@ -30,3 +30,9 @@ class UserRole(StrEnum):
 class ClassStaffRole(StrEnum):
     OWNER = "owner"
     ASSISTANT = "assistant"
+
+
+class EnrollmentEndReason(StrEnum):
+    LEFT = "left"  # the student left; they can rejoin later with a code
+    REMOVED = "removed"  # by the class owner; rejoining with a code is refused, the owner can restore
+    ARCHIVED = "archived"
