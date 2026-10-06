@@ -19,3 +19,14 @@ class Difficulty(IntEnum):
     BASIC = 1  # numbers only
     ADVANCING = 2  # numbers and a simple description
     CHALLENGING = 3  # description only
+
+
+class UserRole(StrEnum):
+    STUDENT = "student"
+    STAFF = "staff"  # teachers; a TA is a class_staff row, not a role
+    ADMIN = "admin"
+
+
+class ClassStaffRole(StrEnum):
+    OWNER = "owner"
+    ASSISTANT = "assistant"
