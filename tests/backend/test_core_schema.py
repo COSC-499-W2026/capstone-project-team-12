@@ -1,5 +1,6 @@
 """The core tables (#8) reject bad data at the database level, not only in the services."""
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -10,8 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.db import Base
 from app.models.accounts import ClassStaff, User
-from app.models.engagement import Class
-from app.models.enums import ClassStaffRole, Language, UserRole
+from app.models.engagement import AccessCode, Class, ClassEnrollment
+from app.models.enums import ClassStaffRole, EnrollmentEndReason, Language, UserRole
 
 
 def add_user(db: Session, **fields: Any) -> User:
@@ -43,6 +44,34 @@ def add_class(db: Session, **fields: Any) -> Class:
 def add_staff(db: Session, school_class: Class, user: User, role: str) -> None:
     db.add(ClassStaff(class_id=school_class.id, user_id=user.id, role=role))
     db.flush()
+
+
+def add_code(db: Session, school_class: Class, **fields: Any) -> AccessCode:
+    values: dict[str, Any] = {
+        "class_id": school_class.id,
+        "code": uuid4().hex[:8].upper(),
+        "expires_at": datetime.now(UTC) + timedelta(days=90),
+        "created_by": add_user(db, role=UserRole.STAFF).id,
+    }
+    values.update(fields)
+    code = AccessCode(**values)
+    db.add(code)
+    db.flush()
+    return code
+
+
+def enrol(db: Session, student: User, school_class: Class, **fields: Any) -> ClassEnrollment:
+    values: dict[str, Any] = {
+        "student_id": student.id,
+        "class_id": school_class.id,
+        "access_code_id": add_code(db, school_class).id,
+        "language": school_class.target_language,
+    }
+    values.update(fields)
+    enrollment = ClassEnrollment(**values)
+    db.add(enrollment)
+    db.flush()
+    return enrollment
 
 
 def test_constraints_follow_the_naming_convention() -> None:
@@ -178,3 +207,87 @@ def test_a_user_can_own_several_classes(db: Session) -> None:
 def test_unknown_staff_role_is_rejected(db: Session) -> None:
     with pytest.raises(IntegrityError, match="ck_class_staff_role"):
         add_staff(db, add_class(db), add_user(db), "teacher")
+
+
+# access_codes and class_enrollments (#8 PR 2)
+
+
+def test_access_code_gets_server_defaults(db: Session) -> None:
+    code = add_code(db, add_class(db))
+    db.refresh(code)
+    assert code.is_active is True
+    assert code.uses_count == 0
+    assert code.max_uses is None
+
+
+def test_duplicate_access_code_is_rejected(db: Session) -> None:
+    school_class = add_class(db)
+    add_code(db, school_class, code="K7PM3QXD")
+    with pytest.raises(IntegrityError, match="uq_access_codes_code"):
+        add_code(db, school_class, code="K7PM3QXD")
+
+
+@pytest.mark.parametrize("code", ["K7PM-3QXD", "k7pm3qxd", "K7PM3QX"])
+def test_access_code_is_stored_normalised(db: Session, code: str) -> None:
+    with pytest.raises(IntegrityError, match="ck_access_codes_code_format"):
+        add_code(db, add_class(db), code=code)
+
+
+def test_max_uses_must_be_positive(db: Session) -> None:
+    with pytest.raises(IntegrityError, match="ck_access_codes_max_uses_positive"):
+        add_code(db, add_class(db), max_uses=0)
+
+
+def test_uses_cannot_go_over_max_uses(db: Session) -> None:
+    code = add_code(db, add_class(db), max_uses=2)
+    code.uses_count = 2
+    db.flush()
+    code.uses_count = 3
+    with pytest.raises(IntegrityError, match="ck_access_codes_uses_within_max"):
+        db.flush()
+
+
+def test_enrolment_language_must_match_the_class(db: Session) -> None:
+    with pytest.raises(IntegrityError, match="fk_class_enrollments_class_id_language_classes"):
+        enrol(db, add_user(db), add_class(db, target_language=Language.JA), language=Language.FR)
+
+
+def test_a_student_is_enrolled_once_per_class(db: Session) -> None:
+    student, school_class = add_user(db), add_class(db)
+    enrol(db, student, school_class)
+    with pytest.raises(IntegrityError, match="uq_class_enrollments_student_id_class_id"):
+        enrol(db, student, school_class)
+
+
+def test_one_active_class_per_language(db: Session) -> None:
+    student = add_user(db)
+    enrol(db, student, add_class(db))
+    enrol(db, student, add_class(db, target_language=Language.FR))  # other language is fine
+    with pytest.raises(IntegrityError, match="uq_class_enrollments_one_active_per_language"):
+        enrol(db, student, add_class(db))
+
+
+def test_a_student_can_join_again_after_leaving(db: Session) -> None:
+    student = add_user(db)
+    old = enrol(db, student, add_class(db))
+    old.is_active = False
+    old.end_reason = EnrollmentEndReason.LEFT
+    old.left_at = datetime.now(UTC)
+    db.flush()
+    enrol(db, student, add_class(db))
+
+
+@pytest.mark.parametrize(
+    ("is_active", "end_reason"),
+    [(True, EnrollmentEndReason.LEFT), (False, None)],
+)
+def test_end_reason_must_match_the_status(
+    db: Session, is_active: bool, end_reason: str | None
+) -> None:
+    with pytest.raises(IntegrityError, match="ck_class_enrollments_end_reason_matches_status"):
+        enrol(db, add_user(db), add_class(db), is_active=is_active, end_reason=end_reason)
+
+
+def test_unknown_end_reason_is_rejected(db: Session) -> None:
+    with pytest.raises(IntegrityError, match="ck_class_enrollments_end_reason"):
+        enrol(db, add_user(db), add_class(db), is_active=False, end_reason="graduated")
