@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     smtp_host: str = "localhost"
     smtp_port: int = 1025
     media_dir: str = "/data/media"
+    media_url_ttl_seconds: int = 900
 
 
 @lru_cache
