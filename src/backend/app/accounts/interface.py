@@ -30,7 +30,7 @@ def get_current_user(token: str, db: Session) -> User:
     """
     return _stub_user()
 
-def require_class_role(*required_roles) -> bool:
+def require_class_role(current_user: User, *required_roles) -> bool:
     """Returns True if the current user has one of the specified roles in the requested class.
 
     Valid required_roles are:
