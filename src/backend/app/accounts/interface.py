@@ -49,7 +49,7 @@ def is_ta_in_language(user_id: UUID, language: Language) -> bool:
     """
     return True
 
-def can_manage_content(db: Session) -> bool:
+def can_manage_content(user_id: UUID, db: Session) -> bool:
     """Return True when the user has content management permissions in the db
     """
     return True
