@@ -3,10 +3,12 @@
 Planned (Interface card #10): get_current_user, require_class_role, can_manage_content and
 is_ta_in_language. Agree on each signature with its users before adding it here.
 """
-from sqlalchemy.orm import Session
+
 from uuid import UUID, uuid4
 
-from app.models.enums import UserRole, Language
+from sqlalchemy.orm import Session
+
+from app.models.enums import Language, UserRole
 from app.models.users import User
 
 __all__ = [
@@ -30,7 +32,7 @@ def get_current_user(token: str, db: Session) -> User:
     """
     return _stub_user()
 
-def require_class_role(current_user: User, *required_roles) -> bool:
+def require_class_role(current_user: User, db: Session, *required_roles) -> bool:
     """Returns True if the current user has one of the specified roles in the requested class.
 
     Valid required_roles are:
@@ -41,7 +43,7 @@ def require_class_role(current_user: User, *required_roles) -> bool:
     """
     return True
 
-def is_ta_in_language(user_id: UUID, language: Language) -> bool:
+def is_ta_in_language(user_id: UUID, db: Session, language: Language) -> bool:
     """Return True when the user is an assistant (TA) for at least one
     class whose target language matches `language`.
 

@@ -5,6 +5,7 @@ They live here, in shared code, so a table column or CHECK can use the same valu
 
 from enum import StrEnum
 
+
 class UserRole(StrEnum):
     STUDENT = "student"
     STAFF = "staff"
