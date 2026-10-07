@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     smtp_port: int = 1025
     media_dir: str = "/data/media"
     media_url_ttl_seconds: int = 900
+    gps_radius_meters: int = 30
 
 
 @lru_cache
