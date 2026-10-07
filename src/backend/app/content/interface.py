@@ -10,7 +10,8 @@ preferring uncompleted locations, shuffle exclusions, NOT_ENOUGH_CONTENT).
 These are stubs: the content tables do not exist yet, so they serve 30 fake locations with fixed
 IDs and ignore `db`. The real versions will query `locations`, `clues` and `audio_assets`
 through `db` and read each location's own `gps_radius_meters`; the signatures will not change.
-Every function here only reads: it never commits, flushes or rolls back the caller's session.
+Every function here only reads: it never commits, rolls back or explicitly flushes the caller's
+session (the automatic flush before a query is fine).
 
 A snapshot holds the answers. It is for the server only and must never appear in a
 student-facing response, error message or log.
@@ -71,7 +72,9 @@ _STUB_LOCATION_COUNT = 30
 _STUB_BUILDING_CODE = "TST"
 _STUB_FIRST_ROOM = 101
 _STUB_ORIGIN = GpsPoint(lat=49.9394, lng=-119.3948)  # UBCO campus
-_STUB_SPACING_DEGREES = 0.0005  # about 55 m of latitude between neighbouring fake locations
+# About 67 m of latitude between neighbouring fake locations: more than twice the default 30 m
+# radius, so no point is inside the arrival circles of two locations.
+_STUB_SPACING_DEGREES = 0.0006
 
 
 def _stub_id(*parts: object) -> UUID:
