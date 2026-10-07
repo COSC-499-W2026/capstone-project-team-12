@@ -9,3 +9,4 @@ class User:
         self.email = email
         self.username = username
         self.role = UserRole
+        

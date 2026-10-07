@@ -13,3 +13,4 @@ class Language(StrEnum):
     DE = "de"
     KO = "ko"
     ES = "es"
+    

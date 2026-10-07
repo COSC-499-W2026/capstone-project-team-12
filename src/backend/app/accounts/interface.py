@@ -16,13 +16,15 @@ __all__ = [
     "get_current_user",
     "require_class_role",
     "is_ta_in_language",
-    "can_manage_content"
+    "can_manage_content",
 ]
+
 
 def _stub_user() -> User:
     uuid = uuid4()
     user = User(uuid, "student@example.com", "student")
     return user
+
 
 def get_current_user(token: str, db: Session) -> User:
     """Returns the authenticated user represented by the access token
@@ -30,6 +32,7 @@ def get_current_user(token: str, db: Session) -> User:
     Stub returns a dummy user
     """
     return _stub_user()
+
 
 def require_class_role(token: str, db: Session, *required_roles: list) -> bool:
     """Returns True if the current user has one of the specified roles in the requested class.
@@ -42,6 +45,7 @@ def require_class_role(token: str, db: Session, *required_roles: list) -> bool:
     """
     return True
 
+
 def is_ta_in_language(user_id: UUID, language: Language, db: Session) -> bool:
     """Return True when the user is an assistant (TA) for at least one
     class whose target language matches `language`.
@@ -50,7 +54,7 @@ def is_ta_in_language(user_id: UUID, language: Language, db: Session) -> bool:
     """
     return True
 
+
 def can_manage_content(user_id: UUID, db: Session) -> bool:
-    """Return True when the user has content management permissions in the db
-    """
+    """Return True when the user has content management permissions in the db"""
     return True
