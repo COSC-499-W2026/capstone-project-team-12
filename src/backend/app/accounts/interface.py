@@ -28,7 +28,6 @@ def _stub_user() -> User:
 
 def get_current_user(token: str, db: Session) -> User:
     """Returns the authenticated user represented by the access token
-    
 
     Stub returns a dummy user
     """
