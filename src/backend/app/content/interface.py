@@ -15,14 +15,14 @@ Every function here only reads: it never commits, flushes or rolls back the call
 A snapshot holds the answers. It is for the server only and must never appear in a
 student-facing response, error message or log.
 
-Media URLs (Interface card #13): signed links to clue and feedback audio, for the game
-responses (`current-location`, `navigation/ping`, `verification/photo`). These are stubs: they
-return a correctly signed link for any valid input and do not read the database yet. The real
-versions will look up `audio_assets.file_path` and `feedback_audio.file_path` and raise
-`MediaNotFoundError` when no clip exists (the stubs never raise it). The signatures will not
-change. The lookup stays in this component and signs through StorageService; if the team later
-adds the spec's AudioService (chosen by AUDIO_SERVICE_TYPE) in app/services, these functions
-delegate to it.
+Media URLs (Interface card #13, agreed with game and accounts): signed, short-lived links to
+clue and feedback audio for the game responses (`current-location`, `navigation/ping`,
+`verification/photo`). The stubs sign a placeholder key: every feedback phrase exists, and a
+clue recording exists for every `audio_asset_id` a stub snapshot returns. The real versions will
+read `feedback_audio.file_path` and `audio_assets.file_path` through `db` and raise
+`MediaNotFoundError` when no clip exists; the signatures will not change. Links are signed by
+StorageService (app.services.storage), which accounts also uses to delete files; if the team
+later adds the spec's AudioService (chosen by AUDIO_SERVICE_TYPE), these functions delegate to it.
 
 `Language`, `Difficulty` and `FeedbackCode` are defined in app.models.enums and re-exported here.
 """
@@ -94,6 +94,18 @@ _STUB_LOCATION_NUMBERS = {
 }
 
 
+def _stub_audio_asset_id(location_id: UUID, language: Language, difficulty: Difficulty) -> UUID:
+    return _stub_id("audio", location_id, difficulty.value, language.value)
+
+
+_STUB_AUDIO_ASSET_IDS = frozenset(
+    _stub_audio_asset_id(location_id, language, difficulty)
+    for location_id in _STUB_LOCATION_NUMBERS
+    for language in Language
+    for difficulty in Difficulty
+)
+
+
 def eligible_location_ids(
     db: Session, language: Language, difficulty: Difficulty
 ) -> frozenset[UUID]:
@@ -120,19 +132,21 @@ def location_snapshot(
     return LocationSnapshot(
         location_id=location_id,
         clue_id=_stub_id("clue", location_id, difficulty.value, language.value),
-        audio_asset_id=_stub_id("audio", location_id, difficulty.value, language.value),
+        audio_asset_id=_stub_audio_asset_id(location_id, language, difficulty),
         accepted_answers=(f"{_STUB_BUILDING_CODE}{_STUB_FIRST_ROOM + number}",),
         gps_points=(entrance,),
         radius_meters=get_settings().gps_radius_meters,
     )
 
 
-def feedback_audio_url(code: FeedbackCode, language: Language) -> str:
+def feedback_audio_url(db: Session, code: FeedbackCode, language: Language) -> str:
     """Signed, short-lived URL of the spoken phrase for `code` in `language`."""
-    key = uuid5(NAMESPACE_URL, f"feedback/{code}/{language}")
+    key = _stub_id("feedback", code.value, language.value)
     return get_storage_service().signed_url(str(key))
 
 
-def clue_audio_url(audio_asset_id: UUID) -> str:
-    """Signed, short-lived URL of the clue recording `audio_asset_id` (the session snapshot)."""
+def clue_audio_url(db: Session, audio_asset_id: UUID) -> str:
+    """Signed, short-lived URL of a snapshot's clue recording; `MediaNotFoundError` if none."""
+    if audio_asset_id not in _STUB_AUDIO_ASSET_IDS:
+        raise MediaNotFoundError(audio_asset_id)
     return get_storage_service().signed_url(str(audio_asset_id))

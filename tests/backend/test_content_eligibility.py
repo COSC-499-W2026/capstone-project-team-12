@@ -1,11 +1,8 @@
 import re
-from collections.abc import Callable, Iterator
 from itertools import product
-from typing import Any
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -21,32 +18,6 @@ from app.content.interface import (
 ALL_MODES = list(product(Language, Difficulty))
 ANSWER_FORMAT = re.compile(r"[A-Z]{3}\d{3,4}")
 LOCATIONS_PER_LANGUAGE_AND_DIFFICULTY = 30
-
-
-@pytest.fixture
-def transaction_calls(db: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
-    """Every commit, flush and rollback made on the test session while the test runs.
-
-    Flush is spied on directly: SQLAlchemy only fires its flush events when something is
-    pending, so listening for them would miss a flush of a clean session, and the automatic
-    flush before a query. The transaction is opened first because rolling back a session
-    without one does nothing, which would hide a rollback inside a lookup.
-    """
-    db.connection()
-    calls: list[str] = []
-    real_flush = db.flush
-
-    def spy_flush(*args: Any, **kwargs: Any) -> None:
-        calls.append("flush")
-        real_flush(*args, **kwargs)
-
-    def record(name: str) -> Callable[..., None]:
-        return lambda *_: calls.append(name)
-
-    monkeypatch.setattr(db, "flush", spy_flush)
-    event.listen(db, "after_commit", record("commit"))
-    event.listen(db, "after_soft_rollback", record("rollback"))
-    yield calls
 
 
 def test_every_language_and_difficulty_has_the_same_fixed_eligible_locations(db: Session) -> None:
