@@ -10,7 +10,8 @@ preferring uncompleted locations, shuffle exclusions, NOT_ENOUGH_CONTENT).
 These are stubs: the content tables do not exist yet, so they serve 30 fake locations with fixed
 IDs and ignore `db`. The real versions will query `locations`, `clues` and `audio_assets`
 through `db` and read each location's own `gps_radius_meters`; the signatures will not change.
-Every function here only reads: it never commits, flushes or rolls back the caller's session.
+Every function here only reads: it never commits, rolls back or explicitly flushes the caller's
+session (the automatic flush before a query is fine).
 
 A snapshot holds the answers. It is for the server only and must never appear in a
 student-facing response, error message or log.
@@ -27,7 +28,7 @@ later adds the spec's AudioService (chosen by AUDIO_SERVICE_TYPE), these functio
 `Language`, `Difficulty` and `FeedbackCode` are defined in app.models.enums and re-exported here.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy.orm import Session
@@ -60,13 +61,17 @@ class GpsPoint:
 
 @dataclass(frozen=True)
 class LocationSnapshot:
-    """Content copied into `session_locations` when a location is drawn (server only)."""
+    """Content copied into `session_locations` when a location is drawn (server only).
+
+    The answers and entrance points are left out of `repr`, so logs and tracebacks never show
+    them.
+    """
 
     location_id: UUID
     clue_id: UUID
     audio_asset_id: UUID
-    accepted_answers: tuple[str, ...]  # normalised, e.g. ("SCI333",)
-    gps_points: tuple[GpsPoint, ...]  # one per building entrance, at least one
+    accepted_answers: tuple[str, ...] = field(repr=False)  # normalised, e.g. ("SCI333",)
+    gps_points: tuple[GpsPoint, ...] = field(repr=False)  # one per entrance, at least one
     radius_meters: int
 
 
@@ -82,7 +87,9 @@ _STUB_LOCATION_COUNT = 30
 _STUB_BUILDING_CODE = "TST"
 _STUB_FIRST_ROOM = 101
 _STUB_ORIGIN = GpsPoint(lat=49.9394, lng=-119.3948)  # UBCO campus
-_STUB_SPACING_DEGREES = 0.0005  # about 55 m of latitude between neighbouring fake locations
+# About 67 m of latitude between neighbouring fake locations: more than twice the default 30 m
+# radius, so no point is inside the arrival circles of two locations.
+_STUB_SPACING_DEGREES = 0.0006
 
 
 def _stub_id(*parts: object) -> UUID:

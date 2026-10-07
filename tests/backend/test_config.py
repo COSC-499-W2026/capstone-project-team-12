@@ -25,5 +25,17 @@ def test_invalid_port_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
         Settings(_env_file=None)
 
 
+def test_gps_radius_accepts_a_positive_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GPS_RADIUS_METERS", "45")
+    assert Settings(_env_file=None).gps_radius_meters == 45
+
+
+@pytest.mark.parametrize("radius", ["0", "-30"])
+def test_gps_radius_must_be_positive(monkeypatch: pytest.MonkeyPatch, radius: str) -> None:
+    monkeypatch.setenv("GPS_RADIUS_METERS", radius)
+    with pytest.raises(ValidationError, match="gps_radius_meters"):
+        Settings(_env_file=None)
+
+
 def test_get_settings_is_cached() -> None:
     assert get_settings() is get_settings()

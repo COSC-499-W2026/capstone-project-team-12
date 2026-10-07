@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import PositiveInt
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,8 +15,8 @@ class Settings(BaseSettings):
     smtp_host: str = "localhost"
     smtp_port: int = 1025
     media_dir: str = "/data/media"
-    media_url_ttl_seconds: int = 900
-    gps_radius_meters: int = 30
+    media_url_ttl_seconds: PositiveInt = 900
+    gps_radius_meters: PositiveInt = 30  # default for a new location; each location stores its own
 
 
 @lru_cache
