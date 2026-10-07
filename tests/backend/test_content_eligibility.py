@@ -1,6 +1,7 @@
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from itertools import product
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -23,16 +24,29 @@ LOCATIONS_PER_LANGUAGE_AND_DIFFICULTY = 30
 
 
 @pytest.fixture
-def commits(db: Session) -> Iterator[list[Session]]:
-    """Every commit made on the test session while the test runs."""
-    seen: list[Session] = []
+def transaction_calls(db: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
+    """Every commit, flush and rollback made on the test session while the test runs.
 
-    def record(session: Session) -> None:
-        seen.append(session)
+    Flush is spied on directly: SQLAlchemy only fires its flush events when something is
+    pending, so listening for them would miss a flush of a clean session, and the automatic
+    flush before a query. The transaction is opened first because rolling back a session
+    without one does nothing, which would hide a rollback inside a lookup.
+    """
+    db.connection()
+    calls: list[str] = []
+    real_flush = db.flush
 
-    event.listen(db, "after_commit", record)
-    yield seen
-    event.remove(db, "after_commit", record)
+    def spy_flush(*args: Any, **kwargs: Any) -> None:
+        calls.append("flush")
+        real_flush(*args, **kwargs)
+
+    def record(name: str) -> Callable[..., None]:
+        return lambda *_: calls.append(name)
+
+    monkeypatch.setattr(db, "flush", spy_flush)
+    event.listen(db, "after_commit", record("commit"))
+    event.listen(db, "after_soft_rollback", record("rollback"))
+    yield calls
 
 
 def test_every_language_and_difficulty_has_the_same_fixed_eligible_locations(db: Session) -> None:
@@ -76,10 +90,10 @@ def test_snapshot_of_an_ineligible_location_is_refused(db: Session) -> None:
         location_snapshot(db, uuid4(), Language.DE, Difficulty.BASIC)
 
 
-def test_content_lookups_never_commit_the_callers_session(
-    db: Session, commits: list[Session]
+def test_content_lookups_never_commit_flush_or_roll_back_the_callers_session(
+    db: Session, transaction_calls: list[str]
 ) -> None:
     for location_id in eligible_location_ids(db, Language.ES, Difficulty.ADVANCING):
         is_location_active(db, location_id)
         location_snapshot(db, location_id, Language.ES, Difficulty.ADVANCING)
-    assert commits == []
+    assert transaction_calls == []
