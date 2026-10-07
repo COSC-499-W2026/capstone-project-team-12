@@ -18,6 +18,7 @@ from app.content.interface import (
 from app.services.storage import get_storage_service
 
 ALL_PHRASES = list(product(FeedbackCode, Language))
+ALL_MODES = list(product(Language, Difficulty))
 
 SplitUrl = Callable[[str], tuple[str, int, str]]
 
@@ -44,11 +45,14 @@ def test_every_feedback_phrase_has_its_own_signed_url_that_reveals_nothing(
     assert all(str(UUID(key)) == key for key in keys)
 
 
-def test_clue_audio_url_signs_the_snapshot_recording(
+def test_every_snapshot_recording_has_its_own_signed_url(
     db: Session, split_media_url: SplitUrl
 ) -> None:
-    audio_asset_id = snapshot_audio_asset_id(db)
-    assert verified_key(clue_audio_url(db, audio_asset_id), split_media_url) == str(audio_asset_id)
+    location_id = next(iter(eligible_location_ids(db, Language.JA, Difficulty.BASIC)))
+    asset_ids = [location_snapshot(db, location_id, *mode).audio_asset_id for mode in ALL_MODES]
+    keys = [verified_key(clue_audio_url(db, asset_id), split_media_url) for asset_id in asset_ids]
+    assert len(set(keys)) == len(asset_ids)
+    assert all(str(UUID(key)) == key for key in keys)
 
 
 def test_clue_audio_url_of_an_unknown_recording_is_refused(db: Session) -> None:

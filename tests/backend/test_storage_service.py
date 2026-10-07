@@ -1,14 +1,18 @@
+import hashlib
+import hmac
 import time
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.config import Settings, get_settings
 from app.services.storage import MediaUrlError, StorageService, get_storage_service
 
 NOW = 1_000_000.0
 TTL = 900
+SECRET = b"test-secret"
 
 SplitUrl = Callable[[str], tuple[str, int, str]]
 
@@ -21,7 +25,7 @@ TAMPERINGS = {
 
 
 def make_service(
-    media_dir: Path, now: float = NOW, secret_key: str = "test-secret"
+    media_dir: Path, now: float = NOW, secret_key: str = SECRET.decode()
 ) -> StorageService:
     return StorageService(str(media_dir), secret_key, TTL, clock=lambda: now)
 
@@ -55,6 +59,13 @@ def test_url_signed_with_another_secret_is_rejected(
         make_service(tmp_path).verify(*split_media_url(other.signed_url("abc")))
 
 
+def test_signature_made_for_another_purpose_is_rejected(tmp_path: Path) -> None:
+    expires = int(NOW) + TTL
+    unlabelled = hmac.new(SECRET, f"abc:{expires}".encode(), hashlib.sha256).hexdigest()
+    with pytest.raises(MediaUrlError):
+        make_service(tmp_path).verify("abc", expires, unlabelled)
+
+
 def test_url_expires_after_the_lifetime(tmp_path: Path, split_media_url: SplitUrl) -> None:
     url = make_service(tmp_path).signed_url("abc")
     make_service(tmp_path, now=NOW + TTL - 1).verify(*split_media_url(url))
@@ -82,9 +93,23 @@ def test_delete_rejects_keys_outside_the_media_directory(tmp_path: Path, key: st
     assert (tmp_path / "outside.jpg").exists()
 
 
+def test_delete_rejects_a_directory(tmp_path: Path) -> None:
+    (tmp_path / "photos").mkdir()
+    with pytest.raises(ValueError, match="is a directory"):
+        make_service(tmp_path).delete("photos")
+    assert (tmp_path / "photos").is_dir()
+
+
 def test_default_lifetime_is_fifteen_minutes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MEDIA_URL_TTL_SECONDS", raising=False)
     assert Settings(_env_file=None).media_url_ttl_seconds == 15 * 60
+
+
+@pytest.mark.parametrize("lifetime", ["0", "-900"])
+def test_lifetime_must_be_positive(monkeypatch: pytest.MonkeyPatch, lifetime: str) -> None:
+    monkeypatch.setenv("MEDIA_URL_TTL_SECONDS", lifetime)
+    with pytest.raises(ValidationError, match="media_url_ttl_seconds"):
+        Settings(_env_file=None)
 
 
 def test_get_storage_service_uses_the_configured_lifetime(
@@ -94,8 +119,9 @@ def test_get_storage_service_uses_the_configured_lifetime(
     get_settings.cache_clear()
     get_storage_service.cache_clear()
     try:
+        before = int(time.time())
         _, expires, _ = split_media_url(get_storage_service().signed_url("abc"))
-        assert expires - time.time() <= 60
+        assert before + 60 <= expires <= int(time.time()) + 60
     finally:
         get_settings.cache_clear()
         get_storage_service.cache_clear()

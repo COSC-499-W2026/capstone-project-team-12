@@ -147,7 +147,11 @@ def location_snapshot(
 
 
 def feedback_audio_url(db: Session, code: FeedbackCode, language: Language) -> str:
-    """Signed, short-lived URL of the spoken phrase for `code` in `language`."""
+    """Signed, short-lived URL of the phrase `code` in `language`; `MediaNotFoundError` if none.
+
+    The stub has every phrase, so it never raises; the real version raises when a language's
+    phrases have not been uploaded yet.
+    """
     key = _stub_id("feedback", code.value, language.value)
     return get_storage_service().signed_url(str(key))
 
@@ -156,4 +160,5 @@ def clue_audio_url(db: Session, audio_asset_id: UUID) -> str:
     """Signed, short-lived URL of a snapshot's clue recording; `MediaNotFoundError` if none."""
     if audio_asset_id not in _STUB_AUDIO_ASSET_IDS:
         raise MediaNotFoundError(audio_asset_id)
-    return get_storage_service().signed_url(str(audio_asset_id))
+    file_key = _stub_id("audio-file", audio_asset_id)  # the real version reads file_path
+    return get_storage_service().signed_url(str(file_key))

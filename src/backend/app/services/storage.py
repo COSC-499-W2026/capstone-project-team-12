@@ -15,6 +15,7 @@ from pathlib import Path
 from app.config import get_settings
 
 MEDIA_URL_PREFIX = "/api/v1/media"
+_SIGNING_PURPOSE = "media-url"
 
 
 class MediaUrlError(Exception):
@@ -50,13 +51,17 @@ class StorageService:
         self._path_for(key).unlink(missing_ok=True)
 
     def _sign(self, key: str, expires: int) -> str:
-        message = f"{key}:{expires}".encode()
+        # The purpose label keeps these signatures apart from anything else signed with the
+        # same secret key (such as login tokens).
+        message = f"{_SIGNING_PURPOSE}:{key}:{expires}".encode()
         return hmac.new(self._secret, message, hashlib.sha256).hexdigest()
 
     def _path_for(self, key: str) -> Path:
         path = (self._root / key).resolve()
         if self._root not in path.parents:
             raise ValueError(f"Storage key points outside the media directory: {key!r}")
+        if path.is_dir():
+            raise ValueError(f"Storage key is a directory, not a file: {key!r}")
         return path
 
 
