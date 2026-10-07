@@ -21,7 +21,7 @@ Planned (Interface card #13): media URLs for clue and feedback audio. Agree on e
 with its users before adding it here.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy.orm import Session
@@ -49,13 +49,17 @@ class GpsPoint:
 
 @dataclass(frozen=True)
 class LocationSnapshot:
-    """Content copied into `session_locations` when a location is drawn (server only)."""
+    """Content copied into `session_locations` when a location is drawn (server only).
+
+    The answers and entrance points are left out of `repr`, so logs and tracebacks never show
+    them.
+    """
 
     location_id: UUID
     clue_id: UUID
     audio_asset_id: UUID
-    accepted_answers: tuple[str, ...]  # normalised, e.g. ("SCI333",)
-    gps_points: tuple[GpsPoint, ...]  # one per building entrance, at least one
+    accepted_answers: tuple[str, ...] = field(repr=False)  # normalised, e.g. ("SCI333",)
+    gps_points: tuple[GpsPoint, ...] = field(repr=False)  # one per entrance, at least one
     radius_meters: int
 
 

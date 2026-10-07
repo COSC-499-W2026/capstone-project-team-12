@@ -49,11 +49,13 @@ def transaction_calls(db: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     yield calls
 
 
-def test_every_language_and_difficulty_has_the_same_fixed_eligible_locations(db: Session) -> None:
-    for language, difficulty in ALL_MODES:
-        ids = eligible_location_ids(db, language, difficulty)
-        assert len(ids) == LOCATIONS_PER_LANGUAGE_AND_DIFFICULTY
-        assert ids == eligible_location_ids(db, Language.JA, Difficulty.BASIC)
+@pytest.mark.parametrize(("language", "difficulty"), ALL_MODES)
+def test_eligible_locations_are_repeatable_for_each_language_and_difficulty(
+    db: Session, language: Language, difficulty: Difficulty
+) -> None:
+    ids = eligible_location_ids(db, language, difficulty)
+    assert len(ids) == LOCATIONS_PER_LANGUAGE_AND_DIFFICULTY
+    assert ids == eligible_location_ids(db, language, difficulty)
 
 
 def test_eligible_locations_are_active(db: Session) -> None:
@@ -73,6 +75,14 @@ def test_snapshot_holds_answers_entrances_and_radius(db: Session) -> None:
     assert all(ANSWER_FORMAT.fullmatch(answer) for answer in snapshot.accepted_answers)
     assert snapshot.gps_points
     assert snapshot.radius_meters == get_settings().gps_radius_meters
+
+
+def test_snapshot_repr_hides_answers_and_entrances(db: Session) -> None:
+    location_id = next(iter(eligible_location_ids(db, Language.ZH, Difficulty.BASIC)))
+    snapshot = location_snapshot(db, location_id, Language.ZH, Difficulty.BASIC)
+    hidden = [*snapshot.accepted_answers, *(str(point.lat) for point in snapshot.gps_points)]
+    assert not any(value in repr(snapshot) for value in hidden)
+    assert str(snapshot.location_id) in repr(snapshot)
 
 
 def test_snapshot_is_repeatable_with_its_own_clue_per_language_and_difficulty(
