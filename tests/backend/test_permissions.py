@@ -3,8 +3,13 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.orm import Session
 
+from fastapi import HTTPException
+
+from app.models.accounts import User
+
 from app.accounts.interface import (
     Language,
+    ClassStaffRole,
     can_manage_content,
     get_current_user,
     is_ta_in_language,
@@ -12,35 +17,34 @@ from app.accounts.interface import (
 )
 
 
-@pytest.fixture
-def user_roles():
-    _stub_id = uuid4()
-    return [_stub_id]
-
+_STUB_USER = User()
+_STUB_TOKEN = "abcde"
+_STUB_UUID = uuid4()
 
 def test_get_current_user_returns_user(db: Session):
-    _stub_token = "abcde"
-    user = get_current_user(_stub_token, db)
+    user = get_current_user(_STUB_TOKEN, db)
     assert user
 
 
-def test_class_owner_can_access_owner_requirement(db: Session):
-    _stub_token = "abcde"
-    result = require_class_role(_stub_token, db, "owner")
-    assert result
+def test_require_class_role_raises_exception(db: Session):
+    _STUB_USER = get_current_user(_STUB_TOKEN)
+    with pytest.raises(HTTPException) as exc_info:
+        require_class_role(_STUB_USER, _STUB_UUID, db, ClassStaffRole.OWNER)
+    assert exc_info.type is HTTPException
+    assert exc_info.detail == "Unauthorized access"
 
 
-def test_assistant_can_access_assistant_requirement(db: Session):
-    _stub_token = "abcde"
-    result = require_class_role(_stub_token, db, "assistant")
-    assert result
+def test_ta_is_in_language(db: Session):
+    assert is_ta_in_language(_STUB_UUID, Language.ES, db)
 
 
-def test_ta_in_language_returns_true(db: Session):
-    result = is_ta_in_language(user_roles, Language.ES, db)
-    assert result
+def test_ta_is_not_in_language(db: Session):
+    assert not is_ta_in_language(_STUB_UUID, Language.JA, db)
 
 
-def test_user_can_manage_content(db: Session):
-    result = can_manage_content(user_roles, db)
-    assert result
+def test_user_can_manage_content():
+    assert can_manage_content(_STUB_USER)
+
+
+def test_user_cannot_manage_content():
+    assert not can_manage_content(_STUB_USER)

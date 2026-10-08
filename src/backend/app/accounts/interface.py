@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 
-from app.models.enums import Language
+from app.models.enums import ClassStaffRole, Language
 from app.models.accounts import User
 
 __all__ = [
@@ -26,28 +26,28 @@ def get_current_user(token: str, db: Session) -> User:
     
     Stub returns a dummy user
     """
-    return _stub_user()
+    user = User()
+    return User()
 
-def require_class_role(user: User, class_id: UUID, db: Session, *required_roles: ClassRole) -> None:
+def require_class_role(user: User, class_id: UUID, db: Session, *required_roles: ClassStaffRole) -> None:
     """Returns True if the current user has one of the specified roles in the requested class.
 
     Valid required_roles are:
     - OWNER
     - ASSISTANT
-
-    (Cannot type hint required_roles until class interface is agreed on)
     """
-    return True
+    raise HTTPException(status="403", detail="Unauthorized access")
 
-def is_ta_in_language(user_id: UUID, language: Language) -> bool:
+def is_ta_in_language(user_id: UUID, language: Language, db: Session) -> bool:
     """Return True when the user is an assistant (TA) for at least one
     class whose target language matches `language`.
-
-    Requires class enrolment and lookup interface as TA is a class-staff row
     """
-    return True
+    _STUB_LANGUAGE = Language.ES
+    result = language == _STUB_LANGUAGE
+    return result
 
 def can_manage_content(user: User) -> bool:
     """Return True when the user has content management permissions in the db
     """
-    return True
+    result = user.can_manage_content
+    return result
