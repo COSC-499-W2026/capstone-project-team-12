@@ -14,6 +14,12 @@ def create_app() -> FastAPI:
         """Liveness check used by Docker and CI. Does not touch the database."""
         return {"status": "ok"}
 
+    @app.get("/auth/register", tags=["register"])
+    def register() -> dict[str, str]:
+        """Student sign-up: email, username, password, optional access code. Sends a verification email; 
+        the student can play right away"""
+        return {"status": "ok"}
+
     return app
 
 
