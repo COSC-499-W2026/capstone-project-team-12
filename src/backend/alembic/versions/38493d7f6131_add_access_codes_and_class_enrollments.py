@@ -33,7 +33,10 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.CheckConstraint("code ~ '^[A-Z0-9]{8}$'", name=op.f("ck_access_codes_code_format")),
+        sa.CheckConstraint(
+            "code ~ '^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$'",
+            name=op.f("ck_access_codes_code_format"),
+        ),
         sa.CheckConstraint(
             "max_uses IS NULL OR max_uses > 0", name=op.f("ck_access_codes_max_uses_positive")
         ),
@@ -49,6 +52,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_access_codes")),
         sa.UniqueConstraint("code", name=op.f("uq_access_codes_code")),
+        sa.UniqueConstraint("id", "class_id", name=op.f("uq_access_codes_id_class_id")),
     )
     op.create_index(op.f("ix_access_codes_class_id"), "access_codes", ["class_id"], unique=False)
     op.create_table(
@@ -76,10 +80,18 @@ def upgrade() -> None:
             "is_active = (end_reason IS NULL)",
             name=op.f("ck_class_enrollments_end_reason_matches_status"),
         ),
+        sa.CheckConstraint(
+            "is_active = (left_at IS NULL)",
+            name=op.f("ck_class_enrollments_left_at_matches_status"),
+        ),
+        sa.CheckConstraint(
+            "left_at IS NULL OR left_at >= joined_at",
+            name=op.f("ck_class_enrollments_left_after_joining"),
+        ),
         sa.ForeignKeyConstraint(
-            ["access_code_id"],
-            ["access_codes.id"],
-            name=op.f("fk_class_enrollments_access_code_id_access_codes"),
+            ["access_code_id", "class_id"],
+            ["access_codes.id", "access_codes.class_id"],
+            name=op.f("fk_class_enrollments_access_code_id_class_id_access_codes"),
         ),
         sa.ForeignKeyConstraint(
             ["class_id", "language"],
