@@ -7,10 +7,10 @@ from sqlalchemy.orm import Session
 from app.accounts.interface import (
     ClassStaffRole,
     Language,
+    can_manage_content,
     get_current_user,
     is_ta_in_language,
     require_class_role,
-    can_manage_content,
 )
 
 _STUB_TOKEN = "abcde"
