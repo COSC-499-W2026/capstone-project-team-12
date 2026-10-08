@@ -220,6 +220,39 @@ def test_access_code_gets_server_defaults(db: Session) -> None:
     assert code.max_uses is None
 
 
+def test_raw_sql_access_codes_and_enrolments_get_the_server_defaults(db: Session) -> None:
+    """Same idea as the users test: raw SQL skips the Python defaults."""
+    student = add_user(db)
+    school_class = add_class(db)
+    code = db.execute(
+        text(
+            "INSERT INTO access_codes (class_id, code, expires_at, created_by)"
+            " VALUES (:class_id, 'RAWCODE1', now() + interval '90 days', :created_by)"
+            " RETURNING id, is_active, uses_count, max_uses, created_at"
+        ),
+        {"class_id": school_class.id, "created_by": add_user(db, role=UserRole.STAFF).id},
+    ).one()
+    assert code.id is not None
+    assert code.is_active is True
+    assert code.uses_count == 0
+    assert code.max_uses is None
+    assert code.created_at is not None
+
+    enrollment = db.execute(
+        text(
+            "INSERT INTO class_enrollments (student_id, class_id, access_code_id, language)"
+            " VALUES (:student_id, :class_id, :code_id, 'ja')"
+            " RETURNING id, is_active, end_reason, joined_at, left_at"
+        ),
+        {"student_id": student.id, "class_id": school_class.id, "code_id": code.id},
+    ).one()
+    assert enrollment.id is not None
+    assert enrollment.is_active is True
+    assert enrollment.end_reason is None
+    assert enrollment.joined_at is not None
+    assert enrollment.left_at is None
+
+
 def test_duplicate_access_code_is_rejected(db: Session) -> None:
     school_class = add_class(db)
     add_code(db, school_class, code="K7PM3QXD")
