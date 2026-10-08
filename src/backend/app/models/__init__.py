@@ -4,6 +4,6 @@ Each component's tables live in app/models/<component>.py. Import every model mo
 Alembic autogenerate only sees imported models and would treat the others as dropped.
 """
 
-from app.models import accounts
+from app.models import accounts, engagement
 
-__all__ = ["accounts"]
+__all__ = ["accounts", "engagement"]

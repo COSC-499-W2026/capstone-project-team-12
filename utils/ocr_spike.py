@@ -118,7 +118,12 @@ def read_photo(reader: Any, path: Path, expected: str) -> PhotoResult:
 
 def load_labels(path: Path) -> list[tuple[str, str]]:
     with path.open(newline="") as handle:
-        return [(row["file"], normalise(row["expected"])) for row in csv.DictReader(handle)]
+        labels = [(row["file"], normalise(row["expected"])) for row in csv.DictReader(handle)]
+    if not labels:
+        raise ValueError(
+            f"{path} has no photos listed (expected a header 'file,expected' and rows)"
+        )
+    return labels
 
 
 def format_row(result: PhotoResult) -> str:
@@ -166,6 +171,11 @@ def main() -> None:
     parser.add_argument("photo_dir", type=Path, help="folder with the photos and labels.csv")
     args = parser.parse_args()
 
+    try:
+        labels = load_labels(args.photo_dir / "labels.csv")  # before the slow model load
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
+
     import easyocr
 
     started = time.perf_counter()
@@ -173,7 +183,6 @@ def main() -> None:
     load_s = time.perf_counter() - started
     loaded_rss_mb = peak_rss_mb()
 
-    labels = load_labels(args.photo_dir / "labels.csv")
     first_photo = args.photo_dir / labels[0][0]
     warmup_s = read_photo(reader, first_photo, labels[0][1]).ocr_s
 

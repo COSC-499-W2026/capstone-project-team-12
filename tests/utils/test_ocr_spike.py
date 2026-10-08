@@ -97,3 +97,12 @@ def test_load_labels_normalises_the_expected_room_numbers(tmp_path: Path) -> Non
     # Expected values are normalised the same way as OCR text, so labels can be written freely.
     labels.write_text("file,expected\na.jpg,com 316\nb.jpg,LIB-332\n")
     assert load_labels(labels) == [("a.jpg", "COM316"), ("b.jpg", "LIB332")]
+
+
+@pytest.mark.parametrize("content", ["", "file,expected\n"], ids=["empty file", "header only"])
+def test_load_labels_rejects_a_file_without_photos(tmp_path: Path, content: str) -> None:
+    # Negative: with no rows the report would crash on labels[0] and on the median of no times.
+    labels = tmp_path / "labels.csv"
+    labels.write_text(content)
+    with pytest.raises(ValueError, match="no photos listed"):
+        load_labels(labels)

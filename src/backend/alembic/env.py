@@ -5,11 +5,9 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+import app.models  # noqa: F401  (registers every model on Base.metadata)
 from app.config import get_settings
 from app.db import Base
-
-# Import model modules here as they are added, so autogenerate can see them, e.g.:
-# import app.models.users  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
