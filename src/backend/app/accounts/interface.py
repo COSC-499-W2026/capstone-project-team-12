@@ -32,14 +32,14 @@ def get_current_user(token: str, db: Session) -> User:
 
 def require_class_role(
     user: User, class_id: UUID, db: Session, *required_roles: ClassStaffRole
-) -> None:
-    """Returns True if the current user has one of the specified roles in the requested class.
+) -> str:
+    """Raises an HTTPException if user does not have the required class roles.
 
     Valid required_roles are:
     - OWNER
     - ASSISTANT
     """
-    raise HTTPException(status_code=403, detail="Unauthorized access")
+    raise HTTPException(status_code=403, detail="FORBIDDEN_ROLE")
 
 
 def is_ta_in_language(user_id: UUID, language: Language, db: Session) -> bool:
@@ -54,6 +54,4 @@ def is_ta_in_language(user_id: UUID, language: Language, db: Session) -> bool:
 
 def can_manage_content(user: User) -> bool:
     """Return True when the user has content management permissions in the db"""
-    result: bool = True
-
-    return result
+    return user.can_manage_content

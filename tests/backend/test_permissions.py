@@ -10,6 +10,7 @@ from app.accounts.interface import (
     get_current_user,
     is_ta_in_language,
     require_class_role,
+    can_manage_content,
 )
 
 _STUB_TOKEN = "abcde"
@@ -26,7 +27,7 @@ def test_require_class_role_raises_exception(db: Session):
     with pytest.raises(HTTPException) as exc_info:
         require_class_role(_STUB_USER, _STUB_UUID, db, ClassStaffRole.OWNER)
     assert exc_info.type is HTTPException
-    assert "403: Unauthorized access" in str(exc_info.value)
+    assert exc_info.value.status_code == 403
 
 
 def test_ta_is_in_language(db: Session):
@@ -35,3 +36,11 @@ def test_ta_is_in_language(db: Session):
 
 def test_ta_is_not_in_language(db: Session):
     assert not is_ta_in_language(_STUB_UUID, Language.JA, db)
+
+def test_can_manage_content(db: Session):
+    _STUB_USER = get_current_user(_STUB_TOKEN, db)
+    assert can_manage_content(_STUB_USER)
+
+def test_cannot_manage_content(db: Session):
+    _STUB_USER = get_current_user(_STUB_TOKEN, db)
+    assert not can_manage_content(_STUB_USER)
