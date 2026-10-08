@@ -131,3 +131,6 @@ def test_content_lookups_never_commit_flush_or_roll_back_the_callers_session(
         is_location_active(db, location_id)
         location_snapshot(db, location_id, Language.ES, Difficulty.ADVANCING)
     assert transaction_calls == []
+    # With autoflush off nothing is flushed, but the caller's next commit would still save
+    # anything a lookup added, changed or deleted.
+    assert not (db.new or db.dirty or db.deleted)
