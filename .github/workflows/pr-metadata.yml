@@ -65,9 +65,14 @@ jobs:
             });
             if (files.some((f) => f.filename.startsWith("tests/"))) labels.add("test");
 
-            // "Closes #12", "Fixes #12", "Resolves #12" or "Part of #8" in the description
+            // "Closes #12", "Fixes #12", "Resolves #12" or "Part of #8" in the description.
+            // Code blocks, `code` and <!-- comments --> are ignored, so examples don't count.
+            const text = (pr.body || "")
+              .replace(/```[\s\S]*?```/g, "")
+              .replace(/`[^`\n]*`/g, "")
+              .replace(/<!--[\s\S]*?-->/g, "");
             const linked = new Set(
-              [...(pr.body || "").matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|part of)\s+#(\d+)/gi)]
+              [...text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|part of)\s+#(\d+)/gi)]
                 .map((m) => Number(m[1])),
             );
             let milestone = null;
