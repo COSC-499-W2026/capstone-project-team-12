@@ -17,8 +17,13 @@ class User(Base):
         # the service lowercases emails; this stops a code path that forgets
         CheckConstraint("email = lower(email)", name="email_lowercase"),
         CheckConstraint("char_length(username) BETWEEN 3 AND 30", name="username_length"),
+        CheckConstraint("username = btrim(username)", name="username_trimmed"),
         in_check("role", UserRole, name="role"),
         language_check("preferred_language", name="preferred_language"),
+        # content rights are given to teacher (staff) accounts only
+        CheckConstraint(
+            f"NOT can_manage_content OR role = '{UserRole.STAFF}'", name="content_rights_staff_only"
+        ),
         # "Mia" and "mia" count as the same username; the original case is kept for display
         Index("uq_users_username_lower", func.lower(text("username")), unique=True),
     )
@@ -52,7 +57,8 @@ class ClassStaff(Base):
             "uq_class_staff_one_owner",
             "class_id",
             unique=True,
-            postgresql_where=text("role = 'owner'"),
+            # built from the enum, so renaming the value can't silently turn the rule off
+            postgresql_where=text(f"role = '{ClassStaffRole.OWNER}'"),
         ),
     )
 

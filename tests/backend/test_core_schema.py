@@ -4,6 +4,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -60,6 +61,45 @@ def test_a_user_gets_server_defaults(db: Session) -> None:
     assert user.created_at.tzinfo is not None
 
 
+def test_raw_sql_inserts_get_the_server_defaults(db: Session) -> None:
+    """Seed data and raw SQL skip the Python defaults, so the database has to fill them in.
+
+    Raw SQL on purpose: an ORM object or a Core insert() still sends the Python defaults, so
+    the server defaults would never run. The ORM test above covers the Python side.
+    """
+    user = db.execute(
+        text(
+            "INSERT INTO users (email, username, role) VALUES ('raw@example.com', 'raw', 'student')"
+            " RETURNING id, is_active, can_manage_content, password_hash, created_at, updated_at"
+        )
+    ).one()
+    assert user.id is not None
+    assert user.is_active is True
+    assert user.can_manage_content is False
+    assert user.password_hash is None
+    assert user.created_at.tzinfo is not None
+    assert user.updated_at is not None
+
+    school_class = db.execute(
+        text(
+            "INSERT INTO classes (name, semester, target_language)"
+            " VALUES ('JAPN 101', '2026W1', 'ja') RETURNING id, leaderboard_enabled, created_at"
+        )
+    ).one()
+    assert school_class.id is not None
+    assert school_class.leaderboard_enabled is True
+    assert school_class.created_at is not None
+
+    staff = db.execute(
+        text(
+            "INSERT INTO class_staff (class_id, user_id, role)"
+            " VALUES (:class_id, :user_id, 'owner') RETURNING added_at"
+        ),
+        {"class_id": school_class.id, "user_id": user.id},
+    ).one()
+    assert staff.added_at is not None
+
+
 def test_uppercase_email_is_rejected(db: Session) -> None:
     with pytest.raises(IntegrityError, match="ck_users_email_lowercase"):
         add_user(db, email="Mia@Example.com")
@@ -81,6 +121,18 @@ def test_usernames_are_unique_regardless_of_case(db: Session) -> None:
 def test_username_length_is_checked(db: Session, username: str) -> None:
     with pytest.raises(IntegrityError, match="ck_users_username_length"):
         add_user(db, username=username)
+
+
+@pytest.mark.parametrize("username", [" mia", "mia "])
+def test_username_has_no_surrounding_spaces(db: Session, username: str) -> None:
+    with pytest.raises(IntegrityError, match="ck_users_username_trimmed"):
+        add_user(db, username=username)
+
+
+def test_only_staff_accounts_can_manage_content(db: Session) -> None:
+    add_user(db, role=UserRole.STAFF, can_manage_content=True)
+    with pytest.raises(IntegrityError, match="ck_users_content_rights_staff_only"):
+        add_user(db, role=UserRole.STUDENT, can_manage_content=True)
 
 
 def test_unknown_role_is_rejected(db: Session) -> None:

@@ -85,6 +85,11 @@ def upgrade() -> None:
             "char_length(username) BETWEEN 3 AND 30", name=op.f("ck_users_username_length")
         ),
         sa.CheckConstraint("email = lower(email)", name=op.f("ck_users_email_lowercase")),
+        sa.CheckConstraint("username = btrim(username)", name=op.f("ck_users_username_trimmed")),
+        sa.CheckConstraint(
+            "NOT can_manage_content OR role = 'staff'",
+            name=op.f("ck_users_content_rights_staff_only"),
+        ),
         sa.ForeignKeyConstraint(
             ["current_class_id"], ["classes.id"], name=op.f("fk_users_current_class_id_classes")
         ),
