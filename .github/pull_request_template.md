@@ -19,7 +19,7 @@ ruff check . ../../tests ../../utils
 
 ## AI-generated code I fixed in review
 
-<!-- What was wrong in the generated code and how you fixed it. Write "Nothing found" if so. -->
+<!-- Only if you used AI for code in this PR: what was wrong and how you fixed it ("Nothing found" if it was all fine). If you didn't use AI, just write "No AI-generated code". -->
 
 ## Size
 
