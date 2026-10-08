@@ -62,5 +62,11 @@ jobs:
       - name: Alembic upgrade
         run: alembic upgrade head
 
+      - name: Alembic check (models match the migrations)
+        run: alembic check
+
+      - name: Migrations can be undone and redone
+        run: alembic downgrade base && alembic upgrade head
+
       - name: Run tests with coverage
         run: pytest --cov=app --cov-report=term-missing
