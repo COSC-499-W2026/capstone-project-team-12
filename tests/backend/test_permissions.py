@@ -37,10 +37,12 @@ def test_ta_is_in_language(db: Session):
 def test_ta_is_not_in_language(db: Session):
     assert not is_ta_in_language(_STUB_UUID, Language.JA, db)
 
+
 def test_can_manage_content(db: Session):
     _STUB_USER = get_current_user(_STUB_TOKEN, db)
     _STUB_USER.can_manage_content = True
     assert can_manage_content(_STUB_USER)
+
 
 def test_cannot_manage_content(db: Session):
     _STUB_USER = get_current_user(_STUB_TOKEN, db)
