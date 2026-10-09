@@ -11,9 +11,9 @@ from app.engagement.interface import (
     is_actively_enrolled,
     is_class_archived,
 )
+from app.models.accounts import User
 from app.models.engagement import Class, ClassEnrollment
 from app.models.enums import Language
-from app.models.accounts import User
 
 
 def test_get_class_language(db: Session, make_class: Callable[..., Class]) -> None:
