@@ -7,8 +7,8 @@ Usage (from the repo root):
 
 Components follow the architecture diagram and DFDs:
     accounts (1.0), game (2.0), verification (3.0), engagement (4.0), content (5.0)
-plus shared code (core: app.config, app.db, app.models, app.services) and the entry layer
-(app.main, app.api, app.cli).
+plus shared code (core: app.config, app.db, app.errors, app.models, app.services) and the
+entry layer (app.main, app.api, app.cli).
 
 Rules:
   1. A component may use another component only through its interface module
@@ -38,8 +38,9 @@ COMPONENTS = {
     "engagement": "4.0 Class & Engagement",
     "content": "5.0 Content Management",
 }
-# models: all ORM models (shared schema); services: services used by several components
-CORE = {"config", "db", "models", "services"}
+# models: all ORM models (shared schema); services: services used by several components;
+# errors: AppError and the error codes every component raises
+CORE = {"config", "db", "errors", "models", "services"}
 ENTRY = {"main", "api", "cli"}  # HTTP API and command-line jobs
 
 Graph = dict[str, set[str]]
