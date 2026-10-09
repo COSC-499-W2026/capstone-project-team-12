@@ -16,7 +16,8 @@ from app.db import get_db
 from app.main import create_app
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import ACCESS_CODE_ALPHABET, AccessCode, Class, ClassEnrollment
-from app.models.enums import ClassStaffRole, Language, UserRole
+from app.models.enums import ClassStaffRole, Difficulty, Language, UserRole
+from app.models.game import GameSession
 
 
 @pytest.fixture(scope="session")
@@ -137,5 +138,20 @@ def make_enrollment(
         if "access_code_id" not in fields:
             values["access_code_id"] = make_access_code(school_class).id
         return _add(db, ClassEnrollment(**(values | fields)))
+
+    return make
+
+
+@pytest.fixture
+def make_game_session(db: Session, make_user: Callable[..., User]) -> Callable[..., GameSession]:
+    """An active Practice game in Japanese at difficulty 1, for a new student unless given one."""
+
+    def make(student: User | None = None, **fields: Any) -> GameSession:
+        values: dict[str, Any] = {
+            "student_id": (student or make_user()).id,
+            "target_language": Language.JA,
+            "difficulty": Difficulty.BASIC,
+        }
+        return _add(db, GameSession(**(values | fields)))
 
     return make

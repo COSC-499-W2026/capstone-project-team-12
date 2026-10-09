@@ -1,8 +1,7 @@
 """game_sessions rejects bad data at the database level."""
 
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
-from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
@@ -11,36 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.models.accounts import User
 from app.models.engagement import Class
-from app.models.enums import Difficulty, Language, SessionEndReason, SessionState, UserRole
+from app.models.enums import Language, SessionEndReason, SessionState
 from app.models.game import GameSession
-
-
-def add_user(db: Session) -> User:
-    user = User(email=f"{uuid4().hex[:12]}@example.com", username=f"u_{uuid4().hex[:8]}")
-    user.role = UserRole.STUDENT
-    db.add(user)
-    db.flush()
-    return user
-
-
-def add_class(db: Session, language: str = Language.JA) -> Class:
-    school_class = Class(name="JAPN 101", semester="2026W1", target_language=language)
-    db.add(school_class)
-    db.flush()
-    return school_class
-
-
-def add_session(db: Session, student: User | None = None, **fields: Any) -> GameSession:
-    values: dict[str, Any] = {
-        "student_id": (student or add_user(db)).id,
-        "target_language": Language.JA,
-        "difficulty": Difficulty.BASIC,
-    }
-    values.update(fields)
-    game = GameSession(**values)
-    db.add(game)
-    db.flush()
-    return game
 
 
 def end(game: GameSession, reason: str = SessionEndReason.QUIT) -> None:
@@ -51,8 +22,10 @@ def end(game: GameSession, reason: str = SessionEndReason.QUIT) -> None:
 # game_sessions
 
 
-def test_raw_sql_inserts_get_the_server_defaults(db: Session) -> None:
-    student = add_user(db)
+def test_raw_sql_inserts_get_the_server_defaults(
+    db: Session, make_user: Callable[..., User]
+) -> None:
+    student = make_user()
     game = db.execute(
         text(
             "INSERT INTO game_sessions (student_id, target_language, difficulty)"
@@ -68,86 +41,106 @@ def test_raw_sql_inserts_get_the_server_defaults(db: Session) -> None:
     assert game.started_at is not None and game.last_activity_at is not None
 
 
-def test_a_student_has_only_one_open_game(db: Session) -> None:
-    student = add_user(db)
-    add_session(db, student)
+def test_a_student_has_only_one_open_game(
+    make_user: Callable[..., User], make_game_session: Callable[..., GameSession]
+) -> None:
+    student = make_user()
+    make_game_session(student)
     with pytest.raises(IntegrityError, match="uq_game_sessions_one_open_per_student"):
-        add_session(db, student)
+        make_game_session(student)
 
 
-def test_a_paused_game_also_counts_as_open(db: Session) -> None:
-    student = add_user(db)
-    add_session(db, student, state=SessionState.PAUSED, paused_at=datetime.now(UTC))
+def test_a_paused_game_also_counts_as_open(
+    make_user: Callable[..., User], make_game_session: Callable[..., GameSession]
+) -> None:
+    student = make_user()
+    make_game_session(student, state=SessionState.PAUSED, paused_at=datetime.now(UTC))
     with pytest.raises(IntegrityError, match="uq_game_sessions_one_open_per_student"):
-        add_session(db, student)
+        make_game_session(student)
 
 
-def test_a_new_game_can_start_after_the_old_one_ended(db: Session) -> None:
-    student = add_user(db)
-    end(add_session(db, student))
+def test_a_new_game_can_start_after_the_old_one_ended(
+    db: Session, make_user: Callable[..., User], make_game_session: Callable[..., GameSession]
+) -> None:
+    student = make_user()
+    end(make_game_session(student))
     db.flush()
-    add_session(db, student)
+    make_game_session(student)
 
 
-def test_a_completed_game_also_frees_the_slot(db: Session) -> None:
-    student = add_user(db)
-    add_session(
-        db,
+def test_a_completed_game_also_frees_the_slot(
+    make_user: Callable[..., User], make_game_session: Callable[..., GameSession]
+) -> None:
+    student = make_user()
+    make_game_session(
         student,
         state=SessionState.COMPLETED,
         completed_at=datetime.now(UTC),
         current_position=5,
     )
-    add_session(db, student)
+    make_game_session(student)
 
 
-def test_a_class_game_uses_the_class_language(db: Session) -> None:
-    school_class = add_class(db, Language.JA)
-    add_session(db, class_id=school_class.id, target_language=Language.JA)
+def test_a_class_game_uses_the_class_language(
+    make_class: Callable[..., Class], make_game_session: Callable[..., GameSession]
+) -> None:
+    school_class = make_class(target_language=Language.JA)
+    make_game_session(class_id=school_class.id, target_language=Language.JA)
     with pytest.raises(IntegrityError, match="fk_game_sessions_class_id_target_language_classes"):
-        add_session(db, class_id=school_class.id, target_language=Language.FR)
+        make_game_session(class_id=school_class.id, target_language=Language.FR)
 
 
-def test_practice_games_can_use_any_language(db: Session) -> None:
-    add_session(db, class_id=None, target_language=Language.KO)
+def test_practice_games_can_use_any_language(make_game_session: Callable[..., GameSession]) -> None:
+    make_game_session(class_id=None, target_language=Language.KO)
 
 
 @pytest.mark.parametrize("difficulty", [0, 4])
-def test_difficulty_is_one_to_three(db: Session, difficulty: int) -> None:
+def test_difficulty_is_one_to_three(
+    make_game_session: Callable[..., GameSession], difficulty: int
+) -> None:
     with pytest.raises(IntegrityError, match="ck_game_sessions_difficulty"):
-        add_session(db, difficulty=difficulty)
+        make_game_session(difficulty=difficulty)
 
 
-def test_only_an_abandoned_game_has_an_end_reason(db: Session) -> None:
+def test_only_an_abandoned_game_has_an_end_reason(
+    make_game_session: Callable[..., GameSession],
+) -> None:
     with pytest.raises(IntegrityError, match="ck_game_sessions_end_reason_matches_state"):
-        add_session(db, end_reason=SessionEndReason.QUIT)
+        make_game_session(end_reason=SessionEndReason.QUIT)
 
 
-def test_an_abandoned_game_needs_an_end_reason(db: Session) -> None:
+def test_an_abandoned_game_needs_an_end_reason(
+    make_game_session: Callable[..., GameSession],
+) -> None:
     with pytest.raises(IntegrityError, match="ck_game_sessions_end_reason_matches_state"):
-        add_session(db, state=SessionState.ABANDONED)
+        make_game_session(state=SessionState.ABANDONED)
 
 
-def test_paused_at_is_set_only_while_paused(db: Session) -> None:
+def test_paused_at_is_set_only_while_paused(
+    db: Session, make_game_session: Callable[..., GameSession]
+) -> None:
     with pytest.raises(IntegrityError, match="ck_game_sessions_paused_at_matches_state"):
-        add_session(db, state=SessionState.PAUSED)
+        make_game_session(state=SessionState.PAUSED)
     db.rollback()
     with pytest.raises(IntegrityError, match="ck_game_sessions_paused_at_matches_state"):
-        add_session(db, paused_at=datetime.now(UTC))
+        make_game_session(paused_at=datetime.now(UTC))
 
 
-def test_completed_at_is_set_only_when_completed(db: Session) -> None:
+def test_completed_at_is_set_only_when_completed(
+    db: Session, make_game_session: Callable[..., GameSession]
+) -> None:
     with pytest.raises(IntegrityError, match="ck_game_sessions_completed_at_matches_state"):
-        add_session(db, state=SessionState.COMPLETED)
+        make_game_session(state=SessionState.COMPLETED)
     db.rollback()
     with pytest.raises(IntegrityError, match="ck_game_sessions_completed_at_matches_state"):
-        add_session(db, completed_at=datetime.now(UTC))
+        make_game_session(completed_at=datetime.now(UTC))
 
 
-def test_an_abandoned_game_cannot_keep_paused_at(db: Session) -> None:
+def test_an_abandoned_game_cannot_keep_paused_at(
+    make_game_session: Callable[..., GameSession],
+) -> None:
     with pytest.raises(IntegrityError, match="ck_game_sessions_paused_at_matches_state"):
-        add_session(
-            db,
+        make_game_session(
             state=SessionState.ABANDONED,
             end_reason=SessionEndReason.EXPIRED,
             paused_at=datetime.now(UTC),
@@ -163,9 +156,11 @@ def test_an_abandoned_game_cannot_keep_paused_at(db: Session) -> None:
         ({"target_language": "en"}, "ck_game_sessions_target_language"),
     ],
 )
-def test_unknown_values_are_rejected(db: Session, fields: dict[str, str], constraint: str) -> None:
+def test_unknown_values_are_rejected(
+    make_game_session: Callable[..., GameSession], fields: dict[str, str], constraint: str
+) -> None:
     with pytest.raises(IntegrityError, match=f'"{constraint}"'):
-        add_session(db, **fields)
+        make_game_session(**fields)
 
 
 @pytest.mark.parametrize(
@@ -177,6 +172,8 @@ def test_unknown_values_are_rejected(db: Session, fields: dict[str, str], constr
         ("total_score", -1, "ck_game_sessions_total_score"),
     ],
 )
-def test_game_counters_stay_in_range(db: Session, field: str, value: int, constraint: str) -> None:
+def test_game_counters_stay_in_range(
+    make_game_session: Callable[..., GameSession], field: str, value: int, constraint: str
+) -> None:
     with pytest.raises(IntegrityError, match=constraint):
-        add_session(db, **{field: value})
+        make_game_session(**{field: value})
