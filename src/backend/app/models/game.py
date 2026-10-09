@@ -10,9 +10,6 @@ from app.db import Base
 from app.models.columns import created_at, in_check, language_check, uuid_pk
 from app.models.enums import Difficulty, SessionEndReason, SessionState
 
-LOCATIONS_PER_GAME = 5
-MAX_SHUFFLES = 2
-
 OPEN_STATES = f"state IN ('{SessionState.ACTIVE}', '{SessionState.PAUSED}')"
 
 
@@ -44,10 +41,10 @@ class GameSession(Base):
             f"(state = '{SessionState.COMPLETED}') = (completed_at IS NOT NULL)",
             name="completed_at_matches_state",
         ),
-        CheckConstraint(
-            f"current_position BETWEEN 1 AND {LOCATIONS_PER_GAME}", name="current_position"
-        ),
-        CheckConstraint(f"shuffles_used BETWEEN 0 AND {MAX_SHUFFLES}", name="shuffles_used"),
+        # upper limits are settings (locations_per_game, max_shuffles_per_session),
+        # so the services check those
+        CheckConstraint("current_position >= 1", name="current_position"),
+        CheckConstraint("shuffles_used >= 0", name="shuffles_used"),
         CheckConstraint("resume_count >= 0", name="resume_count"),
         CheckConstraint("total_score >= 0", name="total_score"),
         # a student has at most one open (active or paused) game
@@ -67,7 +64,8 @@ class GameSession(Base):
 
     id: Mapped[UUID] = uuid_pk()
     student_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)  # history
-    class_id: Mapped[UUID | None]  # null for Practice
+    # null for Practice; indexed for archiving a class (ends its open games) and class analytics
+    class_id: Mapped[UUID | None] = mapped_column(index=True)
     target_language: Mapped[str]  # copied from the class, or chosen for Practice
     difficulty: Mapped[int]
     state: Mapped[str] = mapped_column(

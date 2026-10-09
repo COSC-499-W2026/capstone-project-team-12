@@ -74,14 +74,10 @@ def upgrade() -> None:
             "target_language IN ('ja', 'zh', 'fr', 'de', 'ko', 'es')",
             name=op.f("ck_game_sessions_target_language"),
         ),
-        sa.CheckConstraint(
-            "current_position BETWEEN 1 AND 5", name=op.f("ck_game_sessions_current_position")
-        ),
+        sa.CheckConstraint("current_position >= 1", name=op.f("ck_game_sessions_current_position")),
         sa.CheckConstraint("difficulty IN (1, 2, 3)", name=op.f("ck_game_sessions_difficulty")),
         sa.CheckConstraint("resume_count >= 0", name=op.f("ck_game_sessions_resume_count")),
-        sa.CheckConstraint(
-            "shuffles_used BETWEEN 0 AND 2", name=op.f("ck_game_sessions_shuffles_used")
-        ),
+        sa.CheckConstraint("shuffles_used >= 0", name=op.f("ck_game_sessions_shuffles_used")),
         sa.CheckConstraint("total_score >= 0", name=op.f("ck_game_sessions_total_score")),
         sa.ForeignKeyConstraint(
             ["class_id", "target_language"],
@@ -93,6 +89,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_game_sessions")),
     )
+    op.create_index(op.f("ix_game_sessions_class_id"), "game_sessions", ["class_id"], unique=False)
     op.create_index(
         "ix_game_sessions_open_last_activity_at",
         "game_sessions",
@@ -124,4 +121,5 @@ def downgrade() -> None:
         table_name="game_sessions",
         postgresql_where=sa.text("state IN ('active', 'paused')"),
     )
+    op.drop_index(op.f("ix_game_sessions_class_id"), table_name="game_sessions")
     op.drop_table("game_sessions")
