@@ -89,6 +89,18 @@ def test_a_new_game_can_start_after_the_old_one_ended(db: Session) -> None:
     add_session(db, student)
 
 
+def test_a_completed_game_also_frees_the_slot(db: Session) -> None:
+    student = add_user(db)
+    add_session(
+        db,
+        student,
+        state=SessionState.COMPLETED,
+        completed_at=datetime.now(UTC),
+        current_position=5,
+    )
+    add_session(db, student)
+
+
 def test_a_class_game_uses_the_class_language(db: Session) -> None:
     school_class = add_class(db, Language.JA)
     add_session(db, class_id=school_class.id, target_language=Language.JA)
@@ -127,13 +139,40 @@ def test_paused_at_is_set_only_while_paused(db: Session) -> None:
 def test_completed_at_is_set_only_when_completed(db: Session) -> None:
     with pytest.raises(IntegrityError, match="ck_game_sessions_completed_at_matches_state"):
         add_session(db, state=SessionState.COMPLETED)
+    db.rollback()
+    with pytest.raises(IntegrityError, match="ck_game_sessions_completed_at_matches_state"):
+        add_session(db, completed_at=datetime.now(UTC))
+
+
+def test_an_abandoned_game_cannot_keep_paused_at(db: Session) -> None:
+    with pytest.raises(IntegrityError, match="ck_game_sessions_paused_at_matches_state"):
+        add_session(
+            db,
+            state=SessionState.ABANDONED,
+            end_reason=SessionEndReason.EXPIRED,
+            paused_at=datetime.now(UTC),
+        )
+
+
+# the quoted name, so "end_reason" doesn't also match "end_reason_matches_state"
+@pytest.mark.parametrize(
+    ("fields", "constraint"),
+    [
+        ({"state": "finished"}, "ck_game_sessions_state"),
+        ({"state": SessionState.ABANDONED, "end_reason": "bored"}, "ck_game_sessions_end_reason"),
+        ({"target_language": "en"}, "ck_game_sessions_target_language"),
+    ],
+)
+def test_unknown_values_are_rejected(db: Session, fields: dict[str, str], constraint: str) -> None:
+    with pytest.raises(IntegrityError, match=f'"{constraint}"'):
+        add_session(db, **fields)
 
 
 @pytest.mark.parametrize(
     ("field", "value", "constraint"),
     [
-        ("current_position", 6, "ck_game_sessions_current_position"),
-        ("shuffles_used", 3, "ck_game_sessions_shuffles_used"),
+        ("current_position", 0, "ck_game_sessions_current_position"),
+        ("shuffles_used", -1, "ck_game_sessions_shuffles_used"),
         ("resume_count", -1, "ck_game_sessions_resume_count"),
         ("total_score", -1, "ck_game_sessions_total_score"),
     ],
