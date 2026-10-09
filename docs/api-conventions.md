@@ -110,6 +110,12 @@ API error responses must not expose stack traces, database errors, internal host
 - Error codes must be stable. Changes to human-readable messages must not require changes to error codes.
 - HTTP status codes handle the category of the error, while the application error code identifies a specific reason.
 
+### Raising Errors in Code
+- Services and interface functions raise `AppError` from `app/errors.py` with an `ErrorCode`, for example `raise AppError(ErrorCode.CLASS_ARCHIVED, "This class is archived.")`. Routers do not build error responses or raise `HTTPException`.
+- Each `ErrorCode` has one HTTP status (`STATUS` in `app/errors.py`), taken from the Error Codes table in the Technical Specification. A new code is added to `ErrorCode` and `STATUS` together.
+- The handlers in `app/main.py` turn `AppError`, request validation errors (422 `VALIDATION_ERROR`), unknown routes (404 `NOT_FOUND`), wrong methods (405 `METHOD_NOT_ALLOWED`) and unexpected errors (500 `INTERNAL_ERROR`, logged but never shown to the client) into the format above.
+- Headers that a code needs, such as `Retry-After` for `UPLOAD_IN_PROGRESS` and `OCR_BUSY`, are passed with `headers=`.
+
 ## Pagination
 Collection endpoints that may return a large number of resources must use pagination.
 
