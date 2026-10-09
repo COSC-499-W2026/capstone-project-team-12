@@ -50,3 +50,21 @@ class SessionEndReason(StrEnum):
     RESET = "reset"
     EXPIRED = "expired"  # no game action for 24 hours
     CLASS_CLOSED = "class_closed"  # the class was archived, or the student left or was removed
+
+
+class LocationStatus(StrEnum):
+    PENDING = "pending"
+    NAVIGATING = "navigating"  # Stage 1
+    VERIFYING = "verifying"  # Stage 2
+    COMPLETED = "completed"
+    FAILED = "failed"  # out of photo attempts
+    SKIPPED = "skipped"  # see SkipReason
+
+
+class SkipReason(StrEnum):
+    SESSION_ENDED = "session_ended"  # quit, reset, expiry or class closed before it was played
+    DEACTIVATED = "deactivated"  # a content manager deactivated the location
+
+
+class ArrivalOverride(StrEnum):
+    GPS_UNAVAILABLE = "gps_unavailable"
