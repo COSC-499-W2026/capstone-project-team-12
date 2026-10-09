@@ -17,7 +17,7 @@ from app.main import create_app
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import ACCESS_CODE_ALPHABET, AccessCode, Class, ClassEnrollment
 from app.models.enums import ClassStaffRole, Difficulty, Language, UserRole
-from app.models.game import GameSession
+from app.models.game import GameSession, SessionLocation
 
 
 @pytest.fixture(scope="session")
@@ -153,5 +153,25 @@ def make_game_session(db: Session, make_user: Callable[..., User]) -> Callable[.
             "difficulty": Difficulty.BASIC,
         }
         return _add(db, GameSession(**(values | fields)))
+
+    return make
+
+
+@pytest.fixture
+def make_session_location(db: Session) -> Callable[..., SessionLocation]:
+    """A pending location in the game with a valid content snapshot (a random location id)."""
+
+    def make(game: GameSession, position: int, **fields: Any) -> SessionLocation:
+        values: dict[str, Any] = {
+            "session_id": game.id,
+            "location_id": uuid4(),
+            "position": position,
+            "clue_id": uuid4(),
+            "audio_asset_id": uuid4(),
+            "accepted_answers_snapshot": ["SCI333"],
+            "gps_points_snapshot": [{"lat": 49.9394, "lng": -119.3948}],
+            "radius_snapshot": 30,
+        }
+        return _add(db, SessionLocation(**(values | fields)))
 
     return make
