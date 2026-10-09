@@ -27,4 +27,3 @@ def validate_code_and_enrol(
     by the eventual implementation.
     """
     raise NotImplementedError
-    
