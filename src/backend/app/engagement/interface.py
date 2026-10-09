@@ -1,41 +1,49 @@
-"""Public interface of app.engagement: the only module other components may import.
+"""Public interface for class and enrolment lookup (Issue #11).
 
-Planned (Interface cards #11, #15 and #106): class and enrolment lookup and the class-closed
-notice, the location result that returns the engagement update, and the access code check with
-enrolment. Agree on each signature with its users before adding it here.
-
-Public interface for class and enrolment lookup (Issue #11).
+Callers must check class existence and archived status before enrolment
+so archived classes produce CLASS_ARCHIVED rather than an enrolment error.
 """
 
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.engagement import Class, ClassEnrollment
 from app.models.enums import Language
 
 __all__ = [
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
-    "notify_class_closed",
 ]
 
 
 def get_class_language(class_id: UUID, db: Session) -> Language | None:
     """Return the class language, or None if the class does not exist."""
-    raise NotImplementedError
+    school_class = db.get(Class, class_id)
+    if school_class is None:
+        return None
+    return Language(school_class.target_language)
 
 
 def is_actively_enrolled(student_id: UUID, class_id: UUID, db: Session) -> bool:
-    """Return whether a student has an active enrolment in the class."""
-    raise NotImplementedError
+    """Return whether a student has an active enrolment in the class.
+
+    Callers must check class existence and archived status first.
+    """
+    statement = select(ClassEnrollment.id).where(
+        ClassEnrollment.student_id == student_id,
+        ClassEnrollment.class_id == class_id,
+        ClassEnrollment.is_active.is_(True),
+    )
+    return db.scalar(statement) is not None
 
 
 def is_class_archived(class_id: UUID, db: Session) -> bool:
-    """Return whether a class is archived."""
-    raise NotImplementedError
+    """Return whether a class is archived.
 
-
-def notify_class_closed(class_id: UUID, db: Session) -> None:
-    """Notify open game sessions when their class is closed."""
-    raise NotImplementedError
+    Returns False if the class does not exist. Check existence separately.
+    """
+    school_class = db.get(Class, class_id)
+    return school_class is not None and school_class.archived_at is not None
