@@ -4,24 +4,24 @@
 
 ```
 .
-├── docs                    # Documentation files
-│   ├── contract            # Team contract
-│   ├── proposal            # Project proposal
-│   ├── design               # UI mocks
-│   ├── minutes              # Minutes from team meetings
-│   └── ...
-├── src                      # Source files
-│   ├── backend              # FastAPI service (M1)
-│   └── frontend             # React + TypeScript web app (M2)
-├── tests                    # Automated tests
-│   ├── backend              # pytest
-│   ├── frontend             # Vitest component tests (M2)
-│   └── e2e                  # Playwright end-to-end tests (M2)
-├── utils                    # Utility scripts (e.g., GPS replay)
+├── docs                      # Documentation
+│   ├── architecture          # Dependency graph between backend components
+│   ├── contract              # Team contract
+│   ├── minutes               # Minutes from team meetings
+│   ├── proposal              # Project proposal
+│   ├── api-conventions.md    # API naming, error format and pagination
+│   └── ocr-spike.md          # OCR spike findings
+├── src
+│   ├── backend               # FastAPI service (M1)
+│   └── frontend              # React + TypeScript web app (M2)
+├── tests
+│   ├── backend               # pytest for the backend
+│   ├── utils                 # pytest for the scripts in utils/
+│   ├── frontend              # Vitest component tests (M2)
+│   └── e2e                   # Playwright end-to-end tests (M2)
+├── utils                     # Scripts: dependency check (dep_graph.py), OCR spike (ocr_spike.py)
 └── README.md
 ```
-
-Weekly logs are not on `main`. They live on the [`weekly-logs`](https://github.com/COSC-499-W2026/capstone-project-team-12/tree/weekly-logs) branch, as `logs/<StudentName>/week-K.md` and `logs/team/week-K.md`.
 
 ## System Design
 
@@ -33,7 +33,7 @@ All diagrams are drawn in draw.io. The source files are in our shared Google Dri
 
 Milestone 1 is the backend only. API consumers (Swagger UI, a Postman collection, and GPS replay and photo-set simulation scripts) call the FastAPI backend over HTTPS with a JWT. In Milestone 2 the React web app (student app, teacher portal and admin panel) is added behind nginx.
 
-Inside the backend container, the routers under `/api/v1` handle requests and pass them to five components. The components share a core (`config`, `db`, `models` and shared `services` such as storage, email and audio), and they only call each other through each component's `interface.py`, which `utils/dep_graph.py --check` enforces in CI. Data lives in PostgreSQL 16 (stores D1 to D7) and a media volume (D8) for clue audio, feedback audio and photos. A scheduler container runs the CLI jobs (send emails, expire idle sessions, purge old photos) and emails go out through an SMTP provider.
+Inside the backend container, the routers under `/api/v1` handle requests and pass them to five components. The components share a core (`config`, `db`, `errors`, `models` and shared `services` such as storage, email and audio), and they only call each other through each component's `interface.py`, which `utils/dep_graph.py --check` enforces in CI. Data lives in PostgreSQL 16 (stores D1 to D7) and a media volume (D8) for clue audio, feedback audio and photos. A scheduler container runs the CLI jobs (send emails, expire idle sessions, purge old photos) and emails go out through an SMTP provider.
 
 Each major component has its own Level 1 DFD. In the architecture diagram, clicking a component box opens it.
 
@@ -112,10 +112,11 @@ Never commit `.venv/`.
 
 Feature code goes in one package per component from the architecture diagram: `accounts` (1.0),
 `game` (2.0), `verification` (3.0), `engagement` (4.0) and `content` (5.0). Shared code sits next
-to them: `config`, `db`, `models` (all ORM models, since the schema is shared) and `services`
-(services used by several components, such as storage and email). So does the entry layer (`main`,
-`api`, and `cli` for the scheduled jobs). A component may use another component only through its
-`interface.py`; when two components need to notify each other, the router or CLI command calls both.
+to them: `config`, `db`, `errors` (`AppError` and the error codes), `models` (all ORM models, since
+the schema is shared) and `services` (services used by several components, such as storage and
+email). So does the entry layer (`main`, `api`, and `cli` for the scheduled jobs). A component may
+use another component only through its `interface.py`; when two components need to notify each
+other, the router or CLI command calls both.
 
 ```bash
 python utils/dep_graph.py --check   # fail if a dependency rule is broken
@@ -131,3 +132,7 @@ Our team contract can be found [here](docs/contract/team-contract.docx).
 ## Project Proposal
 
 Our project proposal can be found [here](docs/proposal/project-proposal.docx)
+
+## Weekly Logs
+
+Weekly logs are not on `main`. They are on the [`weekly-logs`](https://github.com/COSC-499-W2026/capstone-project-team-12/tree/weekly-logs) branch: `logs/<StudentName>/week-K.md` for individual logs and `logs/team/week-K.md` for team logs.
