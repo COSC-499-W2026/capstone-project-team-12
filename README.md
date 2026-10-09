@@ -10,7 +10,6 @@
 │   ├── design               # UI mocks
 │   ├── minutes              # Minutes from team meetings
 │   └── ...
-├── logs                     # Weekly logs: logs/<StudentName>/week-K.md, logs/team/week-K.md
 ├── src                      # Source files
 │   ├── backend              # FastAPI service (M1)
 │   └── frontend             # React + TypeScript web app (M2)
@@ -21,6 +20,8 @@
 ├── utils                    # Utility scripts (e.g., GPS replay)
 └── README.md
 ```
+
+Weekly logs are not on `main`. They live on the [`weekly-logs`](https://github.com/COSC-499-W2026/capstone-project-team-12/tree/weekly-logs) branch, as `logs/<StudentName>/week-K.md` and `logs/team/week-K.md`.
 
 ## System Design
 
