@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     smtp_host: str = "localhost"
     smtp_port: int = 1025
     media_dir: str = "/data/media"
+    media_url_ttl_seconds: PositiveInt = 900
     gps_radius_meters: PositiveInt = 30  # default for a new location; each location stores its own
     # game rules from the spec (Configuration). The services check these upper limits;
     # the database only checks the lower bounds, so changing a setting needs no migration.
