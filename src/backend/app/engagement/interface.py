@@ -1,4 +1,10 @@
-"""Public interface for class and enrolment lookup (Issue #11).
+"""Public interface of app.engagement: the only module other components may import.
+
+Implemented (Issue #11): class language, active enrolment, and archived-state lookups.
+
+Planned:
+- Issue #15: Location result to engagement.
+- Issue #106: Access code check and enrolment.
 
 Callers must check class existence and archived status before enrolment
 so archived classes produce CLASS_ARCHIVED rather than an enrolment error.

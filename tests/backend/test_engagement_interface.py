@@ -13,7 +13,7 @@ from app.engagement.interface import (
 )
 from app.models.accounts import User
 from app.models.engagement import Class, ClassEnrollment
-from app.models.enums import Language
+from app.models.enums import EnrollmentEndReason, Language
 
 
 def test_get_class_language(db: Session, make_class: Callable[..., Class]) -> None:
@@ -61,6 +61,7 @@ def test_inactive_enrolment(
     enrollment = make_enrollment(student, school_class)
 
     enrollment.is_active = False
+    enrollment.end_reason = EnrollmentEndReason.LEFT
     enrollment.left_at = datetime.now(UTC)
     db.flush()
 
