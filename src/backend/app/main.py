@@ -1,9 +1,10 @@
 """FastAPI application factory."""
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 
-from app.accounts.interface import RegisterRequest
+from app.accounts.interface import RegisterRequest, student_register
 from app.api.v1 import api_router
+from app.db import get_db
 from app.errors import add_error_handlers
 
 
@@ -17,9 +18,10 @@ def create_app() -> FastAPI:
         """Liveness check used by Docker and CI. Does not touch the database."""
         return {"status": "ok"}
 
-    @app.get("/auth/register", tags=["register"])
-    def register(request: RegisterRequest) -> dict[str, str]:
+    @app.post("/auth/register", tags=["register"], status_code=201)
+    def register(request: RegisterRequest, response: Response) -> dict[str, str]:
         """Student sign-up: email, username, password, optional access code."""
+        student_register(request, next(get_db()))
         return {"status": "ok"}
 
     return app

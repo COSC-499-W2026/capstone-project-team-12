@@ -9,7 +9,7 @@ from app.models.accounts import User
 
 def test_valid_register(db: Session):
     request = RegisterRequest(
-        email="example@email.com", username="JohnLanguage", password="ValidPassword1"
+        email="test@email.com", username="JohnLanguage", password="ValidPassword1"
     )
     student_register(request, db)
     query = select(User.username).where(User.email == request.email)
