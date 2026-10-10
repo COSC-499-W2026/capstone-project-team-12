@@ -8,18 +8,20 @@ and difficulty. Content only decides which locations qualify; game does the pick
 preferring uncompleted locations, shuffle exclusions, NOT_ENOUGH_CONTENT).
 
 These are stubs: the content tables do not exist yet, so they serve 30 fake locations with fixed
-IDs and ignore `db`. The real versions will query `locations`, `clues` and `audio_assets`
-through `db` and read each location's own `gps_radius_meters`; the signatures will not change.
+IDs and ignore `db`. The real versions will query `locations` and `clues` through `db` and read
+each location's own `gps_radius_meters`; the signatures will not change.
 Every function here only reads: it never commits, rolls back or explicitly flushes the caller's
 session (the automatic flush before a query is fine).
 
 A snapshot holds the answers. It is for the server only and must never appear in a
 student-facing response, error message or log.
 
-`Language` and `Difficulty` are defined in app.models.enums and re-exported here.
+The clue recording in a snapshot is chosen by AudioService (app.services.audio), which also
+provides the signed URLs for clue and feedback audio (Interface card #13). Game asks AudioService
+for those URLs directly; they are not part of this interface. If AudioService finds no recording,
+`location_snapshot` raises `LocationNotEligibleError`, the same as for any ineligible location.
 
-Planned (Interface card #13): media URLs for clue and feedback audio. Agree on each signature
-with its users before adding it here.
+`Language` and `Difficulty` are defined in app.models.enums and re-exported here.
 """
 
 from dataclasses import dataclass, field
@@ -29,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models.enums import Difficulty, Language
+from app.services.audio import MediaNotFoundError, clue_audio_asset_id
 
 __all__ = [
     "Difficulty",
@@ -109,10 +112,16 @@ def location_snapshot(
         lat=_STUB_ORIGIN.lat + number * _STUB_SPACING_DEGREES,
         lng=_STUB_ORIGIN.lng,
     )
+    clue_id = _stub_id("clue", location_id, difficulty.value, language.value)
+    try:
+        audio_asset_id = clue_audio_asset_id(clue_id, db)
+    except MediaNotFoundError as error:
+        # e.g. the recording was deleted after game fetched the eligible locations
+        raise LocationNotEligibleError(location_id) from error
     return LocationSnapshot(
         location_id=location_id,
-        clue_id=_stub_id("clue", location_id, difficulty.value, language.value),
-        audio_asset_id=_stub_id("audio", location_id, difficulty.value, language.value),
+        clue_id=clue_id,
+        audio_asset_id=audio_asset_id,
         accepted_answers=(f"{_STUB_BUILDING_CODE}{_STUB_FIRST_ROOM + number}",),
         gps_points=(entrance,),
         radius_meters=get_settings().gps_radius_meters,
