@@ -14,6 +14,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -27,7 +28,16 @@ from app.models.enums import (
     SkipReason,
 )
 
-OPEN_STATES = f"state IN ('{SessionState.ACTIVE}', '{SessionState.PAUSED}')"
+# an open game can still be played; a student has at most one
+OPEN_SESSION_STATES = (SessionState.ACTIVE, SessionState.PAUSED)
+OPEN_STATES = "state IN ({})".format(", ".join(f"'{state}'" for state in OPEN_SESSION_STATES))
+
+
+def non_empty_array(column: str) -> CheckConstraint:
+    # also rejects JSON null; comparing with '[]' avoids jsonb_array_length on a non-array
+    return CheckConstraint(
+        f"jsonb_typeof({column}) = 'array' AND {column} <> '[]'::jsonb", name=column
+    )
 
 
 class GameSession(Base):
@@ -124,6 +134,19 @@ class SessionLocation(Base):
         in_check("arrival_override", ArrivalOverride, name="arrival_override"),
         CheckConstraint("attempts_used >= 0", name="attempts_used"),
         CheckConstraint("points_awarded IN (0, 100)", name="points_awarded"),
+        # a completed location earns 100 points; failed and skipped ones earn 0
+        CheckConstraint(
+            f"(status = '{LocationStatus.COMPLETED}') = (points_awarded = 100)",
+            name="points_match_status",
+        ),
+        # completed_at is set exactly when the location is completed, as in game_sessions
+        CheckConstraint(
+            f"(status = '{LocationStatus.COMPLETED}') = (completed_at IS NOT NULL)",
+            name="completed_at_matches_status",
+        ),
+        # a location with no answers or no entrance points could never be completed
+        non_empty_array("accepted_answers_snapshot"),
+        non_empty_array("gps_points_snapshot"),
         CheckConstraint("radius_snapshot > 0", name="radius_snapshot"),
         CheckConstraint("last_lat BETWEEN -90 AND 90", name="last_lat"),
         CheckConstraint("last_lng BETWEEN -180 AND 180", name="last_lng"),
@@ -159,8 +182,9 @@ class SessionLocation(Base):
     # copy of the points_ledger row, written in the same transaction
     points_awarded: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     # e.g. ["speed_anomaly", "similar_photo", "not_in_app_capture", "gps_override"]
+    # MutableList so that flags.append(...) is saved
     flags: Mapped[list[str]] = mapped_column(
-        JSONB, default=list, server_default=text("'[]'::jsonb")
+        MutableList.as_mutable(JSONB), default=list, server_default=text("'[]'::jsonb")
     )
     completed_at: Mapped[datetime | None]
 

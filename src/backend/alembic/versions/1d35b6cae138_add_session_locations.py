@@ -56,6 +56,23 @@ def upgrade() -> None:
         sa.Column("gps_points_snapshot", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("radius_snapshot", sa.Integer(), nullable=False),
         sa.CheckConstraint(
+            "(status = 'completed') = (points_awarded = 100)",
+            name=op.f("ck_session_locations_points_match_status"),
+        ),
+        sa.CheckConstraint(
+            "(status = 'completed') = (completed_at IS NOT NULL)",
+            name=op.f("ck_session_locations_completed_at_matches_status"),
+        ),
+        sa.CheckConstraint(
+            "jsonb_typeof(accepted_answers_snapshot) = 'array'"
+            " AND accepted_answers_snapshot <> '[]'::jsonb",
+            name=op.f("ck_session_locations_accepted_answers_snapshot"),
+        ),
+        sa.CheckConstraint(
+            "jsonb_typeof(gps_points_snapshot) = 'array' AND gps_points_snapshot <> '[]'::jsonb",
+            name=op.f("ck_session_locations_gps_points_snapshot"),
+        ),
+        sa.CheckConstraint(
             "(status = 'skipped') = (skip_reason IS NOT NULL)",
             name=op.f("ck_session_locations_skip_reason_matches_status"),
         ),
