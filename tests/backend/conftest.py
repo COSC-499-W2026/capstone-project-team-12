@@ -4,7 +4,7 @@ import random
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeVar
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 from uuid import uuid4
 
 import pytest
@@ -48,12 +48,13 @@ def db(test_engine: Engine) -> Iterator[Session]:
 
 @pytest.fixture
 def split_media_url() -> Callable[[str], tuple[str, int, str]]:
-    """Split a signed media URL into its (key, expires, signature) parts."""
+    """Split a signed media URL into its (key, expires, signature) parts, decoding the key as the
+    router does."""
 
     def split(url: str) -> tuple[str, int, str]:
         parts = urlsplit(url)
         query = parse_qs(parts.query)
-        key = parts.path.removeprefix(f"{MEDIA_URL_PREFIX}/")
+        key = unquote(parts.path.removeprefix(f"{MEDIA_URL_PREFIX}/"))
         return key, int(query["expires"][0]), query["sig"][0]
 
     return split

@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import time
 from collections.abc import Callable
+from http import HTTPStatus
 from pathlib import Path
 
 import pytest
@@ -30,12 +31,13 @@ def make_service(
     return StorageService(str(media_dir), secret_key, TTL, clock=lambda: now)
 
 
-def test_signed_url_verifies(tmp_path: Path, split_media_url: SplitUrl) -> None:
+@pytest.mark.parametrize("key", ["abc", "clips/a b#1?.mp3", "café/100%.mp3"])
+def test_signed_url_verifies(tmp_path: Path, split_media_url: SplitUrl, key: str) -> None:
     service = make_service(tmp_path)
-    key, expires, signature = split_media_url(service.signed_url("abc"))
-    assert key == "abc"
+    url_key, expires, signature = split_media_url(service.signed_url(key))
+    assert url_key == key
     assert expires == int(NOW) + TTL
-    service.verify(key, expires, signature)
+    service.verify(url_key, expires, signature)
 
 
 @pytest.mark.parametrize("override", TAMPERINGS.values(), ids=TAMPERINGS.keys())
@@ -45,8 +47,9 @@ def test_tampered_url_is_rejected(
     service = make_service(tmp_path)
     key, expires, signature = split_media_url(service.signed_url("abc"))
     genuine = {"key": key, "expires": expires, "signature": signature}
-    with pytest.raises(MediaUrlError):
+    with pytest.raises(MediaUrlError) as rejected:
         service.verify(**(genuine | override))
+    assert rejected.value.status == HTTPStatus.FORBIDDEN
 
 
 def test_url_signed_with_another_secret_is_rejected(
@@ -81,20 +84,28 @@ def test_delete_of_a_missing_file_is_not_an_error(tmp_path: Path) -> None:
     make_service(tmp_path).delete("missing.jpg")
 
 
+def test_path_is_the_file_in_the_media_directory(tmp_path: Path) -> None:
+    assert make_service(tmp_path).path("clips/a.mp3") == tmp_path.resolve() / "clips" / "a.mp3"
+
+
+@pytest.mark.parametrize("method", ["path", "delete"])
 @pytest.mark.parametrize("key", ["../outside.jpg", "a/../../outside.jpg", ".", ""])
-def test_delete_rejects_keys_outside_the_media_directory(tmp_path: Path, key: str) -> None:
+def test_keys_outside_the_media_directory_are_rejected(
+    tmp_path: Path, method: str, key: str
+) -> None:
     media_dir = tmp_path / "media"
     media_dir.mkdir()
     (tmp_path / "outside.jpg").write_bytes(b"x")
     with pytest.raises(ValueError, match="outside the media directory"):
-        make_service(media_dir).delete(key)
+        getattr(make_service(media_dir), method)(key)
     assert (tmp_path / "outside.jpg").exists()
 
 
-def test_delete_rejects_a_directory(tmp_path: Path) -> None:
+@pytest.mark.parametrize("method", ["path", "delete"])
+def test_a_directory_is_rejected(tmp_path: Path, method: str) -> None:
     (tmp_path / "photos").mkdir()
     with pytest.raises(ValueError, match="is a directory"):
-        make_service(tmp_path).delete("photos")
+        getattr(make_service(tmp_path), method)("photos")
     assert (tmp_path / "photos").is_dir()
 
 
