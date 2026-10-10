@@ -10,15 +10,14 @@ this function, in the same transaction (spec, Architecture and Session Lifecycle
 
 from uuid import UUID
 
-from sqlalchemy import func, update
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.models.enums import LocationStatus, SessionEndReason, SessionState, SkipReason
-from app.models.game import GameSession, SessionLocation
+from app.models.game import OPEN_SESSION_STATES, GameSession, SessionLocation
 
 __all__ = ["end_open_sessions"]
 
-_OPEN = (SessionState.ACTIVE, SessionState.PAUSED)
 _UNFINISHED = (LocationStatus.PENDING, LocationStatus.NAVIGATING, LocationStatus.VERIFYING)
 
 
@@ -27,9 +26,10 @@ def end_open_sessions(class_id: UUID, db: Session, student_id: UUID | None = Non
 
     All students' games when the class is archived, or one student's when they leave or are
     removed. The games become abandoned with end_reason class_closed, and their unfinished
-    locations are skipped (session_ended). Points already earned stay. Doesn't commit.
+    locations are skipped (session_ended). Points already earned stay, and so does
+    last_activity_at, since closing a class isn't something the student did. Doesn't commit.
     """
-    conditions = [GameSession.class_id == class_id, GameSession.state.in_(_OPEN)]
+    conditions = [GameSession.class_id == class_id, GameSession.state.in_(OPEN_SESSION_STATES)]
     if student_id is not None:
         conditions.append(GameSession.student_id == student_id)
     ended = db.scalars(
@@ -39,7 +39,6 @@ def end_open_sessions(class_id: UUID, db: Session, student_id: UUID | None = Non
             state=SessionState.ABANDONED,
             end_reason=SessionEndReason.CLASS_CLOSED,
             paused_at=None,  # set only while paused, so it has to be cleared
-            last_activity_at=func.now(),
         )
         .returning(GameSession.id)
     ).all()
