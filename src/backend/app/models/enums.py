@@ -36,3 +36,17 @@ class EnrollmentEndReason(StrEnum):
     LEFT = "left"  # the student left; they can rejoin later with a code
     REMOVED = "removed"  # by the owner; can't rejoin with a code, but the owner can restore
     ARCHIVED = "archived"
+
+
+class SessionState(StrEnum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"  # all 5 locations finished
+    ABANDONED = "abandoned"  # ended early, see SessionEndReason
+
+
+class SessionEndReason(StrEnum):
+    QUIT = "quit"
+    RESET = "reset"
+    EXPIRED = "expired"  # no game action for 24 hours
+    CLASS_CLOSED = "class_closed"  # the class was archived, or the student left or was removed
