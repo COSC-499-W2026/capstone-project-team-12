@@ -1,8 +1,7 @@
 """The core tables (#8) reject bad data at the database level, not only in the services."""
 
-import random
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -12,67 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.db import Base
 from app.models.accounts import ClassStaff, User
-from app.models.engagement import ACCESS_CODE_ALPHABET, AccessCode, Class, ClassEnrollment
+from app.models.engagement import AccessCode, Class, ClassEnrollment
 from app.models.enums import ClassStaffRole, EnrollmentEndReason, Language, UserRole
-
-
-def add_user(db: Session, **fields: Any) -> User:
-    values: dict[str, Any] = {
-        "email": f"{uuid4().hex[:12]}@example.com",
-        "username": f"user_{uuid4().hex[:8]}",
-        "role": UserRole.STUDENT,
-    }
-    values.update(fields)
-    user = User(**values)
-    db.add(user)
-    db.flush()
-    return user
-
-
-def add_class(db: Session, **fields: Any) -> Class:
-    values: dict[str, Any] = {
-        "name": "JAPN 101 - Fall 2026",
-        "semester": "2026W1",
-        "target_language": Language.JA,
-    }
-    values.update(fields)
-    school_class = Class(**values)
-    db.add(school_class)
-    db.flush()
-    return school_class
-
-
-def add_staff(db: Session, school_class: Class, user: User, role: str) -> None:
-    db.add(ClassStaff(class_id=school_class.id, user_id=user.id, role=role))
-    db.flush()
-
-
-def add_code(db: Session, school_class: Class, **fields: Any) -> AccessCode:
-    values: dict[str, Any] = {
-        "class_id": school_class.id,
-        "code": "".join(random.choices(ACCESS_CODE_ALPHABET, k=8)),
-        "expires_at": datetime.now(UTC) + timedelta(days=90),
-        "created_by": add_user(db, role=UserRole.STAFF).id,
-    }
-    values.update(fields)
-    code = AccessCode(**values)
-    db.add(code)
-    db.flush()
-    return code
-
-
-def enrol(db: Session, student: User, school_class: Class, **fields: Any) -> ClassEnrollment:
-    values: dict[str, Any] = {
-        "student_id": student.id,
-        "class_id": school_class.id,
-        "access_code_id": add_code(db, school_class).id,
-        "language": school_class.target_language,
-    }
-    values.update(fields)
-    enrollment = ClassEnrollment(**values)
-    db.add(enrollment)
-    db.flush()
-    return enrollment
 
 
 def test_constraints_follow_the_naming_convention() -> None:
@@ -81,8 +21,8 @@ def test_constraints_follow_the_naming_convention() -> None:
     assert {"pk_users", "uq_users_email", "ck_users_role", "ck_users_email_lowercase"} <= names
 
 
-def test_a_user_gets_server_defaults(db: Session) -> None:
-    user = add_user(db)
+def test_a_user_gets_server_defaults(db: Session, make_user: Callable[..., User]) -> None:
+    user = make_user()
     db.refresh(user)
     assert user.id is not None
     assert user.is_active is True
@@ -130,108 +70,124 @@ def test_raw_sql_inserts_get_the_server_defaults(db: Session) -> None:
     assert staff.added_at is not None
 
 
-def test_uppercase_email_is_rejected(db: Session) -> None:
+def test_uppercase_email_is_rejected(make_user: Callable[..., User]) -> None:
     with pytest.raises(IntegrityError, match="ck_users_email_lowercase"):
-        add_user(db, email="Mia@Example.com")
+        make_user(email="Mia@Example.com")
 
 
-def test_duplicate_email_is_rejected(db: Session) -> None:
-    add_user(db, email="mia@example.com")
+def test_duplicate_email_is_rejected(make_user: Callable[..., User]) -> None:
+    make_user(email="mia@example.com")
     with pytest.raises(IntegrityError, match="uq_users_email"):
-        add_user(db, email="mia@example.com")
+        make_user(email="mia@example.com")
 
 
-def test_usernames_are_unique_regardless_of_case(db: Session) -> None:
-    add_user(db, username="Mia")
+def test_usernames_are_unique_regardless_of_case(make_user: Callable[..., User]) -> None:
+    make_user(username="Mia")
     with pytest.raises(IntegrityError, match="uq_users_username_lower"):
-        add_user(db, username="mia")
+        make_user(username="mia")
 
 
 @pytest.mark.parametrize("username", ["ab", "a" * 31])
-def test_username_length_is_checked(db: Session, username: str) -> None:
+def test_username_length_is_checked(make_user: Callable[..., User], username: str) -> None:
     with pytest.raises(IntegrityError, match="ck_users_username_length"):
-        add_user(db, username=username)
+        make_user(username=username)
 
 
 @pytest.mark.parametrize("username", [" mia", "mia "])
-def test_username_has_no_surrounding_spaces(db: Session, username: str) -> None:
+def test_username_has_no_surrounding_spaces(make_user: Callable[..., User], username: str) -> None:
     with pytest.raises(IntegrityError, match="ck_users_username_trimmed"):
-        add_user(db, username=username)
+        make_user(username=username)
 
 
-def test_only_staff_accounts_can_manage_content(db: Session) -> None:
-    add_user(db, role=UserRole.STAFF, can_manage_content=True)
+def test_only_staff_accounts_can_manage_content(make_user: Callable[..., User]) -> None:
+    make_user(role=UserRole.STAFF, can_manage_content=True)
     with pytest.raises(IntegrityError, match="ck_users_content_rights_staff_only"):
-        add_user(db, role=UserRole.STUDENT, can_manage_content=True)
+        make_user(role=UserRole.STUDENT, can_manage_content=True)
 
 
-def test_unknown_role_is_rejected(db: Session) -> None:
+def test_unknown_role_is_rejected(make_user: Callable[..., User]) -> None:
     with pytest.raises(IntegrityError, match="ck_users_role"):
-        add_user(db, role="teacher")
+        make_user(role="teacher")
 
 
-def test_unknown_practice_language_is_rejected(db: Session) -> None:
+def test_unknown_practice_language_is_rejected(make_user: Callable[..., User]) -> None:
     with pytest.raises(IntegrityError, match="ck_users_preferred_language"):
-        add_user(db, preferred_language="en")
+        make_user(preferred_language="en")
 
 
-def test_current_class_must_exist(db: Session) -> None:
+def test_current_class_must_exist(make_user: Callable[..., User]) -> None:
     with pytest.raises(IntegrityError, match="fk_users_current_class_id_classes"):
-        add_user(db, current_class_id=uuid4())
+        make_user(current_class_id=uuid4())
 
 
-def test_unknown_class_language_is_rejected(db: Session) -> None:
+def test_unknown_class_language_is_rejected(make_class: Callable[..., Class]) -> None:
     with pytest.raises(IntegrityError, match="ck_classes_target_language"):
-        add_class(db, target_language="en")
+        make_class(target_language="en")
 
 
-def test_semester_must_be_a_term_code(db: Session) -> None:
+def test_semester_must_be_a_term_code(make_class: Callable[..., Class]) -> None:
     with pytest.raises(IntegrityError, match="ck_classes_semester_format"):
-        add_class(db, semester="Fall 2026")
+        make_class(semester="Fall 2026")
 
 
-def test_a_class_has_at_most_one_owner_but_many_assistants(db: Session) -> None:
-    school_class = add_class(db)
-    add_staff(db, school_class, add_user(db, role=UserRole.STAFF), ClassStaffRole.OWNER)
-    add_staff(db, school_class, add_user(db, role=UserRole.STAFF), ClassStaffRole.ASSISTANT)
-    add_staff(db, school_class, add_user(db), ClassStaffRole.ASSISTANT)
+def test_a_class_has_at_most_one_owner_but_many_assistants(
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., ClassStaff],
+) -> None:
+    school_class = make_class()
+    make_class_staff(school_class, make_user(role=UserRole.STAFF), ClassStaffRole.OWNER)
+    make_class_staff(school_class, make_user(role=UserRole.STAFF), ClassStaffRole.ASSISTANT)
+    make_class_staff(school_class, make_user(), ClassStaffRole.ASSISTANT)
     with pytest.raises(IntegrityError, match="uq_class_staff_one_owner"):
-        add_staff(db, school_class, add_user(db, role=UserRole.STAFF), ClassStaffRole.OWNER)
+        make_class_staff(school_class, make_user(role=UserRole.STAFF), ClassStaffRole.OWNER)
 
 
-def test_a_user_can_own_several_classes(db: Session) -> None:
-    teacher = add_user(db, role=UserRole.STAFF)
-    add_staff(db, add_class(db), teacher, ClassStaffRole.OWNER)
-    add_staff(db, add_class(db, target_language=Language.FR), teacher, ClassStaffRole.OWNER)
+def test_a_user_can_own_several_classes(
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., ClassStaff],
+) -> None:
+    teacher = make_user(role=UserRole.STAFF)
+    make_class_staff(make_class(), teacher, ClassStaffRole.OWNER)
+    make_class_staff(make_class(target_language=Language.FR), teacher, ClassStaffRole.OWNER)
 
 
-def test_unknown_staff_role_is_rejected(db: Session) -> None:
+def test_unknown_staff_role_is_rejected(
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., ClassStaff],
+) -> None:
     with pytest.raises(IntegrityError, match="ck_class_staff_role"):
-        add_staff(db, add_class(db), add_user(db), "teacher")
+        make_class_staff(make_class(), make_user(), "teacher")
 
 
 # access_codes and class_enrollments (#8 PR 2)
 
 
-def test_access_code_gets_server_defaults(db: Session) -> None:
-    code = add_code(db, add_class(db))
+def test_access_code_gets_server_defaults(
+    db: Session, make_class: Callable[..., Class], make_access_code: Callable[..., AccessCode]
+) -> None:
+    code = make_access_code(make_class())
     db.refresh(code)
     assert code.is_active is True
     assert code.uses_count == 0
     assert code.max_uses is None
 
 
-def test_raw_sql_access_codes_and_enrolments_get_the_server_defaults(db: Session) -> None:
+def test_raw_sql_access_codes_and_enrolments_get_the_server_defaults(
+    db: Session, make_user: Callable[..., User], make_class: Callable[..., Class]
+) -> None:
     """Same idea as the users test: raw SQL skips the Python defaults."""
-    student = add_user(db)
-    school_class = add_class(db)
+    student = make_user()
+    school_class = make_class()
     code = db.execute(
         text(
             "INSERT INTO access_codes (class_id, code, expires_at, created_by)"
             " VALUES (:class_id, 'RAWCDE23', now() + interval '90 days', :created_by)"
             " RETURNING id, is_active, uses_count, max_uses, created_at"
         ),
-        {"class_id": school_class.id, "created_by": add_user(db, role=UserRole.STAFF).id},
+        {"class_id": school_class.id, "created_by": make_user(role=UserRole.STAFF).id},
     ).one()
     assert code.id is not None
     assert code.is_active is True
@@ -254,26 +210,34 @@ def test_raw_sql_access_codes_and_enrolments_get_the_server_defaults(db: Session
     assert enrollment.left_at is None
 
 
-def test_duplicate_access_code_is_rejected(db: Session) -> None:
-    school_class = add_class(db)
-    add_code(db, school_class, code="K7PM3QXD")
+def test_duplicate_access_code_is_rejected(
+    make_class: Callable[..., Class], make_access_code: Callable[..., AccessCode]
+) -> None:
+    school_class = make_class()
+    make_access_code(school_class, code="K7PM3QXD")
     with pytest.raises(IntegrityError, match="uq_access_codes_code"):
-        add_code(db, school_class, code="K7PM3QXD")
+        make_access_code(school_class, code="K7PM3QXD")
 
 
 @pytest.mark.parametrize("code", ["K7PM-3QXD", "k7pm3qxd", "K7PM3QX"])
-def test_access_code_is_stored_normalised(db: Session, code: str) -> None:
+def test_access_code_is_stored_normalised(
+    make_class: Callable[..., Class], make_access_code: Callable[..., AccessCode], code: str
+) -> None:
     with pytest.raises(IntegrityError, match="ck_access_codes_code_format"):
-        add_code(db, add_class(db), code=code)
+        make_access_code(make_class(), code=code)
 
 
-def test_max_uses_must_be_positive(db: Session) -> None:
+def test_max_uses_must_be_positive(
+    make_class: Callable[..., Class], make_access_code: Callable[..., AccessCode]
+) -> None:
     with pytest.raises(IntegrityError, match="ck_access_codes_max_uses_positive"):
-        add_code(db, add_class(db), max_uses=0)
+        make_access_code(make_class(), max_uses=0)
 
 
-def test_uses_cannot_go_over_max_uses(db: Session) -> None:
-    code = add_code(db, add_class(db), max_uses=2)
+def test_uses_cannot_go_over_max_uses(
+    db: Session, make_class: Callable[..., Class], make_access_code: Callable[..., AccessCode]
+) -> None:
+    code = make_access_code(make_class(), max_uses=2)
     code.uses_count = 2
     db.flush()
     code.uses_count = 3
@@ -281,34 +245,51 @@ def test_uses_cannot_go_over_max_uses(db: Session) -> None:
         db.flush()
 
 
-def test_enrolment_language_must_match_the_class(db: Session) -> None:
+def test_enrolment_language_must_match_the_class(
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> None:
     with pytest.raises(IntegrityError, match="fk_class_enrollments_class_id_language_classes"):
-        enrol(db, add_user(db), add_class(db, target_language=Language.JA), language=Language.FR)
+        make_enrollment(make_user(), make_class(target_language=Language.JA), language=Language.FR)
 
 
-def test_a_student_is_enrolled_once_per_class(db: Session) -> None:
-    student, school_class = add_user(db), add_class(db)
-    enrol(db, student, school_class)
+def test_a_student_is_enrolled_once_per_class(
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> None:
+    student, school_class = make_user(), make_class()
+    make_enrollment(student, school_class)
     with pytest.raises(IntegrityError, match="uq_class_enrollments_student_id_class_id"):
-        enrol(db, student, school_class)
+        make_enrollment(student, school_class)
 
 
-def test_one_active_class_per_language(db: Session) -> None:
-    student = add_user(db)
-    enrol(db, student, add_class(db))
-    enrol(db, student, add_class(db, target_language=Language.FR))  # other language is fine
+def test_one_active_class_per_language(
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> None:
+    student = make_user()
+    make_enrollment(student, make_class())
+    make_enrollment(student, make_class(target_language=Language.FR))  # other language is fine
     with pytest.raises(IntegrityError, match="uq_class_enrollments_one_active_per_language"):
-        enrol(db, student, add_class(db))
+        make_enrollment(student, make_class())
 
 
-def test_a_student_can_join_again_after_leaving(db: Session) -> None:
-    student = add_user(db)
-    old = enrol(db, student, add_class(db))
+def test_a_student_can_join_again_after_leaving(
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> None:
+    student = make_user()
+    old = make_enrollment(student, make_class())
     old.is_active = False
     old.end_reason = EnrollmentEndReason.LEFT
     old.left_at = datetime.now(UTC)
     db.flush()
-    enrol(db, student, add_class(db))
+    make_enrollment(student, make_class())
 
 
 @pytest.mark.parametrize(
@@ -316,24 +297,31 @@ def test_a_student_can_join_again_after_leaving(db: Session) -> None:
     [(True, EnrollmentEndReason.LEFT), (False, None)],
 )
 def test_end_reason_must_match_the_status(
-    db: Session, is_active: bool, end_reason: str | None
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+    is_active: bool,
+    end_reason: str | None,
 ) -> None:
     # left_at matches the status, so only the end_reason CHECK can fail
     left_at = None if is_active else datetime.now(UTC)
-    student, school_class = add_user(db), add_class(db)
+    student, school_class = make_user(), make_class()
     with pytest.raises(IntegrityError, match="ck_class_enrollments_end_reason_matches_status"):
-        enrol(
-            db, student, school_class, is_active=is_active, end_reason=end_reason, left_at=left_at
+        make_enrollment(
+            student, school_class, is_active=is_active, end_reason=end_reason, left_at=left_at
         )
 
 
-def test_unknown_end_reason_is_rejected(db: Session) -> None:
+def test_unknown_end_reason_is_rejected(
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> None:
     # the quotes stop it from also matching ck_class_enrollments_end_reason_matches_status
     with pytest.raises(IntegrityError, match='"ck_class_enrollments_end_reason"'):
-        enrol(
-            db,
-            add_user(db),
-            add_class(db),
+        make_enrollment(
+            make_user(),
+            make_class(),
             is_active=False,
             end_reason="graduated",
             left_at=datetime.now(UTC),
@@ -346,10 +334,15 @@ def leave(enrollment: ClassEnrollment) -> None:
     enrollment.left_at = datetime.now(UTC)
 
 
-def test_a_student_can_rejoin_the_same_class(db: Session) -> None:
+def test_a_student_can_rejoin_the_same_class(
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> None:
     """Rejoining reuses the old row, so all three "left" fields have to be cleared."""
-    student, school_class = add_user(db), add_class(db)
-    enrollment = enrol(db, student, school_class)
+    student, school_class = make_user(), make_class()
+    enrollment = make_enrollment(student, school_class)
     leave(enrollment)
     db.flush()
     enrollment.is_active = True
@@ -358,8 +351,13 @@ def test_a_student_can_rejoin_the_same_class(db: Session) -> None:
     db.flush()
 
 
-def test_rejoining_without_clearing_the_leave_time_is_rejected(db: Session) -> None:
-    enrollment = enrol(db, add_user(db), add_class(db))
+def test_rejoining_without_clearing_the_leave_time_is_rejected(
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> None:
+    enrollment = make_enrollment(make_user(), make_class())
     leave(enrollment)
     db.flush()
     enrollment.is_active = True
@@ -368,19 +366,27 @@ def test_rejoining_without_clearing_the_leave_time_is_rejected(db: Session) -> N
         db.flush()
 
 
-def test_a_student_who_left_must_have_a_leave_time(db: Session) -> None:
+def test_a_student_who_left_must_have_a_leave_time(
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> None:
     with pytest.raises(IntegrityError, match="ck_class_enrollments_left_at_matches_status"):
-        enrol(
-            db,
-            add_user(db),
-            add_class(db),
+        make_enrollment(
+            make_user(),
+            make_class(),
             is_active=False,
             end_reason=EnrollmentEndReason.LEFT,
         )
 
 
-def test_leave_time_cannot_be_before_the_join_time(db: Session) -> None:
-    enrollment = enrol(db, add_user(db), add_class(db))
+def test_leave_time_cannot_be_before_the_join_time(
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> None:
+    enrollment = make_enrollment(make_user(), make_class())
     db.refresh(enrollment)
     leave(enrollment)
     enrollment.left_at = enrollment.joined_at - timedelta(days=1)
@@ -388,41 +394,59 @@ def test_leave_time_cannot_be_before_the_join_time(db: Session) -> None:
         db.flush()
 
 
-def test_a_code_from_another_class_cannot_be_used(db: Session) -> None:
-    class_a, class_b = add_class(db), add_class(db)
+def test_a_code_from_another_class_cannot_be_used(
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_access_code: Callable[..., AccessCode],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> None:
+    class_a, class_b = make_class(), make_class()
     with pytest.raises(
         IntegrityError, match="fk_class_enrollments_access_code_id_class_id_access_codes"
     ):
-        enrol(db, add_user(db), class_b, access_code_id=add_code(db, class_a).id)
+        make_enrollment(make_user(), class_b, access_code_id=make_access_code(class_a).id)
 
 
-def test_old_enrolments_in_the_same_language_are_kept(db: Session) -> None:
+def test_old_enrolments_in_the_same_language_are_kept(
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> None:
     """Only the active row counts for "one class per language", so history stays."""
-    student = add_user(db)
+    student = make_user()
     for _ in range(2):
-        old = enrol(db, student, add_class(db))
+        old = make_enrollment(student, make_class())
         leave(old)
         db.flush()
-    enrol(db, student, add_class(db))
+    make_enrollment(student, make_class())
 
 
 @pytest.mark.parametrize("code", ["K0PM3QXD", "KOPM3QXD", "K1PM3QXD", "KIPM3QXD", "KLPM3QXD"])
-def test_access_code_has_no_easily_confused_characters(db: Session, code: str) -> None:
+def test_access_code_has_no_easily_confused_characters(
+    make_class: Callable[..., Class], make_access_code: Callable[..., AccessCode], code: str
+) -> None:
     with pytest.raises(IntegrityError, match="ck_access_codes_code_format"):
-        add_code(db, add_class(db), code=code)
+        make_access_code(make_class(), code=code)
 
 
-def test_access_code_cannot_be_too_long(db: Session) -> None:
+def test_access_code_cannot_be_too_long(
+    make_class: Callable[..., Class], make_access_code: Callable[..., AccessCode]
+) -> None:
     with pytest.raises(IntegrityError, match="ck_access_codes_code_format"):
-        add_code(db, add_class(db), code="K7PM3QXDA")
+        make_access_code(make_class(), code="K7PM3QXDA")
 
 
-def test_a_code_can_be_limited_to_one_use(db: Session) -> None:
-    code = add_code(db, add_class(db), max_uses=1)
+def test_a_code_can_be_limited_to_one_use(
+    db: Session, make_class: Callable[..., Class], make_access_code: Callable[..., AccessCode]
+) -> None:
+    code = make_access_code(make_class(), max_uses=1)
     code.uses_count = 1
     db.flush()
 
 
-def test_uses_count_cannot_be_negative(db: Session) -> None:
+def test_uses_count_cannot_be_negative(
+    make_class: Callable[..., Class], make_access_code: Callable[..., AccessCode]
+) -> None:
     with pytest.raises(IntegrityError, match="ck_access_codes_uses_within_max"):
-        add_code(db, add_class(db), uses_count=-1)
+        make_access_code(make_class(), uses_count=-1)
