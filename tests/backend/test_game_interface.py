@@ -70,18 +70,34 @@ def test_unfinished_locations_are_skipped_and_points_kept(
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
 ) -> None:
-    school_class = make_class()
-    game = make_game_session(class_id=school_class.id, current_position=2, total_score=100)
+    school_class, other_class = make_class(), make_class()
+    last_played = datetime(2026, 10, 1, 12, tzinfo=UTC)
+    game = make_game_session(
+        class_id=school_class.id,
+        current_position=3,
+        total_score=100,
+        last_activity_at=last_played,
+    )
     done = make_session_location(
         game, 1, status=LocationStatus.COMPLETED, points_awarded=100, completed_at=datetime.now(UTC)
     )
-    current = make_session_location(game, 2, status=LocationStatus.NAVIGATING)
-    later = make_session_location(game, 3)
+    failed = make_session_location(game, 2, status=LocationStatus.FAILED, attempts_used=6)
+    current = make_session_location(game, 3, status=LocationStatus.NAVIGATING)
+    later = make_session_location(game, 4)
+    # a game in another class must keep its locations as they are
+    other_game = make_game_session(class_id=other_class.id)
+    other_current = make_session_location(other_game, 1, status=LocationStatus.NAVIGATING)
+    other_later = make_session_location(other_game, 2)
 
     end_open_sessions(school_class.id, db)
-    for row in (game, done, current, later):
+    for row in (game, done, failed, current, later, other_current, other_later):
         db.refresh(row)
     assert (done.status, done.points_awarded) == (LocationStatus.COMPLETED, 100)
+    assert (failed.status, failed.skip_reason) == (LocationStatus.FAILED, None)
     for row in (current, later):
         assert (row.status, row.skip_reason) == (LocationStatus.SKIPPED, SkipReason.SESSION_ENDED)
+    assert other_current.status == LocationStatus.NAVIGATING
+    assert other_later.status == LocationStatus.PENDING
     assert game.total_score == 100
+    # closing the class isn't student activity, so this stays (now() would be today)
+    assert game.last_activity_at == last_played
