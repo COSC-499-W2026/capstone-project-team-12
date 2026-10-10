@@ -32,7 +32,8 @@ def validate_code_and_enrol(
 
     Raises:
         INVALID_ACCESS_CODE: Code is unknown, inactive, expired, or used up.
-        FORBIDDEN_ROLE: User is not a student.
+        ACCOUNT_DISABLED: User account is deactivated.
+        FORBIDDEN_ROLE: User is missing or is not a student.
         CLASS_ARCHIVED: Class is archived.
         TA_SAME_CLASS_CONFLICT: Student assists the target class.
         ALREADY_IN_CLASS_FOR_LANGUAGE: Student already has an active class
@@ -48,7 +49,14 @@ def validate_code_and_enrol(
     now = datetime.now(UTC)
 
     user = db.get(User, student_id)
-    if user is None or not user.is_active or user.role != UserRole.STUDENT:
+
+    if user is None:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE)
+
+    if not user.is_active:
+        raise AppError(ErrorCode.ACCOUNT_DISABLED)
+
+    if user.role != UserRole.STUDENT:
         raise AppError(ErrorCode.FORBIDDEN_ROLE)
 
     access_code = db.scalar(

@@ -110,6 +110,25 @@ def test_staff_cannot_enrol(
     assert exc.value.code == ErrorCode.FORBIDDEN_ROLE
 
 
+def test_deactivated_student_cannot_enrol(
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_access_code: Callable[..., AccessCode],
+) -> None:
+    student = make_user()
+    student.is_active = False
+    db.flush()
+
+    school_class = make_class()
+    code = make_access_code(school_class)
+
+    with pytest.raises(AppError) as exc:
+        validate_code_and_enrol(student.id, code.code, db)
+
+    assert exc.value.code == ErrorCode.ACCOUNT_DISABLED
+
+
 def test_archived_class_is_rejected(
     db: Session,
     make_user: Callable[..., User],
