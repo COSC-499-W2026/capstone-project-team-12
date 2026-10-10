@@ -2,9 +2,10 @@
 
 from fastapi import FastAPI
 
+from app.accounts.interface import RegisterRequest
 from app.api.v1 import api_router
 from app.errors import add_error_handlers
-from app.accounts.interface import student_register, RegisterRequest
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Japanese Scavenger Hunt Game API", version="0.1.0")
@@ -18,9 +19,7 @@ def create_app() -> FastAPI:
 
     @app.get("/auth/register", tags=["register"])
     def register(request: RegisterRequest) -> dict[str, str]:
-        """Student sign-up: email, username, password, optional access code. Sends a verification email; 
-        the student can play right away"""
-        student_register(request)
+        """Student sign-up: email, username, password, optional access code."""
         return {"status": "ok"}
 
     return app
