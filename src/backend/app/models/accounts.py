@@ -47,7 +47,8 @@ class User(Base):
 
 class ClassStaff(Base):
     """Owner and teaching assistants of a class. Owner: a staff account; assistant: staff or
-    student. The TA same-language rule spans class_enrollments, so the services enforce it."""
+    student. Nobody is a student and a TA of the same class at once; that rule spans
+    class_enrollments, so the services enforce it."""
 
     __tablename__ = "class_staff"
     __table_args__ = (

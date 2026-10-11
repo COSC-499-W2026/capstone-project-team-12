@@ -1,10 +1,17 @@
 """Public interface of app.engagement: the only module other components may import.
 
-Implemented (Issue #106): access code validation and student enrolment.
-Planned (Issues #11 and #15): class lookup and location result interfaces.
+Implemented:
+- Issue #11: Class language, active enrolment, and archived-state lookups.
+- Issue #106: Access code validation and student enrolment.
 
-This function does not commit the transaction. Callers are responsible
-for committing or rolling back the entire operation.
+Planned:
+- Issue #15: Location result to engagement.
+
+Callers must check class existence and archived status before enrolment
+so archived classes produce CLASS_ARCHIVED rather than an enrolment error.
+
+The enrolment function does not commit the transaction. Callers are
+responsible for committing or rolling back the entire operation.
 """
 
 from datetime import UTC, datetime
@@ -16,9 +23,49 @@ from sqlalchemy.orm import Session
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import AccessCode, Class, ClassEnrollment
-from app.models.enums import ClassStaffRole, EnrollmentEndReason, UserRole
+from app.models.enums import (
+    ClassStaffRole,
+    EnrollmentEndReason,
+    Language,
+    UserRole,
+)
 
-__all__ = ["validate_code_and_enrol"]
+__all__ = [
+    "get_class_language",
+    "is_actively_enrolled",
+    "is_class_archived",
+    "validate_code_and_enrol",
+]
+
+
+def get_class_language(class_id: UUID, db: Session) -> Language | None:
+    """Return the class language, or None if the class does not exist."""
+    school_class = db.get(Class, class_id)
+    if school_class is None:
+        return None
+    return Language(school_class.target_language)
+
+
+def is_actively_enrolled(student_id: UUID, class_id: UUID, db: Session) -> bool:
+    """Return whether a student has an active enrolment in the class.
+
+    Callers must check class existence and archived status first.
+    """
+    statement = select(ClassEnrollment.id).where(
+        ClassEnrollment.student_id == student_id,
+        ClassEnrollment.class_id == class_id,
+        ClassEnrollment.is_active.is_(True),
+    )
+    return db.scalar(statement) is not None
+
+
+def is_class_archived(class_id: UUID, db: Session) -> bool:
+    """Return whether a class is archived.
+
+    Returns False if the class does not exist. Check existence separately.
+    """
+    school_class = db.get(Class, class_id)
+    return school_class is not None and school_class.archived_at is not None
 
 
 def validate_code_and_enrol(
