@@ -45,7 +45,7 @@ def register_account(
         stmt = insert(User).values(
             email=email,
             username=username,
-            password_hash=hashed_password,
+            password_hash=str(hashed_password),
             role=UserRole.STUDENT,
             can_manage_content=False,
             created_at=timestamp,

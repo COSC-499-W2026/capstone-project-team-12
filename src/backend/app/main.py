@@ -2,7 +2,12 @@
 
 from fastapi import FastAPI, Response
 
-from app.accounts.interface import RegisterRequest, student_register
+from app.accounts.interface import (
+    AuthRequest,
+    rotate_token,
+    student_register,
+    validate_login,
+)
 from app.api.v1 import api_router
 from app.db import get_db
 from app.errors import add_error_handlers
@@ -19,10 +24,24 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @app.post("/auth/register", tags=["register"], status_code=201)
-    def register(request: RegisterRequest, response: Response) -> dict[str, str]:
+    def register(request: AuthRequest.RegisterRequest, response: Response) -> dict[str, str]:
         """Student sign-up: email, username, password, optional access code."""
         student_register(request, next(get_db()))
         return {"status": "ok"}
+
+    @app.post("/auth/login", tags=["login"], status_code=200)
+    def login(request: AuthRequest.LoginRequest, response: Response) -> dict[str, str | bytes]:
+        """Sign in with email and password (all roles)"""
+        tokens = validate_login(request, next(get_db()))
+        return tokens
+
+    @app.post("/auth/refresh", tags=["refresh"], status_code=200)
+    def refresh(
+        request: AuthRequest.RefreshRequest, response: Response
+    ) -> dict[str, str | bytes] | None:
+        """Rotates refresh token of user and returns a new access token and refresh token"""
+        tokens = rotate_token(request, next(get_db()))
+        return tokens
 
     return app
 
