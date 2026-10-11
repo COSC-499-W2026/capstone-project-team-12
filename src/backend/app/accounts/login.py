@@ -3,6 +3,7 @@
 from datetime import datetime
 from uuid import UUID
 
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -11,13 +12,17 @@ from app.accounts.tokens import new_access_token, new_refresh_token
 from app.models.accounts import User
 
 
-def login_account(
-    email: str, password: str, db: Session, access_token: str | None = None
-) -> dict[str, str | bytes]:
-    """Validates user credentials and returns a JWT access token"""
-    check_password_hash(email, password, db)
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+    access_token: str | None
 
-    stmt = select(User.id).where(User.email == email)
+
+def login_account(request: LoginRequest, db: Session) -> dict[str, str | bytes]:
+    """Validates user credentials and returns a JWT access token"""
+    check_password_hash(request.email.lower(), request.password, db)
+
+    stmt = select(User.id).where(User.email == request.email.lower())
     result = db.execute(stmt)
     if result:
         for row in result:

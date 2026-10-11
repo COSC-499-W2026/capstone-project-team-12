@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from bcrypt import gensalt, hashpw
 from jwt import decode, encode
+from pydantic import BaseModel
 from sqlalchemy import insert, select, update
 from sqlalchemy.orm import Session
 
@@ -15,6 +16,10 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRES_MINUTES = 60
 REFRESH_TOKEN_EXPIRES_DAYS = 14
+
+
+class RefreshRequest(BaseModel):
+    token_id: UUID
 
 
 def new_access_token(data: dict[str, UUID | datetime]) -> str:
@@ -54,17 +59,19 @@ def new_refresh_token(user_id: UUID, db: Session, family_id: UUID | None = None)
     return hash
 
 
-def rotate_refresh_token(token_id: UUID, db: Session) -> dict[str, str | bytes] | None:
+def rotate_refresh_token(request: RefreshRequest, db: Session) -> dict[str, str | bytes] | None:
     """Rotates the provided token represented by token_id, then creates and returns a new
     JWT access code and refresh token in the same family."""
-    if not validate_refresh_token(token_id, db):
+    if not validate_refresh_token(request.token_id, db):
         raise AppError(ErrorCode.INVALID_TOKEN, "Your session has expired. Please log-in again.")
-    update_stmt = update(RefreshToken).where(RefreshToken.id == token_id).values(rotated_at=now())
+    update_stmt = (
+        update(RefreshToken).where(RefreshToken.id == request.token_id).values(rotated_at=now())
+    )
     result = db.execute(update_stmt)
     if result:
         db.commit()
     select_stmt = select(RefreshToken.user_id, RefreshToken.family_id).where(
-        RefreshToken.id == token_id
+        RefreshToken.id == request.token_id
     )
     result = db.execute(select_stmt)
 
