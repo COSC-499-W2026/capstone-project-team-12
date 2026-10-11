@@ -9,5 +9,5 @@ router = APIRouter(prefix="/auth")
 @router.post("/register", tags=["register"], status_code=201)
 def register(request: RegisterRequest) -> dict[str, str]:
     """Student sign-up: email, username, password, optional access code."""
-    register_account(request, Depends(get_db()))
+    register_account(request, Depends(get_db))
     return {"status": "ok"}
