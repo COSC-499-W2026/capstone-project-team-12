@@ -36,7 +36,7 @@ def hash_password(password: str) -> str:
     bytes = password.encode("utf-8")
     salt = gensalt(12)
     hashed = hashpw(bytes, salt)
-    return str(hashed, encoding="utf-8")
+    return hashed.decode("utf-8")
 
 
 def check_password_hash(email: str, password: str, db: Session) -> bool:

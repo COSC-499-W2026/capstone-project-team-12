@@ -1,17 +1,21 @@
-from fastapi import APIRouter, Depends, Response
+from typing import Annotated
+
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 
 from app.accounts.login import LoginRequest, login_account
 from app.accounts.register import RegisterRequest, register_account
 from app.accounts.tokens import RefreshRequest, rotate_refresh_token
 from app.db import get_db
 
-router = APIRouter(prefix="/auth")
+auth_router = APIRouter(prefix="/auth")
 
 
-@router.post("/register", tags=["register"], status_code=201)
-def register(request: RegisterRequest) -> dict[str, str]:
+@auth_router.post("/register", tags=["register"], status_code=201)
+def register(request: RegisterRequest, db: Annotated[Session, Depends(get_db)]) -> dict[str, str]:
     """Student sign-up: email, username, password, optional access code."""
-    register_account(request, Depends(get_db))
+    register_account(request, db)
+    db.commit()
     return {"status": "ok"}
 
 
