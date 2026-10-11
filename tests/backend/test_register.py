@@ -1,4 +1,6 @@
 import pytest
+from bcrypt import checkpw
+from fastapi.testclient import TestClient
 from sqlalchemy import Result, Row, select
 from sqlalchemy.orm import Session
 
@@ -17,6 +19,52 @@ def test_valid_register(db: Session):
     rows: Row = result.first()
     for row in rows:
         assert row.lower() == request.username.lower()
+
+
+def test_valid_hash(db: Session):
+    request = RegisterRequest(
+        email="test@email.com", username="JohnLanguage", password="ValidPassword1"
+    )
+    register_account(request, db)
+    query = select(User.password_hash).where(User.email == request.email)
+    result = db.execute(query)
+    assert result
+    for row in result:
+        stored_password = str(row[0])
+        stored_bytes = stored_password.encode("utf-8")
+        input_bytes = request.password.encode("utf-8")
+        assert checkpw(input_bytes, stored_bytes)
+
+
+def test_201(client: TestClient):
+    request = {
+        "email": "test@email.com",
+        "username": "JohnLanguage",
+        "password": "ValidPassword1",
+    }
+    response_201 = client.post("/api/v1/auth/register", json=request)
+    assert response_201.status_code == 201
+
+
+def test_409(client: TestClient):
+    request = {
+        "email": "test@email.com",
+        "username": "JohnLanguage",
+        "password": "ValidPassword1",
+    }
+    client.post("/api/v1/auth/register", json=request)
+    response_409 = client.post("/api/v1/auth/register", json=request)
+    assert response_409.status_code == 409
+
+
+def test_422(client: TestClient):
+    request = {
+        "email": "bademail",
+        "username": "JohnLanguage",
+        "password": "ValidPassword1",
+    }
+    response_422 = client.post("/api/v1/auth/register", json=request)
+    assert response_422.status_code == 422
 
 
 def test_username_taken(db: Session):

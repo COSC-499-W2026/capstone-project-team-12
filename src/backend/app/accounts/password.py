@@ -31,4 +31,4 @@ def hash_password(password: str) -> str:
     bytes = password.encode("utf-8")
     salt = gensalt(12)
     hashed = hashpw(bytes, salt)
-    return str(hashed)
+    return hashed.decode("utf-8")
