@@ -58,6 +58,8 @@ def register_account(request: RegisterRequest, db: Session) -> None:
 
         #  TODO: Validate access code here
 
+        db.commit()
+
     except AppError as err:
         raise AppError(err.code, err.message, err.details) from err
     except IntegrityError as err:
