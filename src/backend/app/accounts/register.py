@@ -30,7 +30,9 @@ def register_account(request: RegisterRequest, db: Session) -> None:
             raise AppError(ErrorCode.VALIDATION_ERROR, "The email you have entered is not valid.")
 
         if not username_is_valid(username):
-            raise AppError(ErrorCode.VALIDATION_ERROR, "The username you have entered is not valid.")
+            raise AppError(
+                ErrorCode.VALIDATION_ERROR, "The username you have entered is not valid."
+            )
 
         if username_exists(username, db):
             raise AppError(

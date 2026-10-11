@@ -1,5 +1,4 @@
 import pytest
-from bcrypt import checkpw
 from sqlalchemy import Result, Row, select
 from sqlalchemy.orm import Session
 
@@ -17,7 +16,7 @@ def test_valid_register(db: Session):
     result: Result = db.execute(query)
     rows: Row = result.first()
     for row in rows:
-        assert row == request.username.lower()
+        assert row.lower() == request.username.lower()
 
 
 def test_username_taken(db: Session):
@@ -47,9 +46,7 @@ def test_email_taken(db: Session):
 
 
 def test_invalid_username(db: Session):
-    request = RegisterRequest(
-        email="example@email.com", username="jl", password="ValidPassword1"
-    )
+    request = RegisterRequest(email="example@email.com", username="jl", password="ValidPassword1")
     with pytest.raises(AppError) as exc_info:
         register_account(request, db)
     assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
