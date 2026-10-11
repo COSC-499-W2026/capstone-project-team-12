@@ -49,10 +49,11 @@ def register_account(request: RegisterRequest, db: Session) -> None:
         stmt = insert(User).values(
             email=email,
             username=username,
-            password_hash=str(hashed_password),
+            password_hash=hashed_password,
             role=UserRole.STUDENT,
             can_manage_content=False,
         )
+
         db.execute(stmt)
         db.flush()
 

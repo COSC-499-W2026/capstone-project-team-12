@@ -16,7 +16,7 @@ def register(request: RegisterRequest) -> dict[str, str]:
 
 
 @router.post("/login", tags=["login"], status_code=200)
-def login(request: LoginRequest, response: Response) -> dict[str, str | bytes]:
+def login(request: LoginRequest, response: Response) -> dict[str, str | bytes] | None:
     """Sign in with email and password (all roles)"""
     tokens = login_account(request, Depends(get_db))
     return tokens

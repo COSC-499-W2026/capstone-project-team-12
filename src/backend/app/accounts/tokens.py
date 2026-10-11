@@ -22,11 +22,11 @@ class RefreshRequest(BaseModel):
     token_id: UUID
 
 
-def new_access_token(data: dict[str, UUID | datetime]) -> str:
+def new_access_token(data: dict[str, str | datetime]) -> str:
     """Creates a new access token using the provided data."""
     expire = now() + timedelta(minutes=ACCESS_TOKEN_EXPIRES_MINUTES)
     data.update({"exp": expire})
-    encoded_jwt: str = encode(data, SECRET_KEY, ALGORITHM)
+    encoded_jwt: str = encode(data, "test", ALGORITHM)
     return encoded_jwt
 
 
