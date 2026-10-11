@@ -14,24 +14,27 @@ def validate_password_security(password: str) -> None:
     """
 
     if len(password) < 8:
-        raise AppError(ErrorCode.INVALID_CREDENTIALS, "Password must contain minimum 8 characters")
+        raise AppError(ErrorCode.VALIDATION_ERROR, "Password must contain minimum 8 characters")
+
+    if len(password.encode("utf-8")) > 70:
+        raise AppError(ErrorCode.VALIDATION_ERROR, "Password must contain less than 70 characters.")
 
     if password.isdigit():
-        raise AppError(ErrorCode.INVALID_CREDENTIALS, "Password must contain at least one number")
+        raise AppError(ErrorCode.VALIDATION_ERROR, "Password must contain at least one letter")
 
     if not any(char.isdigit() for char in password):
-        raise AppError(ErrorCode.INVALID_CREDENTIALS, "Password must contain at least one letter")
+        raise AppError(ErrorCode.VALIDATION_ERROR, "Password must contain at least one number")
 
     if not any(char.isupper() for char in password):
-        raise AppError(ErrorCode.INVALID_CREDENTIALS, "Password must contain at least one capital")
+        raise AppError(ErrorCode.VALIDATION_ERROR, "Password must contain at least one capital")
 
 
-def hash_password(password: str) -> bytes:
+def hash_password(password: str) -> str:
     """Takes a plaintext password and returns the bcrypt hashed password."""
     bytes = password.encode("utf-8")
     salt = gensalt(12)
     hashed = hashpw(bytes, salt)
-    return hashed
+    return str(hashed)
 
 
 def check_password_hash(email: str, password: str, db: Session) -> bool:
