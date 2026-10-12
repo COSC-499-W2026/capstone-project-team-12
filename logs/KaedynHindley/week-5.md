@@ -39,7 +39,9 @@ The PR exceeds the suggested 200 lines changed, but remains under 400.
 
 I made sure any variables are either obtained from the API endpoint or database to ensure no hardcoded values, split repeated code into their own functions and functionalities into their own modules to avoid duplicate code, used pytest-cov and mypy to ensure there was no dead code and unnecessary function calls, only used if/else statements where absoluteley necessary to avoid excessive logic and nesting. Each module implemented only covers related responsibilities: register.py only registers, password.py validates and hashes passwords.
 
-By using pytest-cov to check for test coverage, we found that our tests have  coverage.
+The review by Eddy and Mia identified that the implementation was raising Exceptions and converting them into a generic AppError, which should not have been user facing, and provided no information about the errors being caught. Instead of this, the implementation now catches sqlalchemy `IntegrityError` and `InternalError` and maps them to applicable error codes.
+
+They also identified several errors involving data entry in database, such as password_hashes being stored as utf-8 bytes when they should be converted to strings, and that the usernames are unique on lowercase.
 
 This work is written in the `app/accounts` module, in the `register.py` and `password.py` files. This keeps their functionalities separated from not only the other components of the system, but from each other, so that `register.py` is not performing password related responsibilities without importing it.
 
@@ -56,3 +58,35 @@ Among these tests, all are unit tests and integration tests are not required bec
 These tests are included in the directory `/tests/backend/test_register.py`.
 
 This new test PR did not break anything else in the system because all other tests in the suite passed.
+
+By using pytest-cov to check for test coverage, we found that our tests have 97% coverage.
+
+Name                            Stmts   Miss  Cover   Missing
+-------------------------------------------------------------
+app\__init__.py                     0      0   100%
+app\accounts\__init__.py            0      0   100%
+app\accounts\interface.py           0      0   100%
+app\accounts\password.py           18      1    94%   17
+app\accounts\register.py           58      7    88%   62-70
+app\api\__init__.py                 0      0   100%
+app\api\v1\__init__.py              4      0   100%
+app\api\v1\auth.py                 11      0   100%
+app\config.py                      15      0   100%
+app\content\__init__.py             0      0   100%
+app\content\interface.py           37      0   100%
+app\db.py                          16      4    75%   35-39
+app\engagement\__init__.py          0      0   100%
+app\engagement\interface.py         0      0   100%
+app\errors.py                      88      0   100%
+app\game\__init__.py                0      0   100%
+app\game\interface.py               0      0   100%
+app\main.py                        12      0   100%
+app\models\__init__.py              2      0   100%
+app\models\accounts.py             30      0   100%
+app\models\columns.py              18      0   100%
+app\models\engagement.py           44      0   100%
+app\models\enums.py                23      0   100%
+app\verification\__init__.py        0      0   100%
+app\verification\interface.py       0      0   100%
+-------------------------------------------------------------
+TOTAL                             376     12    97%
