@@ -21,6 +21,22 @@ class Difficulty(IntEnum):
     CHALLENGING = 3  # description only
 
 
+class FeedbackCode(StrEnum):
+    NAV_START = "NAV_START"
+    NAV_GETTING_CLOSER = "NAV_GETTING_CLOSER"
+    NAV_GETTING_FARTHER = "NAV_GETTING_FARTHER"
+    NAV_KEEP_GOING = "NAV_KEEP_GOING"
+    NAV_VERY_CLOSE = "NAV_VERY_CLOSE"
+    NAV_ARRIVED = "NAV_ARRIVED"
+    NAV_GPS_WEAK = "NAV_GPS_WEAK"
+    VERIFY_START = "VERIFY_START"
+    VERIFY_SUCCESS = "VERIFY_SUCCESS"
+    VERIFY_UNCLEAR = "VERIFY_UNCLEAR"
+    VERIFY_NO_MATCH = "VERIFY_NO_MATCH"
+    VERIFY_EXHAUSTED = "VERIFY_EXHAUSTED"
+    SESSION_COMPLETE = "SESSION_COMPLETE"
+
+
 class UserRole(StrEnum):
     STUDENT = "student"
     STAFF = "staff"  # teachers; a TA is a class_staff row, not a role

@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -44,6 +44,35 @@ def db(test_engine: Engine) -> Iterator[Session]:
         session.close()
         transaction.rollback()
         connection.close()
+
+
+@pytest.fixture
+def transaction_calls(db: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
+    """Every explicit commit, flush and rollback made on the test session while the test runs.
+
+    Autoflush is turned off: the automatic flush before a query is normal and only writes what
+    the caller already added, so a real lookup that queries must not fail this check. Flush is
+    spied on directly because SQLAlchemy only fires its flush events when something is pending,
+    so listening for them would miss an explicit flush of a clean session. The transaction is
+    opened first because rolling back a session without one does nothing, which would hide a
+    rollback inside a lookup.
+    """
+    db.connection()
+    calls: list[str] = []
+    real_flush = db.flush
+
+    def spy_flush(*args: Any, **kwargs: Any) -> None:
+        calls.append("flush")
+        real_flush(*args, **kwargs)
+
+    def record(name: str) -> Callable[..., None]:
+        return lambda *_: calls.append(name)
+
+    monkeypatch.setattr(db, "autoflush", False)
+    monkeypatch.setattr(db, "flush", spy_flush)
+    event.listen(db, "after_commit", record("commit"))
+    event.listen(db, "after_soft_rollback", record("rollback"))
+    yield calls
 
 
 @pytest.fixture

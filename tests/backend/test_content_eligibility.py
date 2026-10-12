@@ -1,12 +1,9 @@
 import math
 import re
-from collections.abc import Callable, Iterator
 from itertools import combinations, product
-from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -19,6 +16,7 @@ from app.content.interface import (
     is_location_active,
     location_snapshot,
 )
+from app.services.audio import MediaNotFoundError, clue_audio_asset_id, clue_audio_url
 
 ALL_MODES = list(product(Language, Difficulty))
 ANSWER_FORMAT = re.compile(r"[A-Z]{3}\d{3,4}")
@@ -33,35 +31,6 @@ def distance_meters(a: GpsPoint, b: GpsPoint) -> float:
         (a.lat - b.lat) * METERS_PER_DEGREE_OF_LATITUDE,
         (a.lng - b.lng) * meters_per_degree_of_longitude,
     )
-
-
-@pytest.fixture
-def transaction_calls(db: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
-    """Every explicit commit, flush and rollback made on the test session while the test runs.
-
-    Autoflush is turned off: the automatic flush before a query is normal and only writes what
-    the caller already added, so a real lookup that queries must not fail this check. Flush is
-    spied on directly because SQLAlchemy only fires its flush events when something is pending,
-    so listening for them would miss an explicit flush of a clean session. The transaction is
-    opened first because rolling back a session without one does nothing, which would hide a
-    rollback inside a lookup.
-    """
-    db.connection()
-    calls: list[str] = []
-    real_flush = db.flush
-
-    def spy_flush(*args: Any, **kwargs: Any) -> None:
-        calls.append("flush")
-        real_flush(*args, **kwargs)
-
-    def record(name: str) -> Callable[..., None]:
-        return lambda *_: calls.append(name)
-
-    monkeypatch.setattr(db, "autoflush", False)
-    monkeypatch.setattr(db, "flush", spy_flush)
-    event.listen(db, "after_commit", record("commit"))
-    event.listen(db, "after_soft_rollback", record("rollback"))
-    yield calls
 
 
 @pytest.mark.parametrize(("language", "difficulty"), ALL_MODES)
@@ -111,6 +80,13 @@ def test_snapshot_is_repeatable_with_its_own_clue_per_language_and_difficulty(
     assert len({snapshot.audio_asset_id for snapshot in snapshots}) == len(ALL_MODES)
 
 
+def test_snapshot_recording_is_one_audio_service_can_play(db: Session) -> None:
+    location_id = next(iter(eligible_location_ids(db, Language.FR, Difficulty.BASIC)))
+    snapshot = location_snapshot(db, location_id, Language.FR, Difficulty.BASIC)
+    assert clue_audio_url(snapshot.audio_asset_id, db)
+    assert snapshot.audio_asset_id == clue_audio_asset_id(snapshot.clue_id, db)
+
+
 def test_stub_arrival_circles_never_overlap(db: Session) -> None:
     ids = eligible_location_ids(db, Language.JA, Difficulty.BASIC)
     snapshots = [location_snapshot(db, i, Language.JA, Difficulty.BASIC) for i in ids]
@@ -122,6 +98,18 @@ def test_stub_arrival_circles_never_overlap(db: Session) -> None:
 def test_snapshot_of_an_ineligible_location_is_refused(db: Session) -> None:
     with pytest.raises(LocationNotEligibleError):
         location_snapshot(db, uuid4(), Language.DE, Difficulty.BASIC)
+
+
+def test_snapshot_of_a_location_without_a_recording_is_refused(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_recording(clue_id: UUID, db: Session) -> UUID:
+        raise MediaNotFoundError
+
+    monkeypatch.setattr("app.content.interface.clue_audio_asset_id", no_recording)
+    location_id = next(iter(eligible_location_ids(db, Language.DE, Difficulty.BASIC)))
+    with pytest.raises(LocationNotEligibleError):
+        location_snapshot(db, location_id, Language.DE, Difficulty.BASIC)
 
 
 def test_content_lookups_never_commit_flush_or_roll_back_the_callers_session(
