@@ -1,7 +1,7 @@
 import re
 
 from pydantic import BaseModel
-from sqlalchemy import insert, select, func
+from sqlalchemy import func, insert, select
 from sqlalchemy.exc import IntegrityError, InternalError
 from sqlalchemy.orm import Session
 
@@ -57,24 +57,19 @@ def register_account(request: RegisterRequest, db: Session) -> None:
         db.flush()
 
         #  TODO: Validate access code here
-        
 
     except (IntegrityError, InternalError) as err:
         db.rollback()
         diag = getattr(err.orig, "diag", None)
         constraint = getattr(diag, "contraint_name", None)
-        code: ErrorCode
         if constraint == "uq_users_email":
             raise AppError(
-                ErrorCode.EMAIL_TAKEN, 
-                "The email you have chosen is already in use."
-            )
+                ErrorCode.EMAIL_TAKEN, "The email you have chosen is already in use."
+            ) from err
         elif constraint == "uq_users_username_lower":
             raise AppError(
-                ErrorCode.USERNAME_TAKEN,
-                "The username you have chosen is already in use."
-            )
-                
+                ErrorCode.USERNAME_TAKEN, "The username you have chosen is already in use."
+            ) from err
 
 
 def username_exists(username: str, db: Session) -> bool:
@@ -88,9 +83,9 @@ def username_exists(username: str, db: Session) -> bool:
 
 def username_is_valid(username: str) -> bool:
     return (
-        len(username) >= 3 
-        and len(username) <= 30 
-        and not username.endswith(" ") 
+        len(username) >= 3
+        and len(username) <= 30
+        and not username.endswith(" ")
         and not username.startswith(" ")
     )
 
