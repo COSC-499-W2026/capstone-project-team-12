@@ -18,9 +18,9 @@ Week 5 (Oct 5 – Oct 11)
 | #160 | Remove logs from main | 8 | +27 / -103 | – | merged |
 | #161 | `session_locations` table | 6 | +459 / -7 | 29 | merged |
 | #165 | End open games (wrong base) | 2 | +151 / -2 | 4 | merged into the wrong branch (see below) |
-| #170 | End open games | 2 | +151 / -2 | 4 | in review |
+| #170 | End open games | 2 | +151 / -2 | 4 | merged |
 
-One thing went wrong: #165 was stacked on #161. After #161 was squash-merged into `main`, I merged #165 without switching its base first, so it went into `feat/session-locations` instead of `main`, and `end_open_sessions` never reached `main`. I left #165 as it is with a note, rebased the same three commits onto `main` and opened #170. Lesson (again, after week 4): switch a stacked PR's base to `main` and rebase it before merging. Squash-merging the base of a stack also forces the next PR to be rebased, so for stacked PRs a normal merge commit is easier.
+One thing went wrong: #165 was stacked on #161. After #161 was squash-merged into `main`, I merged #165 without switching its base first, so it went into `feat/session-locations` instead of `main`, and `end_open_sessions` never reached `main`. I left #165 as it is with a note, rebased the same three commits onto `main` and opened #170, which is now merged into `main`. Lesson (again, after week 4): switch a stacked PR's base to `main` and rebase it before merging. Squash-merging the base of a stack also forces the next PR to be rebased, so for stacked PRs a normal merge commit is easier.
 
 ## PR #150: Core schema 1 (users, classes, class_staff)
 
@@ -158,6 +158,6 @@ No workaround, the codes come from the spec and the format from the conventions 
 - **TA rule change:** from professor feedback, a TA can't be a student in the same class, but other classes in the same language are fine. I renamed the error code to `TA_SAME_CLASS_CONFLICT` in #158 and updated the spec, the proposal (A5, A26, Table 4), the DB design doc, two DFDs and issues #10, #75 and #85.
 - **Audio design fix:** the spec said the audio service returns a clue's primary recording during play, which breaks the snapshot rule (a new recording would change a game in progress). Now the recording is chosen when the location is drawn, and game only asks for a URL by the snapshot's `audio_asset_id`. I updated the spec, proposal Table 4 and issues #13, #77 and #94, and left a note for Eddy on #13.
 - **Proposal feedback:** privacy export and delete moved from the CLI to the admin panel with safeguards. I updated the spec, the proposal (A21, A27, B21), the architecture diagram, the Level 0 DFD, the Auth DFD and the ER diagram.
-- **DB design doc:** for #8, I answered Eddy's comments and finalised the conventions (enum CHECKs, UUIDs, interface functions never commit). I reopened #8 with a progress comment, since `game_sessions` and `session_locations` are still open.
+- **DB design doc:** for #8, I answered Eddy's comments and finalised the conventions (enum CHECKs, UUIDs, interface functions never commit). I reopened #8 with a progress comment, since `game_sessions` and `session_locations` were still open at the time. Both are now merged (#154, #161).
 - **Planning:** split the M1-1 account work with Kaedyn. He does sign-up and sign-in first, then A4 (role-based access) because everyone's routes depend on it. I offered to take A3 (email verification and password reset) and start a draft PR for it.
 - **Note for Fabiha:** for A5, the CHECK can't stop lost updates on `uses_count`, so the join service should increment it in SQL. I put this in #151.
