@@ -21,7 +21,7 @@ Use lowercase words separated by hyphens.
 
 Example: `feat/a7-start-game`
 
-Weekly logs should be committed to the `weekly-logs` branch.
+Weekly logs only live on the `weekly-logs` branch. Branch from `weekly-logs` and open the PR into `weekly-logs`. Never merge `weekly-logs` into `main`, or the logs come back to `main`.
 
 ## Pull Requests
 

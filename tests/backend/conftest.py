@@ -4,11 +4,12 @@ import random
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeVar
+from urllib.parse import parse_qs, unquote, urlsplit
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -16,7 +17,9 @@ from app.db import get_db
 from app.main import create_app
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import ACCESS_CODE_ALPHABET, AccessCode, Class, ClassEnrollment
-from app.models.enums import ClassStaffRole, Language, UserRole
+from app.models.enums import ClassStaffRole, Difficulty, Language, UserRole
+from app.models.game import GameSession, SessionLocation
+from app.services.storage import MEDIA_URL_PREFIX
 
 
 @pytest.fixture(scope="session")
@@ -41,6 +44,49 @@ def db(test_engine: Engine) -> Iterator[Session]:
         session.close()
         transaction.rollback()
         connection.close()
+
+
+@pytest.fixture
+def transaction_calls(db: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
+    """Every explicit commit, flush and rollback made on the test session while the test runs.
+
+    Autoflush is turned off: the automatic flush before a query is normal and only writes what
+    the caller already added, so a real lookup that queries must not fail this check. Flush is
+    spied on directly because SQLAlchemy only fires its flush events when something is pending,
+    so listening for them would miss an explicit flush of a clean session. The transaction is
+    opened first because rolling back a session without one does nothing, which would hide a
+    rollback inside a lookup.
+    """
+    db.connection()
+    calls: list[str] = []
+    real_flush = db.flush
+
+    def spy_flush(*args: Any, **kwargs: Any) -> None:
+        calls.append("flush")
+        real_flush(*args, **kwargs)
+
+    def record(name: str) -> Callable[..., None]:
+        return lambda *_: calls.append(name)
+
+    monkeypatch.setattr(db, "autoflush", False)
+    monkeypatch.setattr(db, "flush", spy_flush)
+    event.listen(db, "after_commit", record("commit"))
+    event.listen(db, "after_soft_rollback", record("rollback"))
+    yield calls
+
+
+@pytest.fixture
+def split_media_url() -> Callable[[str], tuple[str, int, str]]:
+    """Split a signed media URL into its (key, expires, signature) parts, decoding the key as the
+    router does."""
+
+    def split(url: str) -> tuple[str, int, str]:
+        parts = urlsplit(url)
+        query = parse_qs(parts.query)
+        key = unquote(parts.path.removeprefix(f"{MEDIA_URL_PREFIX}/"))
+        return key, int(query["expires"][0]), query["sig"][0]
+
+    return split
 
 
 @pytest.fixture
@@ -137,5 +183,40 @@ def make_enrollment(
         if "access_code_id" not in fields:
             values["access_code_id"] = make_access_code(school_class).id
         return _add(db, ClassEnrollment(**(values | fields)))
+
+    return make
+
+
+@pytest.fixture
+def make_game_session(db: Session, make_user: Callable[..., User]) -> Callable[..., GameSession]:
+    """An active Practice game in Japanese at difficulty 1, for a new student unless given one."""
+
+    def make(student: User | None = None, **fields: Any) -> GameSession:
+        values: dict[str, Any] = {
+            "student_id": (student or make_user()).id,
+            "target_language": Language.JA,
+            "difficulty": Difficulty.BASIC,
+        }
+        return _add(db, GameSession(**(values | fields)))
+
+    return make
+
+
+@pytest.fixture
+def make_session_location(db: Session) -> Callable[..., SessionLocation]:
+    """A pending location in the game with a valid content snapshot (a random location id)."""
+
+    def make(game: GameSession, position: int, **fields: Any) -> SessionLocation:
+        values: dict[str, Any] = {
+            "session_id": game.id,
+            "location_id": uuid4(),
+            "position": position,
+            "clue_id": uuid4(),
+            "audio_asset_id": uuid4(),
+            "accepted_answers_snapshot": ["SCI333"],
+            "gps_points_snapshot": [{"lat": 49.9394, "lng": -119.3948}],
+            "radius_snapshot": 30,
+        }
+        return _add(db, SessionLocation(**(values | fields)))
 
     return make

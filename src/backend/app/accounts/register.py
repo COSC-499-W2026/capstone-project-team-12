@@ -1,8 +1,8 @@
 import re
-from sqlite3 import IntegrityError
 
 from pydantic import BaseModel
-from sqlalchemy import insert, select
+from sqlalchemy import func, insert, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.accounts.password import hash_password, validate_password_security
@@ -59,25 +59,35 @@ def register_account(request: RegisterRequest, db: Session) -> None:
 
         #  TODO: Validate access code here
 
-    except AppError as err:
-        raise AppError(err.code, err.message, err.details) from err
     except IntegrityError as err:
-        raise AppError(
-            ErrorCode.DATABASE_INTEGRITY_ERROR, "Something went wrong when processing your request."
-        ) from err
+        diag = getattr(err.orig, "diag", None)
+        constraint = getattr(diag, "constraint_name", None)
+        if constraint == "uq_users_email":
+            raise AppError(
+                ErrorCode.EMAIL_TAKEN, "The email you have chosen is already in use."
+            ) from err
+        elif constraint == "uq_users_username_lower":
+            raise AppError(
+                ErrorCode.USERNAME_TAKEN, "The username you have chosen is already in use."
+            ) from err
 
 
 def username_exists(username: str, db: Session) -> bool:
     """Returns True if username is found in the db, and False if there were no results."""
-    query = select(User.username).where(User.username == username).limit(1)
+    query = select(User.username).where(func.lower(User.username) == username.lower()).limit(1)
     result = db.execute(query)  #  Usernames are unique, only need first
     for row in result:
-        return row[0] == username
+        return row[0].lower() == username.lower()
     return False
 
 
 def username_is_valid(username: str) -> bool:
-    return len(username) >= 3 and len(username) <= 30 and not username.endswith(" ")
+    return (
+        len(username) >= 3
+        and len(username) <= 30
+        and not username.endswith(" ")
+        and not username.startswith(" ")
+    )
 
 
 def email_exists(email: str, db: Session) -> bool:
@@ -91,6 +101,6 @@ def email_exists(email: str, db: Session) -> bool:
 
 def email_is_valid(email: str) -> bool:
     """Checks for properly formatted email. Returns True if email passes regex test."""
-    pattern = "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+    pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
     match = re.fullmatch(pattern, email)
     return bool(match)

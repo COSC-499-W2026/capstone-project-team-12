@@ -36,7 +36,7 @@ def test_valid_hash(db: Session):
         assert checkpw(input_bytes, stored_bytes)
 
 
-def test_201(client: TestClient):
+def test_201(client: TestClient, db: Session):
     request = {
         "email": "test@email.com",
         "username": "JohnLanguage",
@@ -44,6 +44,13 @@ def test_201(client: TestClient):
     }
     response_201 = client.post("/api/v1/auth/register", json=request)
     assert response_201.status_code == 201
+    query = select(User.email, User.username, User.password_hash).where(
+        User.email == "test@email.com"
+    )
+    result = db.execute(query)
+    assert result
+    for row in result:
+        assert row[0] and row[1] and row[2]
 
 
 def test_409(client: TestClient):
@@ -67,17 +74,24 @@ def test_422(client: TestClient):
     assert response_422.status_code == 422
 
 
-def test_username_taken(db: Session):
-    request_1 = RegisterRequest(
-        email="example@email.com", username="John", password="ValidPassword1"
+def test_username_taken(db: Session, client: TestClient):
+    request_1 = {
+        "email": "test@email.com",
+        "username": "JohnLanguage",
+        "password": "ValidPassword1",
+    }
+    request_2 = {
+        "email": "test@email.com",
+        "username": "johnLanguage",
+        "password": "ValidPassword1",
+    }
+    result1 = client.post("/api/v1/auth/register", json=request_1)
+    result2 = client.post("/api/v1/auth/register", json=request_2)
+    assert (
+        result1.status_code == 201
+        and result2.status_code == 409
+        and result2.json()["error"]["code"] == "USERNAME_TAKEN"
     )
-    request_2 = RegisterRequest(
-        email="example2@email.com", username="John", password="ValidPassword1"
-    )
-    with pytest.raises(AppError) as exc_info:
-        register_account(request_1, db)
-        register_account(request_2, db)
-    assert exc_info.value.code == ErrorCode.USERNAME_TAKEN
 
 
 def test_email_taken(db: Session):
