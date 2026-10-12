@@ -44,9 +44,9 @@ def test_201(client: TestClient, db: Session):
     }
     response_201 = client.post("/api/v1/auth/register", json=request)
     assert response_201.status_code == 201
-    query = select(
-        User.email, User.username, User.password_hash
-    ).where(User.email == "test@email.com")
+    query = select(User.email, User.username, User.password_hash).where(
+        User.email == "test@email.com"
+    )
     result = db.execute(query)
     assert result
     for row in result:
@@ -76,19 +76,20 @@ def test_422(client: TestClient):
 
 def test_username_taken(db: Session, client: TestClient):
     request_1 = {
-            "email": "test@email.com",
-            "username": "JohnLanguage",
-            "password": "ValidPassword1",
-        }
+        "email": "test@email.com",
+        "username": "JohnLanguage",
+        "password": "ValidPassword1",
+    }
     request_2 = {
-                "email": "test@email.com",
-                "username": "johnLanguage",
-                "password": "ValidPassword1",
-            }
+        "email": "test@email.com",
+        "username": "johnLanguage",
+        "password": "ValidPassword1",
+    }
     result1 = client.post("/api/v1/auth/register", json=request_1)
     result2 = client.post("/api/v1/auth/register", json=request_2)
-    assert (result1.status_code == 201 
-        and result2.status_code == 409 
+    assert (
+        result1.status_code == 201
+        and result2.status_code == 409
         and result2.json()["error"]["code"] == "USERNAME_TAKEN"
     )
 
