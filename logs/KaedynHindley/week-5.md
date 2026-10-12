@@ -13,7 +13,13 @@ The PR only contains small functions that are 156 lines long.
 
 I ensured data is obtained from parameters and database only to ensure no hardcoded values, there is very little code that can be duplicated across the functions, I used pytest-cov and mypy to ensure that there is no dead code or unnecessary calls, kept if/else statements to the bare minimum to avoid excessive login and nesting to the bare minimum, and each function covers only its purpose.
 
-The review by Eddy identified that require_class_role needed a `class_id` passed into it, or else it would return for all classes. Therefore, `class_id` can be passed into it as a parameter, and the select statement takes it into account when querying.
+Eddy identified that initially, all the tests could not fail, thus making them functionally useless. This was fixed by initially allowing some arbitrary fixed values to pass the stubs, and fail otherwise, but as other PRs got merged, the tests became proper tests of the final functionality.
+
+Eddy identified that require_class_role needed a `class_id` passed into it, or else it would return for all classes, allowing a teacher of one class access to another class they shouldn't. Therefore, `class_id` can be passed into it as a parameter, and the select statement takes it into account when querying.
+
+Eddy also identified that `require_class_role` would always deny, thus it couldn't be tested against when other components would implement and test against the stub. This was initially changed by letting a fixed user_id through, but the needed ClassStaffRole ORM was added soon after, and so the function was fully implemented and could be properly tested against without a temporary workaround.
+
+Eddy identified that the User class I was implementing was not an sqlalchemy Base, and that it was missing necessary columns for other components to test against. Mia would implement core ORM models soon after, and so I adjusted the implementation to make use of those instead.
 
 This work is written in `accounts/interface.py` because other components, particularly Fabiha's class component, need to use these functions, and other components should only be importing the interface file, and no others from `accounts`.
 
@@ -41,9 +47,15 @@ I made sure any variables are either obtained from the API endpoint or database 
 
 The review by Eddy and Mia identified that the implementation was raising Exceptions and converting them into a generic AppError, which should not have been user facing, and provided no information about the errors being caught. Instead of this, the implementation now catches sqlalchemy `IntegrityError` and `InternalError` and maps them to applicable error codes.
 
-They also identified several errors involving data entry in database, such as password_hashes being stored as utf-8 bytes when they should be converted to strings, and that the usernames are unique on lowercase.
+Eddy and Mia also identified several errors involving data entry in database, such as password_hashes being stored as utf-8 bytes when they should be converted to strings, and that the usernames are unique on lowercase.
+
+Eddy identified that the way I was obtaining the db initial;y (through next(get_db())), would not close the session and the test override would never occur. I implemented his suggestion, which was using fastapi's Depends function in the parameters of the path. I initially implemented this wrong too, which Mia pointed out and I corrected with her suggestion.
+
+Eddy identified mismatches between the errors being raised and our api conventions, which was changed trivially.
 
 This work is written in the `app/accounts` module, in the `register.py` and `password.py` files. This keeps their functionalities separated from not only the other components of the system, but from each other, so that `register.py` is not performing password related responsibilities without importing it.
+
+A user's password stores sensitive information and uses the encryption method bcrypt with salt-cost 12. 
 
 #### Tests
 
@@ -51,7 +63,7 @@ The functionality works correctly because the happy path tests involving registe
 
 I wrote tests to cover abnormal situations involving poorly formatted usernames (< 3 chars, starting and ending with space characters), emails (regex statement checks for proper email structure), and duplicate entries in the database (one email/username tied to one account) and they passed.
 
-I checked that these negative cases involving the poorly formatted information above and they failed as expected.
+I checked that these negative cases involving the poorly formatted information above and they failed as expected. HTTP error status codes are caught, as well as internal AppError exceptions. 
 
 Among these tests, all are unit tests and integration tests are not required because the functionality for access codes has not yet been implemented, so there is no integration to be tests.
 
