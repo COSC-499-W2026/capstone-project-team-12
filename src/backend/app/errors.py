@@ -55,6 +55,7 @@ class ErrorCode(StrEnum):
     # generic codes for the status table in api-conventions.md
     VALIDATION_ERROR = "VALIDATION_ERROR"
     NOT_AUTHENTICATED = "NOT_AUTHENTICATED"  # missing, invalid or expired access token
+    FORBIDDEN = "FORBIDDEN"  # e.g. a tampered or expired media link
     NOT_FOUND = "NOT_FOUND"
     METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
@@ -90,6 +91,7 @@ STATUS: dict[ErrorCode, HTTPStatus] = {code: HTTPStatus.CONFLICT for code in _CO
     ErrorCode.ACCOUNT_DISABLED: HTTPStatus.FORBIDDEN,
     ErrorCode.FORBIDDEN_ROLE: HTTPStatus.FORBIDDEN,
     ErrorCode.LEADERBOARD_DISABLED: HTTPStatus.FORBIDDEN,
+    ErrorCode.FORBIDDEN: HTTPStatus.FORBIDDEN,
     ErrorCode.USER_NOT_FOUND: HTTPStatus.NOT_FOUND,
     ErrorCode.NOT_FOUND: HTTPStatus.NOT_FOUND,
     ErrorCode.METHOD_NOT_ALLOWED: HTTPStatus.METHOD_NOT_ALLOWED,

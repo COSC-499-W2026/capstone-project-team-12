@@ -4,6 +4,7 @@ import random
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeVar
+from urllib.parse import parse_qs, unquote, urlsplit
 from uuid import uuid4
 
 import pytest
@@ -18,6 +19,7 @@ from app.models.accounts import ClassStaff, User
 from app.models.engagement import ACCESS_CODE_ALPHABET, AccessCode, Class, ClassEnrollment
 from app.models.enums import ClassStaffRole, Difficulty, Language, UserRole
 from app.models.game import GameSession, SessionLocation
+from app.services.storage import MEDIA_URL_PREFIX
 
 
 @pytest.fixture(scope="session")
@@ -42,6 +44,20 @@ def db(test_engine: Engine) -> Iterator[Session]:
         session.close()
         transaction.rollback()
         connection.close()
+
+
+@pytest.fixture
+def split_media_url() -> Callable[[str], tuple[str, int, str]]:
+    """Split a signed media URL into its (key, expires, signature) parts, decoding the key as the
+    router does."""
+
+    def split(url: str) -> tuple[str, int, str]:
+        parts = urlsplit(url)
+        query = parse_qs(parts.query)
+        key = unquote(parts.path.removeprefix(f"{MEDIA_URL_PREFIX}/"))
+        return key, int(query["expires"][0]), query["sig"][0]
+
+    return split
 
 
 @pytest.fixture

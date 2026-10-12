@@ -93,7 +93,7 @@ API error responses must not expose stack traces, database errors, internal host
 |---|---|---|
 |400|Bad Request|Verification or reset link is invalid or expired|
 |401|Missing authorization|Missing, invalid or expired access token; wrong email or password|
-|403|Forbidden|Authenticated but not permitted|
+|403|Forbidden|Authenticated but not permitted, or a tampered or expired signed media link (`FORBIDDEN`)|
 |404|Not found|Resource doesn't exist|
 |409|Conflict|Duplicate resource or state conflict|
 |413|Content Too Large|Request body exceeds server limit|
