@@ -2,7 +2,7 @@ import re
 
 from pydantic import BaseModel
 from sqlalchemy import func, insert, select
-from sqlalchemy.exc import IntegrityError, InternalError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.accounts.password import hash_password, validate_password_security
@@ -58,10 +58,9 @@ def register_account(request: RegisterRequest, db: Session) -> None:
 
         #  TODO: Validate access code here
 
-    except (IntegrityError, InternalError) as err:
-        db.rollback()
+    except IntegrityError as err:
         diag = getattr(err.orig, "diag", None)
-        constraint = getattr(diag, "contraint_name", None)
+        constraint = getattr(diag, "constraint_name", None)
         if constraint == "uq_users_email":
             raise AppError(
                 ErrorCode.EMAIL_TAKEN, "The email you have chosen is already in use."
@@ -101,6 +100,6 @@ def email_exists(email: str, db: Session) -> bool:
 
 def email_is_valid(email: str) -> bool:
     """Checks for properly formatted email. Returns True if email passes regex test."""
-    pattern = "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+    pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
     match = re.fullmatch(pattern, email)
     return bool(match)
