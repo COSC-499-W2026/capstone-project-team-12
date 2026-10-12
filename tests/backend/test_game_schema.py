@@ -1,4 +1,4 @@
-"""game_sessions rejects bad data at the database level."""
+"""game_sessions and session_locations reject bad data at the database level."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.models.accounts import User
 from app.models.engagement import Class
-from app.models.enums import Language, SessionEndReason, SessionState
-from app.models.game import GameSession
+from app.models.enums import Language, LocationStatus, SessionEndReason, SessionState, SkipReason
+from app.models.game import GameSession, SessionLocation
 
 
 def end(game: GameSession, reason: str = SessionEndReason.QUIT) -> None:
@@ -177,3 +177,180 @@ def test_game_counters_stay_in_range(
 ) -> None:
     with pytest.raises(IntegrityError, match=constraint):
         make_game_session(**{field: value})
+
+
+# session_locations
+
+
+def test_raw_sql_location_inserts_get_the_server_defaults(
+    db: Session, make_game_session: Callable[..., GameSession]
+) -> None:
+    location = db.execute(
+        text(
+            "INSERT INTO session_locations (session_id, location_id, position, clue_id,"
+            " audio_asset_id, accepted_answers_snapshot, gps_points_snapshot, radius_snapshot)"
+            " VALUES (:session_id, gen_random_uuid(), 1, gen_random_uuid(), gen_random_uuid(),"
+            ' \'["SCI333"]\', \'[{"lat": 49.9, "lng": -119.4}]\', 30)'
+            " RETURNING status, attempts_used, points_awarded, flags"
+        ),
+        {"session_id": make_game_session().id},
+    ).one()
+    assert location.status == LocationStatus.PENDING
+    assert (location.attempts_used, location.points_awarded) == (0, 0)
+    assert location.flags == []
+
+
+def test_a_position_is_used_once_per_game(
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    game = make_game_session()
+    make_session_location(game, 1)
+    with pytest.raises(IntegrityError, match="uq_session_locations_session_id_position"):
+        make_session_location(game, 1)
+
+
+def test_a_location_is_drawn_once_per_game(
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    game = make_game_session()
+    first = make_session_location(game, 1)
+    with pytest.raises(IntegrityError, match="uq_session_locations_session_id_location_id"):
+        make_session_location(game, 2, location_id=first.location_id)
+
+
+@pytest.mark.parametrize(
+    ("status", "skip_reason"),
+    [(LocationStatus.SKIPPED, None), (LocationStatus.PENDING, SkipReason.SESSION_ENDED)],
+)
+def test_only_a_skipped_location_has_a_skip_reason(
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    status: str,
+    skip_reason: str | None,
+) -> None:
+    with pytest.raises(IntegrityError, match="ck_session_locations_skip_reason_matches_status"):
+        make_session_location(make_game_session(), 1, status=status, skip_reason=skip_reason)
+
+
+def test_a_deactivated_location_is_skipped(
+    db: Session,
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    location = make_session_location(
+        make_game_session(), 1, status=LocationStatus.SKIPPED, skip_reason=SkipReason.DEACTIVATED
+    )
+    db.refresh(location)
+    assert (location.status, location.skip_reason) == ("skipped", "deactivated")
+    assert (location.points_awarded, location.completed_at) == (0, None)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "constraint"),
+    [
+        ("position", 0, "ck_session_locations_position"),
+        ("status", "lost", "ck_session_locations_status"),
+        ("attempts_used", -1, "ck_session_locations_attempts_used"),
+        ("points_awarded", 50, "ck_session_locations_points_awarded"),
+        ("radius_snapshot", 0, "ck_session_locations_radius_snapshot"),
+        ("last_lat", 91.0, "ck_session_locations_last_lat"),
+        ("last_lng", -181.0, "ck_session_locations_last_lng"),
+        ("last_accuracy_m", -1.0, "ck_session_locations_last_accuracy_m"),
+        ("arrival_override", "manual", "ck_session_locations_arrival_override"),
+    ],
+)
+def test_location_values_stay_in_range(
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    field: str,
+    value: object,
+    constraint: str,
+) -> None:
+    fields = {"position": 1, field: value}
+    # the quotes stop "status" from also matching other constraint names
+    with pytest.raises(IntegrityError, match=f'"{constraint}"'):
+        make_session_location(make_game_session(), **fields)
+
+
+def test_unknown_skip_reason_is_rejected(
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    with pytest.raises(IntegrityError, match='"ck_session_locations_skip_reason"'):
+        make_session_location(
+            make_game_session(), 1, status=LocationStatus.SKIPPED, skip_reason="bored"
+        )
+
+
+def test_a_completed_location_has_its_points_and_time(
+    db: Session,
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    location = make_session_location(
+        make_game_session(),
+        1,
+        status=LocationStatus.COMPLETED,
+        points_awarded=100,
+        completed_at=datetime.now(UTC),
+        attempts_used=6,
+    )
+    db.refresh(location)
+    assert (location.status, location.points_awarded, location.attempts_used) == (
+        "completed",
+        100,
+        6,
+    )
+    assert location.completed_at is not None
+
+
+NOW = datetime.now(UTC)
+POINTS, TIME = "points_match_status", "completed_at_matches_status"
+SKIPPED = {"status": LocationStatus.SKIPPED, "skip_reason": SkipReason.SESSION_ENDED}
+
+
+@pytest.mark.parametrize(
+    ("fields", "constraint"),
+    [
+        ({"status": LocationStatus.COMPLETED, "completed_at": NOW}, POINTS),  # no points
+        ({"status": LocationStatus.FAILED, "points_awarded": 100}, POINTS),
+        (SKIPPED | {"points_awarded": 100}, POINTS),
+        ({"status": LocationStatus.COMPLETED, "points_awarded": 100}, TIME),  # no completed_at
+        ({"status": LocationStatus.FAILED, "completed_at": NOW}, TIME),
+    ],
+)
+def test_points_and_completed_at_match_the_status(
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    fields: dict[str, object],
+    constraint: str,
+) -> None:
+    with pytest.raises(IntegrityError, match=f"ck_session_locations_{constraint}"):
+        make_session_location(make_game_session(), 1, **fields)
+
+
+@pytest.mark.parametrize("field", ["accepted_answers_snapshot", "gps_points_snapshot"])
+@pytest.mark.parametrize("value", [[], None, {"lat": 49.9, "lng": -119.4}])
+def test_a_snapshot_needs_at_least_one_answer_and_entrance(
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    field: str,
+    value: object,
+) -> None:
+    """[] or JSON null would give a location that can never be completed."""
+    with pytest.raises(IntegrityError, match=f'"ck_session_locations_{field}"'):
+        make_session_location(make_game_session(), 1, **{field: value})
+
+
+def test_appending_a_flag_is_saved(
+    db: Session,
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    location = make_session_location(make_game_session(), 1)
+    location.flags.append("speed_anomaly")
+    db.flush()
+    db.expire(location)
+    assert location.flags == ["speed_anomaly"]

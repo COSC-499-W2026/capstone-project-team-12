@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     # the database only checks the lower bounds, so changing a setting needs no migration.
     locations_per_game: PositiveInt = 5
     max_shuffles_per_session: NonNegativeInt = 2
+    max_photo_attempts: PositiveInt = 6
 
 
 @lru_cache
