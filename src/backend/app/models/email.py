@@ -36,6 +36,12 @@ PENDING_DUE_INDEX = "ix_email_outbox_pending_priority_created"
 RECENT_INDEX = "ix_email_outbox_to_email_template_created"
 # a second reset request while one is still pending adds no message (spec, Email delivery)
 ONE_PENDING_RESET_INDEX = "uq_email_outbox_one_pending_reset"
+# EmailService.queue_email uses the same condition for ON CONFLICT. It is written as
+# literals: with bound parameters Postgres can't match ON CONFLICT to this partial index
+# once a prepared statement switches to a generic plan.
+ONE_PENDING_RESET_WHERE = (
+    f"template = '{EmailKind.RESET_PASSWORD}' AND status = '{EmailStatus.PENDING}'"
+)
 
 
 def _values(kinds: tuple[EmailKind, ...]) -> str:
@@ -120,9 +126,7 @@ class EmailOutbox(Base):
             ONE_PENDING_RESET_INDEX,
             "user_id",
             unique=True,
-            postgresql_where=text(
-                f"template = '{EmailKind.RESET_PASSWORD}' AND status = '{EmailStatus.PENDING}'"
-            ),
+            postgresql_where=text(ONE_PENDING_RESET_WHERE),
         ),
     )
 
