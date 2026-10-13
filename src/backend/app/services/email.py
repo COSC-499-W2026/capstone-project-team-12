@@ -85,7 +85,7 @@ class EmailService:
             select(func.count())
             .select_from(EmailOutbox)
             .where(
-                EmailOutbox.to_email == email.lower(),
+                EmailOutbox.to_email == email.strip().lower(),
                 EmailOutbox.template == EmailKind(kind),
                 EmailOutbox.created_at >= since,
             )
@@ -109,12 +109,14 @@ class EmailService:
         """Store a hashed token and return the raw token once.
 
         Reset lasts 60 minutes. Verify, set-password and change-email last 7 days.
-        change_email needs new_email; the other kinds must not pass one.
+        change_email needs new_email; the other kinds must not pass one. The user's
+        older unused links of the same kind stop working, so only the newest one does.
         """
         kind = EmailKind(kind)
         if kind not in TOKEN_TTL:
             raise ValueError(f"{kind} is not a link token")
         stored_email = _new_email_for(kind, new_email)
+        EmailService.invalidate_user_tokens(db, user.id, kind)
         raw = EmailService.generate_token()
         db.add(
             EmailToken(

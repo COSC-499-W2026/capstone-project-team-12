@@ -110,6 +110,26 @@ def test_addresses_are_trimmed_and_lowercased(db: Session, make_user: Callable[.
     user = make_user()
     raw = EmailService.create_token(db, user, EmailKind.CHANGE_EMAIL, new_email=" A@b.com ")
     assert EmailService.consume_token(db, raw, EmailKind.CHANGE_EMAIL).new_email == "a@b.com"
+    # an address typed with spaces and capitals is stored and counted as the same address
+    padded = f"  {user.email.upper()} "
+    unsaved = User(id=user.id, email=padded)  # not added to the session, only read
+    row = EmailService.queue_email(db, unsaved, EmailKind.VERIFY_EMAIL)
+    assert row.to_email == user.email
+    window = timedelta(hours=1)
+    assert EmailService.count_recent(db, padded, EmailKind.VERIFY_EMAIL, window) == 1
+
+
+def test_a_new_link_replaces_the_older_one_of_the_same_kind(
+    db: Session, make_user: Callable[..., User]
+) -> None:
+    user = make_user()
+    older = EmailService.create_token(db, user, EmailKind.RESET_PASSWORD)
+    verify = EmailService.create_token(db, user, EmailKind.VERIFY_EMAIL)
+    newer = EmailService.create_token(db, user, EmailKind.RESET_PASSWORD)
+    with pytest.raises(AppError):
+        EmailService.consume_token(db, older, EmailKind.RESET_PASSWORD)
+    assert EmailService.consume_token(db, newer, EmailKind.RESET_PASSWORD).user_id == user.id
+    assert EmailService.consume_token(db, verify, EmailKind.VERIFY_EMAIL).user_id == user.id
 
 
 def test_due_reset_mail_sorts_before_verification(
