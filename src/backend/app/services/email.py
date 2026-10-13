@@ -7,7 +7,8 @@ Nothing here commits: the caller owns the transaction.
 
 import hashlib
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select, text, update
@@ -17,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.email import ONE_PENDING_RESET_WHERE, EmailOutbox, EmailToken, priority_for
-from app.models.enums import EmailKind, EmailStatus
+from app.models.enums import EmailKind
 
 # counted from create_token, which the send job calls at send time (spec, email_tokens)
 TOKEN_TTL = {
@@ -34,27 +35,34 @@ _PENDING_RESET = text(ONE_PENDING_RESET_WHERE)  # see models/email.py
 
 class EmailService:
     @staticmethod
-    def queue_email(db: Session, user: User, kind: EmailKind) -> EmailOutbox:
-        """Add one pending row for the user's address, at the priority of `kind`.
+    def queue_email(
+        user: User,
+        kind: EmailKind,
+        db: Session,
+        *,
+        to_email: str | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> EmailOutbox:
+        """Add one pending row at the priority of `kind`, to `to_email` or the user's address.
 
-        A reset while one is already pending adds nothing and returns the pending
-        row (spec: a second reset request adds no message), so the route answers
-        the same way; its to_email is updated if the user's address has changed.
-        Does not create a token. Before committing, the caller can
-        point `to_email` at another address or set `params`; params must not hold
-        a token.
+        A reset while one is already pending adds nothing and returns the pending row
+        (spec: a second reset request adds no message), so the route answers the same
+        way. If the address has changed, that row is re-addressed and its backoff
+        reset; its params are kept. params must not hold a token. Does not create one.
         """
         kind = EmailKind(kind)
-        to_email = user.email.strip().lower()
+        to_email = (to_email or user.email).strip().lower()
+        if params and not params.keys().isdisjoint({"token", "token_hash"}):
+            raise ValueError("params must not hold a token")
         values = {
             "user_id": user.id,
             "to_email": to_email,
             "template": kind,
             "priority": priority_for(kind),
-            "status": EmailStatus.PENDING,
-            "attempts": 0,
-            "next_attempt_at": datetime.now(UTC),
+            "params": params or {},
         }
+        pending_reset = (EmailOutbox.user_id == user.id, _PENDING_RESET)
+        refresh = {"populate_existing": True}
         # two tries: the pending reset we collided with may be sent before we update it
         for _ in range(2):
             row = db.scalars(
@@ -64,41 +72,43 @@ class EmailService:
                     index_elements=[EmailOutbox.user_id], index_where=_PENDING_RESET
                 )
                 .returning(EmailOutbox),
-                execution_options={"populate_existing": True},
+                execution_options=refresh,
             ).one_or_none()
             if row is not None:
                 return row
-            # point the pending reset at the user's current address; the status check
-            # makes sure a row the send job has just sent is left alone
+            # a new address starts a fresh retry schedule; the status check leaves a row
+            # the send job has just sent alone
             row = db.scalars(
                 update(EmailOutbox)
-                .where(EmailOutbox.user_id == user.id, _PENDING_RESET)
-                .values(to_email=to_email)
+                .where(*pending_reset, EmailOutbox.to_email.is_distinct_from(to_email))
+                .values(to_email=to_email, attempts=0, next_attempt_at=func.now())
                 .returning(EmailOutbox),
-                execution_options={"populate_existing": True},
+                execution_options=refresh,
             ).one_or_none()
+            if row is None:  # same address, or already sent
+                row = db.scalars(
+                    select(EmailOutbox).where(*pending_reset), execution_options=refresh
+                ).one_or_none()
             if row is not None:
                 return row
         raise RuntimeError("could not queue the reset email")  # pragma: no cover (needs two races)
 
     @staticmethod
-    def count_recent(db: Session, email: str, kind: EmailKind, window: timedelta) -> int:
+    def count_recent(email: str, kind: EmailKind, window: timedelta, db: Session) -> int:
         """How many outbox rows of this kind were queued for the address inside `window`.
 
         Forgot-password and resend-verification will use this for the 3-per-hour
         limit. A mail that already went out still counts.
         """
-        since = datetime.now(UTC) - window
-        count = db.scalar(
+        return db.scalars(
             select(func.count())
             .select_from(EmailOutbox)
             .where(
                 EmailOutbox.to_email == email.strip().lower(),
                 EmailOutbox.template == EmailKind(kind),
-                EmailOutbox.created_at >= since,
+                EmailOutbox.created_at >= func.now() - window,
             )
-        )
-        return int(count or 0)
+        ).one()
 
     @staticmethod
     def generate_token() -> str:
@@ -112,7 +122,7 @@ class EmailService:
 
     @staticmethod
     def create_token(
-        db: Session, user: User, kind: EmailKind, *, new_email: str | None = None
+        user: User, kind: EmailKind, db: Session, *, new_email: str | None = None
     ) -> str:
         """Store a hashed token and return the raw token once.
 
@@ -121,12 +131,10 @@ class EmailService:
         older unused links of the same kind stop working, so only the newest one does.
         """
         kind = EmailKind(kind)
-        if kind not in TOKEN_TTL:
-            raise ValueError(f"{kind} is not a link token")
         stored_email = _new_email_for(kind, new_email)
         # two requests at once must not both keep a live link
-        _lock_user(db, user.id)
-        EmailService.invalidate_user_tokens(db, user.id, kind)
+        _lock_user(user.id, db)
+        EmailService.invalidate_user_tokens(user.id, kind, db)  # raises if not a link kind
         raw = EmailService.generate_token()
         db.add(
             EmailToken(
@@ -134,14 +142,14 @@ class EmailService:
                 purpose=kind,
                 new_email=stored_email,
                 token_hash=EmailService.hash_token(raw),
-                expires_at=datetime.now(UTC) + TOKEN_TTL[kind],
+                expires_at=func.now() + TOKEN_TTL[kind],
             )
         )
         db.flush()
         return raw
 
     @staticmethod
-    def consume_token(db: Session, raw: str, kind: EmailKind) -> EmailToken:
+    def consume_token(raw: str, kind: EmailKind, db: Session) -> EmailToken:
         """Mark the token used and return its row.
 
         Unknown, expired, already used, or a different kind raises AppError
@@ -150,7 +158,7 @@ class EmailService:
         token_hash = EmailService.hash_token(raw)
         owner = db.scalar(select(EmailToken.user_id).where(EmailToken.token_hash == token_hash))
         if owner is not None:
-            _lock_user(db, owner)  # same order as create_token: user first, then the token
+            _lock_user(owner, db)  # same order as create_token: user first, then the token
         token = db.scalars(
             update(EmailToken)
             .where(
@@ -167,7 +175,7 @@ class EmailService:
         return token
 
     @staticmethod
-    def invalidate_user_tokens(db: Session, user_id: UUID, kind: EmailKind) -> None:
+    def invalidate_user_tokens(user_id: UUID, kind: EmailKind, db: Session) -> None:
         """Mark this user's unused tokens of `kind` as used, so older links stop working."""
         kind = EmailKind(kind)
         if kind not in TOKEN_TTL:
@@ -176,19 +184,11 @@ class EmailService:
             update(EmailToken)
             .where(
                 EmailToken.user_id == user_id,
-                EmailToken.purpose == EmailKind(kind),
+                EmailToken.purpose == kind,
                 EmailToken.used_at.is_(None),
             )
             .values(used_at=func.now())
         )
-
-    @staticmethod
-    def revoke_all_sessions(user_id: UUID) -> None:
-        """No-op until refresh tokens exist.
-
-        TODO: A2 (#69) — password reset should revoke every refresh token for this user.
-        refresh_tokens is not in the schema yet, so this does nothing.
-        """
 
 
 def _new_email_for(kind: EmailKind, new_email: str | None) -> str | None:
@@ -202,7 +202,7 @@ def _new_email_for(kind: EmailKind, new_email: str | None) -> str | None:
     return None
 
 
-def _lock_user(db: Session, user_id: UUID) -> None:
+def _lock_user(user_id: UUID, db: Session) -> None:
     """Lock the user row until the transaction ends.
 
     FOR NO KEY UPDATE, so inserts that only reference the user (the foreign key check
