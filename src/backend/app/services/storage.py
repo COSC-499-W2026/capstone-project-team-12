@@ -38,10 +38,7 @@ class MediaUrlError(AppError):
 
 
 class MediaNotFoundError(AppError):
-    """The media does not exist (the client gets 404 NOT_FOUND).
-
-    For example a purged photo, or a clue or feedback phrase with no recording (AudioService).
-    """
+    """No file is stored under the key, e.g. a purged photo (the client gets 404 NOT_FOUND)."""
 
     def __init__(self) -> None:
         super().__init__(ErrorCode.NOT_FOUND, "Media not found")

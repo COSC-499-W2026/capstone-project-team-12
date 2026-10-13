@@ -27,10 +27,9 @@ def verified_key(url: str, split_media_url: SplitUrl) -> str:
 
 
 def is_random_uuid(key: str) -> bool:
-    """A version 4 UUID plus ".mp3", so the key cannot be worked out from the clue or phrase."""
-    stem = key.removesuffix(".mp3")
-    parsed = UUID(stem)
-    return key.endswith(".mp3") and str(parsed) == stem and parsed.version == 4
+    """A version 4 UUID, so the key cannot be worked out from the clue or phrase."""
+    parsed = UUID(key)
+    return str(parsed) == key and parsed.version == 4
 
 
 def test_every_feedback_phrase_has_its_own_signed_url_that_reveals_nothing(
