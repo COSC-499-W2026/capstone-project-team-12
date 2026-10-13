@@ -87,7 +87,7 @@ class ArrivalOverride(StrEnum):
 
 
 class EmailKind(StrEnum):
-    """Mail the outbox can send. Link tokens use the same names, except the two that are notices."""
+    """Mail the outbox can send. Link tokens use the same names, except notice and invitation."""
 
     VERIFY_EMAIL = "verify_email"
     RESET_PASSWORD = "reset_password"

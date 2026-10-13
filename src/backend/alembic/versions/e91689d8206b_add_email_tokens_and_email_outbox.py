@@ -95,6 +95,7 @@ def upgrade() -> None:
         ["to_email", "template", "created_at"],
         unique=False,
     )
+    op.create_index(op.f("ix_email_outbox_user_id"), "email_outbox", ["user_id"], unique=False)
     op.create_index(
         "uq_email_outbox_one_pending_reset",
         "email_outbox",
@@ -145,6 +146,7 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_email_tokens_user_id"), table_name="email_tokens")
     op.drop_table("email_tokens")
     op.drop_index("uq_email_outbox_one_pending_reset", table_name="email_outbox")
+    op.drop_index(op.f("ix_email_outbox_user_id"), table_name="email_outbox")
     op.drop_index("ix_email_outbox_to_email_template_created", table_name="email_outbox")
     op.drop_index(
         "ix_email_outbox_pending_priority_created",
