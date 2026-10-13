@@ -1,8 +1,18 @@
 import json
+import re
 from pathlib import Path
+from typing import Any
 
 import export_openapi
 import pytest
+
+from app.errors import AppError, ErrorCode, ErrorResponse
+
+CAMEL_CASE = re.compile(r"[a-z]+(?:[A-Z][a-z0-9]*)+")
+
+
+def operations(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    return [op for path in spec["paths"].values() for op in path.values()]
 
 
 def test_committed_spec_is_up_to_date() -> None:
@@ -40,3 +50,32 @@ def test_check_fails_when_the_file_is_missing_or_stale(
         spec_file.write_text(content)
     assert export_openapi.main(["--check"], spec_file=spec_file) == 1
     assert "out of date" in capsys.readouterr().out
+
+
+def test_operation_ids_are_explicit_camel_case_and_unique() -> None:
+    ids = [op["operationId"] for op in operations(export_openapi.build_spec())]
+    assert all(CAMEL_CASE.fullmatch(op_id) for op_id in ids), ids  # api-conventions.md
+    assert len(ids) == len(set(ids))
+
+
+def test_errors_use_our_format_not_fastapis_default() -> None:
+    spec = export_openapi.build_spec()
+    schemas = spec["components"]["schemas"]
+    assert "HTTPValidationError" not in schemas
+    for op in operations(spec):
+        for status, response in op["responses"].items():
+            if not status.startswith("2"):
+                schema = response["content"]["application/json"]["schema"]
+                assert schema == {"$ref": "#/components/schemas/ErrorResponse"}
+
+
+def test_register_lists_its_error_statuses() -> None:
+    register = export_openapi.build_spec()["paths"]["/api/v1/auth/register"]["post"]
+    assert {"201", "409", "422"} <= set(register["responses"])
+
+
+def test_error_response_model_matches_app_error_body() -> None:
+    body = AppError(ErrorCode.EMAIL_TAKEN, "Email in use", [{"field": "email"}]).body()
+    assert ErrorResponse.model_validate(body).model_dump(mode="json") == json.loads(
+        json.dumps(body)
+    )

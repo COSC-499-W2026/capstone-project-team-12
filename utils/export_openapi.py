@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None, spec_file: Path = SPEC_FILE) -> int:
         )
         return 1
     spec_file.parent.mkdir(parents=True, exist_ok=True)
-    spec_file.write_text(text, encoding="utf-8")
+    spec_file.write_text(text, encoding="utf-8", newline="\n")  # LF on Windows too
     print(f"Wrote {relative}.")
     return 0
 

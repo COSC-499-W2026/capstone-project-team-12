@@ -63,9 +63,13 @@ CI automatically checks:
 `docs/api/openapi.json` is generated from the FastAPI routes, so reviewers can see every API change in the PR diff. If your PR adds or changes a route, a request or response model, or an error response, run this from `src/backend` and commit the updated file with your change:
 
 ```
+pip install -r requirements-dev.txt   # the pinned versions, so everyone exports the same file
 python ../../utils/export_openapi.py
 ```
 
-CI fails with "out of date" if you forget.
+CI fails with "out of date" if you forget. For every new route:
+
+- Set `operation_id` in camelCase, following the Operation IDs table in `docs/api-conventions.md` (for example `operation_id="pauseGame"`). FastAPI's default names don't follow it.
+- List the error statuses the route can return with `responses=error_responses(...)` from `app.errors`, for example `error_responses(HTTPStatus.CONFLICT)`. Errors raised as `AppError` in a service are invisible to FastAPI, so they only appear in the document if the route lists them. 422 is already added for every route under `/api/v1`.
 
 A failing CI check must be fixed before the PR can be merged.
