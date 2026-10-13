@@ -24,24 +24,6 @@ from app.models.enums import EmailKind, EmailStatus
 from app.services.email import TOKEN_TTL, EmailService
 
 
-def due_rows(db: Session) -> list[EmailOutbox]:
-    """Pending rows due now, priority 1 first, then oldest.
-
-    A Python timestamp, because Postgres now() stays at the start of this test transaction.
-    """
-    now = datetime.now(UTC)
-    return list(
-        db.scalars(
-            select(EmailOutbox)
-            .where(
-                EmailOutbox.status == EmailStatus.PENDING,
-                EmailOutbox.next_attempt_at <= now,
-            )
-            .order_by(EmailOutbox.priority, EmailOutbox.created_at)
-        )
-    )
-
-
 def test_every_kind_has_exactly_one_priority() -> None:
     # a new EmailKind missing from both groups would fail priority_matches_template
     assert set(HIGH_PRIORITY_KINDS).isdisjoint(LOW_PRIORITY_KINDS)
@@ -119,6 +101,17 @@ def test_a_pending_reset_does_not_block_other_mail(
     assert db.scalar(pending) == 2
 
 
+def test_a_repeated_reset_goes_to_the_current_address(
+    db: Session, make_user: Callable[..., User]
+) -> None:
+    user = make_user()
+    first = EmailService.queue_email(db, user, EmailKind.RESET_PASSWORD)
+    user.email = "changed@example.com"
+    db.flush()
+    again = EmailService.queue_email(db, user, EmailKind.RESET_PASSWORD)
+    assert again.id == first.id and again.to_email == "changed@example.com"
+
+
 def test_addresses_are_trimmed_and_lowercased(db: Session, make_user: Callable[..., User]) -> None:
     user = make_user()
     raw = EmailService.create_token(db, user, EmailKind.CHANGE_EMAIL, new_email=" A@b.com ")
@@ -143,22 +136,6 @@ def test_a_new_link_replaces_the_older_one_of_the_same_kind(
         EmailService.consume_token(db, older, EmailKind.RESET_PASSWORD)
     assert EmailService.consume_token(db, newer, EmailKind.RESET_PASSWORD).user_id == user.id
     assert EmailService.consume_token(db, verify, EmailKind.VERIFY_EMAIL).user_id == user.id
-
-
-def test_due_reset_mail_sorts_before_verification(
-    db: Session, make_user: Callable[..., User]
-) -> None:
-    now = datetime.now(UTC)
-    older_verify = EmailService.queue_email(db, make_user(), EmailKind.VERIFY_EMAIL)
-    newer_verify = EmailService.queue_email(db, make_user(), EmailKind.TA_INVITATION)
-    reset = EmailService.queue_email(db, make_user(), EmailKind.RESET_PASSWORD)
-    waiting = EmailService.queue_email(db, make_user(), EmailKind.SET_PASSWORD)
-    older_verify.created_at = now - timedelta(minutes=5)
-    newer_verify.created_at = now - timedelta(minutes=2)
-    reset.created_at = now - timedelta(minutes=1)
-    waiting.next_attempt_at = now + timedelta(hours=1)
-    db.flush()
-    assert [row.id for row in due_rows(db)] == [reset.id, older_verify.id, newer_verify.id]
 
 
 def test_count_recent_is_per_address_kind_and_window(

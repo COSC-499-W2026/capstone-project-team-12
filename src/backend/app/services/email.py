@@ -37,14 +37,16 @@ class EmailService:
 
         A reset while one is already pending adds nothing and returns the pending
         row (spec: a second reset request adds no message), so the route answers
-        the same way. Does not create a token. Before committing, the caller can
+        the same way; its to_email is updated if the user's address has changed.
+        Does not create a token. Before committing, the caller can
         point `to_email` at another address or set `params`; params must not hold
         a token.
         """
         kind = EmailKind(kind)
+        to_email = user.email.strip().lower()
         values = {
             "user_id": user.id,
-            "to_email": user.email.strip().lower(),
+            "to_email": to_email,
             "template": kind,
             "priority": priority_for(kind),
             "status": EmailStatus.PENDING,
@@ -70,6 +72,9 @@ class EmailService:
                     select(EmailOutbox).where(EmailOutbox.user_id == user.id, pending_reset),
                     execution_options={"populate_existing": True},
                 ).one_or_none()
+                if row is not None and row.to_email != to_email:
+                    row.to_email = to_email  # the user changed address meanwhile
+                    db.flush()
             if row is not None:
                 return row
         raise RuntimeError("could not queue the reset email")  # pragma: no cover (needs two races)
@@ -117,8 +122,8 @@ class EmailService:
         if kind not in TOKEN_TTL:
             raise ValueError(f"{kind} is not a link token")
         stored_email = _new_email_for(kind, new_email)
-        # lock the user row, so two requests at once can't both keep a live link
-        db.execute(select(User.id).where(User.id == user.id).with_for_update())
+        # two requests at once must not both keep a live link
+        _lock_user(db, user.id)
         EmailService.invalidate_user_tokens(db, user.id, kind)
         raw = EmailService.generate_token()
         db.add(
@@ -140,10 +145,14 @@ class EmailService:
         Unknown, expired, already used, or a different kind raises AppError
         INVALID_TOKEN (400). A failed check does not mark the row used.
         """
+        token_hash = EmailService.hash_token(raw)
+        owner = db.scalar(select(EmailToken.user_id).where(EmailToken.token_hash == token_hash))
+        if owner is not None:
+            _lock_user(db, owner)  # same order as create_token: user first, then the token
         token = db.scalars(
             update(EmailToken)
             .where(
-                EmailToken.token_hash == EmailService.hash_token(raw),
+                EmailToken.token_hash == token_hash,
                 EmailToken.purpose == EmailKind(kind),
                 EmailToken.used_at.is_(None),
                 EmailToken.expires_at > func.now(),
@@ -189,3 +198,13 @@ def _new_email_for(kind: EmailKind, new_email: str | None) -> str | None:
     if new_email is not None:
         raise ValueError("new_email is only for change_email")
     return None
+
+
+def _lock_user(db: Session, user_id: UUID) -> None:
+    """Lock the user row until the transaction ends.
+
+    FOR NO KEY UPDATE, so inserts that only reference the user (the foreign key check
+    takes FOR KEY SHARE) are not blocked. create_token and consume_token both take this
+    lock before touching email_tokens, so they always lock in the same order.
+    """
+    db.execute(select(User.id).where(User.id == user_id).with_for_update(key_share=True))
