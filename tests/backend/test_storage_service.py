@@ -4,12 +4,18 @@ import time
 from collections.abc import Callable
 from http import HTTPStatus
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
 
 from app.config import Settings, get_settings
-from app.services.storage import MediaUrlError, StorageService, get_storage_service
+from app.services.storage import (
+    MediaFileNotFoundError,
+    MediaUrlError,
+    StorageService,
+    get_storage_service,
+)
 
 NOW = 1_000_000.0
 TTL = 900
@@ -82,6 +88,43 @@ def test_delete_removes_the_file(tmp_path: Path) -> None:
 
 def test_delete_of_a_missing_file_is_not_an_error(tmp_path: Path) -> None:
     make_service(tmp_path).delete("missing.jpg")
+
+
+def test_save_writes_the_file_under_a_random_uuid_key(tmp_path: Path) -> None:
+    service = make_service(tmp_path / "media")
+    key = service.save(b"clip", ".mp3")
+    assert key.endswith(".mp3")
+    stem = key.removesuffix(".mp3")
+    assert str(UUID(stem)) == stem and UUID(stem).version == 4
+    assert (tmp_path / "media" / key).read_bytes() == b"clip"
+
+
+def test_save_never_reuses_a_key(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    assert service.save(b"a", ".jpg") != service.save(b"a", ".jpg")
+
+
+@pytest.mark.parametrize("suffix", ["", "mp3", ".MP3", ".html", "/../x.mp3"])
+def test_save_rejects_an_unsupported_suffix(tmp_path: Path, suffix: str) -> None:
+    with pytest.raises(ValueError, match="Unsupported media file extension"):
+        make_service(tmp_path).save(b"x", suffix)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_existing_path_is_the_saved_file(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    key = service.save(b"x", ".png")
+    assert service.existing_path(key) == tmp_path.resolve() / key
+
+
+@pytest.mark.parametrize("key", ["missing.jpg", "photos", "../outside.jpg", ""])
+def test_existing_path_is_not_found_without_a_file(tmp_path: Path, key: str) -> None:
+    media_dir = tmp_path / "media"
+    (media_dir / "photos").mkdir(parents=True)
+    (tmp_path / "outside.jpg").write_bytes(b"x")
+    with pytest.raises(MediaFileNotFoundError) as missing:
+        make_service(media_dir).existing_path(key)
+    assert missing.value.status == HTTPStatus.NOT_FOUND
 
 
 def test_path_is_the_file_in_the_media_directory(tmp_path: Path) -> None:
