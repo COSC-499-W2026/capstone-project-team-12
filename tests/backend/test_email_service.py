@@ -106,6 +106,19 @@ def test_reset_sent_between_conflict_and_read_is_queued_again(
     assert again.id != first.id and again.status == EmailStatus.PENDING
 
 
+def test_a_pending_reset_does_not_block_other_mail(
+    db: Session, make_user: Callable[..., User]
+) -> None:
+    user = make_user()
+    reset = EmailService.queue_email(db, user, EmailKind.RESET_PASSWORD)
+    verify = EmailService.queue_email(db, user, EmailKind.VERIFY_EMAIL)
+    assert verify.id != reset.id
+    pending = select(func.count()).where(
+        EmailOutbox.user_id == user.id, EmailOutbox.status == EmailStatus.PENDING
+    )
+    assert db.scalar(pending) == 2
+
+
 def test_addresses_are_trimmed_and_lowercased(db: Session, make_user: Callable[..., User]) -> None:
     user = make_user()
     raw = EmailService.create_token(db, user, EmailKind.CHANGE_EMAIL, new_email=" A@b.com ")

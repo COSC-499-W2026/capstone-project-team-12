@@ -67,7 +67,8 @@ class EmailService:
             ).one_or_none()
             if row is None:
                 row = db.scalars(
-                    select(EmailOutbox).where(EmailOutbox.user_id == user.id, pending_reset)
+                    select(EmailOutbox).where(EmailOutbox.user_id == user.id, pending_reset),
+                    execution_options={"populate_existing": True},
                 ).one_or_none()
             if row is not None:
                 return row
@@ -116,6 +117,8 @@ class EmailService:
         if kind not in TOKEN_TTL:
             raise ValueError(f"{kind} is not a link token")
         stored_email = _new_email_for(kind, new_email)
+        # lock the user row, so two requests at once can't both keep a live link
+        db.execute(select(User.id).where(User.id == user.id).with_for_update())
         EmailService.invalidate_user_tokens(db, user.id, kind)
         raw = EmailService.generate_token()
         db.add(
