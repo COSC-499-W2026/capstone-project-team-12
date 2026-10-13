@@ -84,3 +84,20 @@ class SkipReason(StrEnum):
 
 class ArrivalOverride(StrEnum):
     GPS_UNAVAILABLE = "gps_unavailable"
+
+
+class EmailKind(StrEnum):
+    """Mail the outbox can send. Link tokens use the same names, except the two that are notices."""
+
+    VERIFY_EMAIL = "verify_email"
+    RESET_PASSWORD = "reset_password"
+    SET_PASSWORD = "set_password"
+    CHANGE_EMAIL = "change_email"
+    EMAIL_CHANGED_NOTICE = "email_changed_notice"
+    TA_INVITATION = "ta_invitation"
+
+
+class EmailStatus(StrEnum):
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
