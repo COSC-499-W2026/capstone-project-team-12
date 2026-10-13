@@ -3,9 +3,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse
 
-from app.services.storage import MEDIA_TYPES, StorageService, get_storage_service
+from app.services.storage import StorageService, get_storage_service
 
 media_router = APIRouter(prefix="/media", tags=["media"])
+
+# Links expire and photos are purged, so no browser or proxy may keep a copy past either.
+_NO_CACHE = {"Cache-Control": "private, no-store"}
 
 
 @media_router.get("/{key:path}", operation_id="getMediaFile", response_class=FileResponse)
@@ -21,5 +24,7 @@ def get_media_file(
     permission. 403 FORBIDDEN for a tampered or expired link, 404 NOT_FOUND once the file is gone.
     """
     storage.verify(key, expires, sig)
-    path = storage.existing_path(key)
-    return FileResponse(path, media_type=MEDIA_TYPES.get(path.suffix, "application/octet-stream"))
+    file = storage.stored_file(key)
+    return FileResponse(
+        file.path, media_type=file.media_type, stat_result=file.stat, headers=_NO_CACHE
+    )

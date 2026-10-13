@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from app.config import Settings, get_settings
 from app.services.storage import (
-    MediaFileNotFoundError,
+    MediaNotFoundError,
     MediaUrlError,
     StorageService,
     get_storage_service,
@@ -111,19 +111,39 @@ def test_save_rejects_an_unsupported_suffix(tmp_path: Path, suffix: str) -> None
     assert list(tmp_path.iterdir()) == []
 
 
-def test_existing_path_is_the_saved_file(tmp_path: Path) -> None:
+def test_a_failed_save_leaves_no_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def write_half_then_fail(path: Path, data: bytes) -> int:
+        path.write_text("half")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_bytes", write_half_then_fail)
+    with pytest.raises(OSError, match="disk full"):
+        make_service(tmp_path).save(b"clip", ".mp3")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_stored_file_is_the_saved_file_with_its_media_type(tmp_path: Path) -> None:
     service = make_service(tmp_path)
-    key = service.save(b"x", ".png")
-    assert service.existing_path(key) == tmp_path.resolve() / key
+    key = service.save(b"png bytes", ".png")
+    stored = service.stored_file(key)
+    assert stored.path == tmp_path.resolve() / key
+    assert stored.media_type == "image/png"
+    assert stored.stat.st_size == len(b"png bytes")
 
 
-@pytest.mark.parametrize("key", ["missing.jpg", "photos", "../outside.jpg", ""])
-def test_existing_path_is_not_found_without_a_file(tmp_path: Path, key: str) -> None:
+def test_stored_file_without_a_known_extension_is_binary(tmp_path: Path) -> None:
+    (tmp_path / "clip").write_bytes(b"x")
+    assert make_service(tmp_path).stored_file("clip").media_type == "application/octet-stream"
+
+
+@pytest.mark.parametrize("key", ["missing.jpg", "photos", "../outside.jpg", "", "a.jpg/b"])
+def test_stored_file_is_not_found_without_a_file(tmp_path: Path, key: str) -> None:
     media_dir = tmp_path / "media"
     (media_dir / "photos").mkdir(parents=True)
+    (media_dir / "a.jpg").write_bytes(b"x")
     (tmp_path / "outside.jpg").write_bytes(b"x")
-    with pytest.raises(MediaFileNotFoundError) as missing:
-        make_service(media_dir).existing_path(key)
+    with pytest.raises(MediaNotFoundError) as missing:
+        make_service(media_dir).stored_file(key)
     assert missing.value.status == HTTPStatus.NOT_FOUND
 
 

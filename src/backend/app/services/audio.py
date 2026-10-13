@@ -22,19 +22,11 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.errors import AppError, ErrorCode
 from app.models.enums import FeedbackCode, Language
+
+# Raised when no recording exists; re-exported because callers of AudioService catch it here.
+from app.services.storage import MediaNotFoundError as MediaNotFoundError
 from app.services.storage import get_storage_service
-
-
-class MediaNotFoundError(AppError):
-    """No recording exists for the clue, the audio asset, or the feedback code and language.
-
-    The client gets 404 NOT_FOUND.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(ErrorCode.NOT_FOUND, "Recording not found")
 
 
 def _stub_digest(*parts: object) -> bytes:
@@ -49,8 +41,8 @@ def _stub_tag(body: bytes) -> bytes:
 
 
 def _stub_key(*parts: object) -> str:
-    # Shaped like the real keys, which are random version 4 UUIDs.
-    return str(UUID(bytes=_stub_digest("key", *parts)[:16], version=4))
+    # Shaped like the keys StorageService.save makes: a random version 4 UUID plus ".mp3".
+    return f"{UUID(bytes=_stub_digest('key', *parts)[:16], version=4)}.mp3"
 
 
 def clue_audio_asset_id(clue_id: UUID, db: Session) -> UUID:

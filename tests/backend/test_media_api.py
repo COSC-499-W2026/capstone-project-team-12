@@ -1,18 +1,27 @@
+from collections.abc import Callable
 from http import HTTPStatus
 from pathlib import Path
+from urllib.parse import quote, urlencode
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.services.storage import StorageService, get_storage_service
+from app.services.storage import MEDIA_URL_PREFIX, StorageService, get_storage_service
 
 NOW = 1_000_000.0
 TTL = 900
 SECRET = "test-secret"
 
+SplitUrl = Callable[[str], tuple[str, int, str]]
+
 
 def make_service(media_dir: Path, now: float = NOW) -> StorageService:
     return StorageService(str(media_dir), SECRET, TTL, clock=lambda: now)
+
+
+def media_url(key: str, **query: object) -> str:
+    """A media link with the given query parameters, built the way `signed_url` builds one."""
+    return f"{MEDIA_URL_PREFIX}/{quote(key)}?{urlencode(query)}"
 
 
 @pytest.fixture
@@ -41,18 +50,22 @@ def test_valid_link_sends_the_file(
     assert response.status_code == HTTPStatus.OK
     assert response.content == b"media bytes"
     assert response.headers["content-type"] == content_type
+    assert response.headers["cache-control"] == "private, no-store"
 
 
-def test_tampered_signature_is_forbidden(client: TestClient, storage: StorageService) -> None:
-    url = storage.signed_url(storage.save(b"x", ".mp3"))
-    signature = url.rsplit("sig=", 1)[1]
-    tampered = url.replace(signature, "0" * len(signature))
+def test_tampered_signature_is_forbidden(
+    client: TestClient, storage: StorageService, split_media_url: SplitUrl
+) -> None:
+    key, expires, _ = split_media_url(storage.signed_url(storage.save(b"x", ".mp3")))
+    tampered = media_url(key, expires=expires, sig="0" * 64)
     assert error_of(client, tampered) == (HTTPStatus.FORBIDDEN, "FORBIDDEN")
 
 
-def test_link_for_another_file_is_forbidden(client: TestClient, storage: StorageService) -> None:
-    signed_key, other_key = storage.save(b"a", ".mp3"), storage.save(b"b", ".mp3")
-    tampered = storage.signed_url(signed_key).replace(signed_key, other_key)
+def test_link_for_another_file_is_forbidden(
+    client: TestClient, storage: StorageService, split_media_url: SplitUrl
+) -> None:
+    _, expires, signature = split_media_url(storage.signed_url(storage.save(b"a", ".mp3")))
+    tampered = media_url(storage.save(b"b", ".mp3"), expires=expires, sig=signature)
     assert error_of(client, tampered) == (HTTPStatus.FORBIDDEN, "FORBIDDEN")
 
 
@@ -73,7 +86,8 @@ def test_valid_link_to_a_missing_file_is_not_found(
 
 
 def test_link_without_a_signature_is_a_validation_error(
-    client: TestClient, storage: StorageService
+    client: TestClient, storage: StorageService, split_media_url: SplitUrl
 ) -> None:
-    unsigned = storage.signed_url(storage.save(b"x", ".mp3")).split("&sig=")[0]
+    key, expires, _ = split_media_url(storage.signed_url(storage.save(b"x", ".mp3")))
+    unsigned = media_url(key, expires=expires)
     assert error_of(client, unsigned) == (HTTPStatus.UNPROCESSABLE_ENTITY, "VALIDATION_ERROR")
