@@ -9,10 +9,17 @@ import pytest
 from app.errors import AppError, ErrorCode, ErrorResponse
 
 CAMEL_CASE = re.compile(r"[a-z]+(?:[A-Z][a-z0-9]*)+")
+# a path item can also hold "parameters", "summary" and so on, which are not operations
+METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 
 
 def operations(spec: dict[str, Any]) -> list[dict[str, Any]]:
-    return [op for path in spec["paths"].values() for op in path.values()]
+    return [op for path in spec["paths"].values() for m, op in path.items() if m in METHODS]
+
+
+def test_operations_skip_path_level_fields() -> None:
+    path = {"parameters": [{"name": "id", "in": "path"}], "get": {"operationId": "getGame"}}
+    assert operations({"paths": {"/games/{id}": path}}) == [{"operationId": "getGame"}]
 
 
 def test_committed_spec_is_up_to_date() -> None:
