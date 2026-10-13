@@ -36,9 +36,7 @@ PENDING_DUE_INDEX = "ix_email_outbox_pending_priority_created"
 RECENT_INDEX = "ix_email_outbox_to_email_template_created"
 # a second reset request while one is still pending adds no message (spec, Email delivery)
 ONE_PENDING_RESET_INDEX = "uq_email_outbox_one_pending_reset"
-# EmailService.queue_email uses the same condition for ON CONFLICT. It is written as
-# literals: with bound parameters Postgres can't match ON CONFLICT to this partial index
-# once a prepared statement switches to a generic plan.
+# also used by queue_email for ON CONFLICT; literals, as a generic plan can't match parameters
 ONE_PENDING_RESET_WHERE = (
     f"template = '{EmailKind.RESET_PASSWORD}' AND status = '{EmailStatus.PENDING}'"
 )
@@ -61,10 +59,11 @@ def _priority_matches_template() -> str:
 
 def priority_for(kind: EmailKind) -> int:
     """1 for password and email-change mail, 2 for verification and TA invitations."""
-    kind = EmailKind(kind)
     if kind in HIGH_PRIORITY_KINDS:
         return 1
-    return 2
+    if kind in LOW_PRIORITY_KINDS:
+        return 2
+    raise ValueError(f"{kind!r} has no priority; add it to HIGH or LOW_PRIORITY_KINDS")
 
 
 class EmailToken(Base):
@@ -84,8 +83,7 @@ class EmailToken(Base):
     )
 
     id: Mapped[UUID] = uuid_pk()
-    # invalidate looks up the unused links of one user
-    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)  # per-user lookups
     purpose: Mapped[str]
     new_email: Mapped[str | None]  # only for change_email
     token_hash: Mapped[str] = mapped_column(unique=True)
@@ -104,13 +102,13 @@ class EmailOutbox(Base):
         # same split as priority_for, so a reset can't be stored as priority 2
         CheckConstraint(_priority_matches_template(), name="priority_matches_template"),
         CheckConstraint(f"attempts BETWEEN 0 AND {MAX_EMAIL_ATTEMPTS}", name="attempts"),
-        # sent_at is set exactly when the message has gone out
         CheckConstraint(
             f"(status = '{EmailStatus.SENT}') = (sent_at IS NOT NULL)",
             name="sent_at_matches_status",
         ),
         CheckConstraint("to_email = lower(to_email)", name="to_email_lowercase"),
         CheckConstraint("jsonb_typeof(params) = 'object'", name="params_object"),
+        # top-level keys only, a backstop: EmailService is what keeps tokens out of params
         CheckConstraint(
             "NOT (params ?| ARRAY['token', 'token_hash'])", name="params_have_no_token"
         ),
@@ -131,7 +129,7 @@ class EmailOutbox(Base):
     )
 
     id: Mapped[UUID] = uuid_pk()
-    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)  # anonymising
     to_email: Mapped[str]
     template: Mapped[str]  # the email kind (spec name: template)
     params: Mapped[dict[str, Any]] = mapped_column(

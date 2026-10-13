@@ -45,8 +45,7 @@ def add_token(db: Session, user: User, **fields: object) -> EmailToken:
         "token_hash": _hash(),
         "expires_at": datetime.now(UTC) + timedelta(days=1),
     }
-    row = EmailToken(**(values | fields))
-    db.add(row)
+    db.add(row := EmailToken(**(values | fields)))
     db.flush()
     return row
 
@@ -70,7 +69,7 @@ def test_indexes_exist(db: Session, name: str, expected: list[str]) -> None:
 def test_each_kind_stores_its_priority(
     db: Session, make_user: Callable[..., User], kind: EmailKind
 ) -> None:
-    add_outbox(db, make_user(), template=kind, priority=priority_for(kind))
+    add_outbox(db, make_user(), template=kind)
 
 
 @pytest.mark.parametrize(
