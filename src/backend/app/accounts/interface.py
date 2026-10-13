@@ -33,7 +33,7 @@ def get_current_user(token: str, db: Session) -> User:
 
 
 def require_class_role(
-    user: User, class_id: UUID, db: Session, required_role: ClassStaffRole
+    user: User, class_id: UUID, required_role: ClassStaffRole, db: Session
 ) -> None:
     """Raises if user does not have the required class roles.
 

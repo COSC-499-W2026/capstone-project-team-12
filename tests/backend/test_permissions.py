@@ -23,7 +23,7 @@ def test_require_class_role_owner(make_user, make_class_staff, make_class, db: S
     user = make_user()
     fake_class = make_class()
     make_class_staff(fake_class, user)
-    require_class_role(user, fake_class.id, db, ClassStaffRole.OWNER)
+    require_class_role(user, fake_class.id, ClassStaffRole.OWNER, db)
     assert True  #  Code cannot reach this unless successful
 
 
@@ -31,7 +31,7 @@ def test_require_class_role_assistant(make_user, make_class_staff, make_class, d
     user = make_user()
     fake_class = make_class()
     make_class_staff(fake_class, user, role=ClassStaffRole.ASSISTANT)
-    require_class_role(user, fake_class.id, db, ClassStaffRole.ASSISTANT)
+    require_class_role(user, fake_class.id, ClassStaffRole.ASSISTANT, db)
     assert True  #  Code cannot reach this unless successful
 
 
@@ -40,7 +40,7 @@ def test_require_class_role_raises_exception(make_user, make_class, make_class_s
     fake_class = make_class()
     make_class_staff(fake_class, user, role=ClassStaffRole.ASSISTANT)
     with pytest.raises(AppError) as exc_info:
-        require_class_role(user, fake_class.id, db, ClassStaffRole.OWNER)
+        require_class_role(user, fake_class.id, ClassStaffRole.OWNER, db)
     assert exc_info.value.code == ErrorCode.FORBIDDEN_ROLE
 
 

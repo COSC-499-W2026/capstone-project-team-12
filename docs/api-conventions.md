@@ -116,6 +116,15 @@ API error responses must not expose stack traces, database errors, internal host
 - The handlers in `app/main.py` turn `AppError`, request validation errors (422 `VALIDATION_ERROR`), unknown routes (404 `NOT_FOUND`), wrong methods (405 `METHOD_NOT_ALLOWED`) and unexpected errors (500 `INTERNAL_ERROR`, logged but never shown to the client) into the format above.
 - Headers that a code needs, such as `Retry-After` for `UPLOAD_IN_PROGRESS` and `OCR_BUSY`, are passed with `headers=`.
 
+## Interface and Service Functions
+Functions in a component's `interface.py` and in the shared services (`app/services`) that use the database take the session as `db: Session`, placed **after all required arguments**. Arguments with a default value come after `db`.
+
+```
+location_snapshot(location_id, language, difficulty, db)
+require_class_role(user, class_id, required_role, db)
+end_open_sessions(class_id, db, student_id=None)
+```
+
 ## Pagination
 Collection endpoints that may return a large number of resources must use pagination.
 
