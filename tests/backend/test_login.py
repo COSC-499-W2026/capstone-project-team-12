@@ -16,15 +16,22 @@ INVALID_EMAIL = "invalidemail"
 INVALID_PASSWORD = "NotValidPassword1"
 
 
-def test_valid_login(db: Session):
-    register_request = RegisterRequest(
-        email=VALID_EMAIL, username=VALID_USERNAME, password=VALID_PASSWORD
-    )
-    register_account(register_request, db)
-    login_request = LoginRequest(email=VALID_EMAIL, password=VALID_PASSWORD)
-    tokens = login_account(login_request, db)
-    assert tokens.get("jwt")
-    assert tokens.get("refresh_token")
+def test_valid_login(db: Session, client: TestClient):
+    register = {
+        "email": VALID_EMAIL,
+        "username": VALID_USERNAME,
+        "password": VALID_PASSWORD
+    }
+    client.post("/auth/register", json=register)
+    login = {
+        "username": VALID_EMAIL,
+        "password": VALID_PASSWORD
+    }
+    response = client.post("/auth/login", json=login)
+    assert response
+    assert response.status_code == 200
+    assert response.json.get("access_token")
+    assert response.json.get("refresh_token")
 
 
 def test_invalid_email(db: Session):

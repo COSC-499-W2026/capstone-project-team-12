@@ -1,7 +1,5 @@
 """Module used for the verification and hashing of passwords."""
 
-from sqlite3 import IntegrityError
-
 from bcrypt import checkpw, gensalt, hashpw
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -42,22 +40,15 @@ def hash_password(password: str) -> str:
 def check_password_hash(email: str, password: str, db: Session) -> bool:
     """Takes a plaintext password and checks it agaist the stored hash for the user"""
     pw_bytes = password.encode("utf-8")
-    try:
-        stmt = select(User.email, User.password_hash).where(User.email == email)
-        result = db.execute(stmt)
-        for row in result:
-            hash: str = "" + str(row[1])
-            if row[0] == email and checkpw(pw_bytes, hash.encode("utf-8")):
-                return True
-            else:
-                raise AppError(
-                    ErrorCode.INVALID_CREDENTIALS,
-                    "The email or password you entered are incorrect.",
-                )
-    except AppError as err:
-        raise AppError(err.code, err.message, err.details) from err
-    except IntegrityError as err:
-        raise AppError(
-            ErrorCode.DATABASE_INTEGRITY_ERROR, "Something went wrong when authenticating you"
-        ) from err
+    stmt = select(User.email, User.password_hash).where(User.email == email)
+    result = db.execute(stmt)
+    for row in result:
+        hash: str = "" + str(row[1])
+        if row[0] == email and checkpw(pw_bytes, hash.encode("utf-8")):
+            return True
+        else:
+            raise AppError(
+                ErrorCode.INVALID_CREDENTIALS,
+                "The email or password you entered are incorrect.",
+            )
     return False

@@ -1,9 +1,11 @@
 """Public interface of app.accounts: the only module other components may import."""
+
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.accounts.tokens import ACCESS_TOKEN_KEY, decode_jwt, revoke_refresh_tokens
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
 from app.models.enums import ClassStaffRole
@@ -17,14 +19,19 @@ __all__ = [
 ]
 
 
-def get_current_user(token: str, db: Session) -> User:
+async def get_current_user(token: str, db: Session) -> User:
     """Returns the authenticated user represented by the access token
     Stub returns a dummy user
     """
-    if len(token) < 1:
-        raise AppError(ErrorCode.NOT_AUTHENTICATED)
-    raise AppError(ErrorCode.NOT_AUTHENTICATED)
-    return User
+    payload = decode_jwt(token, str(ACCESS_TOKEN_KEY))
+    user_id = payload.get("sub")
+    if user_id is None:
+        raise AppError(ErrorCode.INVALID_TOKEN, "")
+
+    user = db.execute(select(User).where(User.id == user_id).limit(1)).scalar_one_or_none()
+    if user is None:
+        raise AppError(ErrorCode.INVALID_TOKEN)
+    return user
 
 
 def require_class_role(
@@ -85,3 +92,7 @@ def is_class_staff(user_id: UUID, class_id: UUID, db: Session) -> bool:
 def can_manage_content(user: User) -> bool:
     """Return True when the user has content management permissions in the db"""
     return user.can_manage_content
+
+
+def revoke_all_refresh_tokens(user_id: UUID, db: Session) -> None:
+    revoke_refresh_tokens(user_id, db)
