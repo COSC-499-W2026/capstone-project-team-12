@@ -54,7 +54,18 @@ CI automatically checks:
 - Ruff formatting
 - mypy type checking
 - Alembic migrations
+- the committed OpenAPI document (`docs/api/openapi.json`) matches the code
 - pytest
 - test coverage
+
+## API changes
+
+`docs/api/openapi.json` is generated from the FastAPI routes, so reviewers can see every API change in the PR diff. If your PR adds or changes a route, a request or response model, or an error response, run this from `src/backend` and commit the updated file with your change:
+
+```
+python ../../utils/export_openapi.py
+```
+
+CI fails with "out of date" if you forget.
 
 A failing CI check must be fixed before the PR can be merged.
