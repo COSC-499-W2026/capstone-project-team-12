@@ -112,6 +112,19 @@ def test_a_repeated_reset_goes_to_the_current_address(
     assert again.id == first.id and again.to_email == "changed@example.com"
 
 
+def test_many_calls_on_one_connection_keep_working(
+    db: Session, make_user: Callable[..., User]
+) -> None:
+    # psycopg prepares a statement after 5 runs and Postgres may switch to a generic
+    # plan later; ON CONFLICT must still match the partial index then
+    user = make_user()
+    for i in range(15):
+        kind = EmailKind.RESET_PASSWORD if i % 2 else EmailKind.VERIFY_EMAIL
+        assert EmailService.queue_email(db, user, kind).status == EmailStatus.PENDING
+    resets = select(func.count()).where(EmailOutbox.template == EmailKind.RESET_PASSWORD)
+    assert db.scalar(resets) == 1
+
+
 def test_addresses_are_trimmed_and_lowercased(db: Session, make_user: Callable[..., User]) -> None:
     user = make_user()
     raw = EmailService.create_token(db, user, EmailKind.CHANGE_EMAIL, new_email=" A@b.com ")

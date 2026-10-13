@@ -10,13 +10,13 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
-from app.models.email import EmailOutbox, EmailToken, priority_for
+from app.models.email import ONE_PENDING_RESET_WHERE, EmailOutbox, EmailToken, priority_for
 from app.models.enums import EmailKind, EmailStatus
 
 # counted from create_token, which the send job calls at send time (spec, email_tokens)
@@ -28,6 +28,8 @@ TOKEN_TTL = {
 }
 
 _INVALID_LINK = "Verification or reset link is invalid, used or expired"
+
+_PENDING_RESET = text(ONE_PENDING_RESET_WHERE)  # see models/email.py
 
 
 class EmailService:
@@ -53,28 +55,28 @@ class EmailService:
             "attempts": 0,
             "next_attempt_at": datetime.now(UTC),
         }
-        pending_reset = (EmailOutbox.template == EmailKind.RESET_PASSWORD) & (
-            EmailOutbox.status == EmailStatus.PENDING
-        )
-        # two tries: the pending reset we collided with may be sent before we read it
+        # two tries: the pending reset we collided with may be sent before we update it
         for _ in range(2):
             row = db.scalars(
                 insert(EmailOutbox)
                 .values(**values)
                 .on_conflict_do_nothing(
-                    index_elements=[EmailOutbox.user_id], index_where=pending_reset
+                    index_elements=[EmailOutbox.user_id], index_where=_PENDING_RESET
                 )
                 .returning(EmailOutbox),
                 execution_options={"populate_existing": True},
             ).one_or_none()
-            if row is None:
-                row = db.scalars(
-                    select(EmailOutbox).where(EmailOutbox.user_id == user.id, pending_reset),
-                    execution_options={"populate_existing": True},
-                ).one_or_none()
-                if row is not None and row.to_email != to_email:
-                    row.to_email = to_email  # the user changed address meanwhile
-                    db.flush()
+            if row is not None:
+                return row
+            # point the pending reset at the user's current address; the status check
+            # makes sure a row the send job has just sent is left alone
+            row = db.scalars(
+                update(EmailOutbox)
+                .where(EmailOutbox.user_id == user.id, _PENDING_RESET)
+                .values(to_email=to_email)
+                .returning(EmailOutbox),
+                execution_options={"populate_existing": True},
+            ).one_or_none()
             if row is not None:
                 return row
         raise RuntimeError("could not queue the reset email")  # pragma: no cover (needs two races)
