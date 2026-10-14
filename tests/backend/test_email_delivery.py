@@ -127,6 +127,7 @@ def refused(code: int, reply: bytes) -> smtplib.SMTPRecipientsRefused:
         (smtplib.SMTPDataError(452, b"too many messages"), MailQuotaError),
         (smtplib.SMTPDataError(550, b"5.4.5 Daily user sending limit exceeded"), MailQuotaError),
         (smtplib.SMTPDataError(421, b"try again later"), MailUnavailableError),
+        (smtplib.SMTPDataError(451, b"local error in processing"), MailUnavailableError),
         (smtplib.SMTPAuthenticationError(535, b"bad credentials"), MailUnavailableError),
         (smtplib.SMTPServerDisconnected("connection lost"), MailUnavailableError),
         # about one recipient, so only this mail fails
@@ -134,17 +135,6 @@ def refused(code: int, reply: bytes) -> smtplib.SMTPRecipientsRefused:
         (refused(550, b"no such user"), smtplib.SMTPRecipientsRefused),
         (smtplib.SMTPDataError(552, b"5.2.2 Mailbox quota exceeded"), smtplib.SMTPDataError),
         (smtplib.SMTPDataError(554, b"message rejected"), smtplib.SMTPDataError),
-    ],
-    ids=[
-        "452",
-        "550 5.4.5",
-        "421",
-        "535 login",
-        "disconnected",
-        "refused over quota",
-        "refused unknown",
-        "552 mailbox full",
-        "554",
     ],
 )
 def test_server_problems_stop_the_run_and_mail_problems_fail_the_row(

@@ -39,3 +39,12 @@ def test_gps_radius_must_be_positive(monkeypatch: pytest.MonkeyPatch, radius: st
 
 def test_get_settings_is_cached() -> None:
     assert get_settings() is get_settings()
+
+
+def test_email_settings_must_be_set_outside_development(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    with pytest.raises(ValidationError, match="APP_BASE_URL and MAIL_FROM"):
+        Settings(_env_file=None)
+    monkeypatch.setenv("APP_BASE_URL", "https://hunt.example.ca")
+    monkeypatch.setenv("MAIL_FROM", "Hunt <no-reply@hunt.example.ca>")
+    assert Settings(_env_file=None).app_env == "production"

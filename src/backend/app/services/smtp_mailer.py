@@ -8,9 +8,9 @@ from app.config import Settings
 from app.services.email_sender import MailQuotaError, MailUnavailableError, OutgoingMail
 from app.services.email_templates import render
 
-# 451 and 452 for the whole message (not one recipient): the server is out of resources or
-# we hit its limit. 421 only means "busy, try again soon" and is handled as unavailable.
-_LIMIT_CODES = {451, 452}
+# 452 for the whole message (not one recipient): the server is out of resources or we hit its
+# limit. 421 and 451 mean "busy or a local error, try again soon": handled as unavailable.
+_LIMIT_CODES = {452}
 # how providers word a limit on the sender, e.g. Gmail's "550 5.4.5 Daily user sending limit
 # exceeded"; check this list against the provider we end up choosing. Not plain "quota": "552
 # mailbox quota exceeded" means this recipient's mailbox is full.
@@ -46,7 +46,7 @@ class SmtpMailer:
         except smtplib.SMTPResponseException as error:
             if _is_limit(error.smtp_code, error.smtp_error):
                 raise MailQuotaError(str(error)) from error
-            if error.smtp_code == 421 or isinstance(
+            if error.smtp_code in (421, 451) or isinstance(
                 error,
                 smtplib.SMTPAuthenticationError | smtplib.SMTPConnectError | smtplib.SMTPHeloError,
             ):

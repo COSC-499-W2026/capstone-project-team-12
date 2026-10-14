@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pydantic import NonNegativeInt, PositiveInt
+from pydantic import NonNegativeInt, PositiveInt, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +29,15 @@ class Settings(BaseSettings):
     locations_per_game: PositiveInt = 5
     max_shuffles_per_session: NonNegativeInt = 2
     max_photo_attempts: PositiveInt = 6
+
+    @model_validator(mode="after")
+    def _email_settings_outside_development(self) -> "Settings":
+        # links to localhost or a @localhost sender would reach no one outside development
+        if self.app_env != "development" and (
+            "localhost" in self.app_base_url or "@localhost" in self.mail_from
+        ):
+            raise ValueError("set APP_BASE_URL and MAIL_FROM outside development")
+        return self
 
 
 @lru_cache
