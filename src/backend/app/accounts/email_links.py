@@ -3,7 +3,8 @@
 The answers never say whether an address has an account: a request for an unknown, inactive
 or already verified address does nothing and looks the same to the caller. The 3-per-hour
 limit is applied the same way, by quietly not queueing, since a 429 only for addresses that
-exist would give that away. Nothing here commits; the route does.
+exist would give that away. The verification email sent at sign-up counts toward it too.
+Nothing here commits; the route does.
 """
 
 from datetime import timedelta
@@ -48,8 +49,20 @@ def request_password_reset(email: str, db: Session) -> None:
 
 
 def _active_user(email: str, db: Session) -> User | None:
+    """The active account for the address, locked until the route commits.
+
+    The lock makes requests for one address run one at a time, so several sent at once
+    can't all count fewer than 3 and each queue a mail. It is FOR NO KEY UPDATE, the lock
+    create_token takes, so the outbox insert (which only needs FOR KEY SHARE) isn't blocked.
+    """
     address = email.strip().lower()  # stored lowercase
-    user = db.scalars(select(User).where(User.email == address)).one_or_none()
+    query = (
+        select(User)
+        .where(User.email == address)
+        .with_for_update(key_share=True)
+        .execution_options(populate_existing=True)  # re-read after waiting for the lock
+    )
+    user = db.scalars(query).one_or_none()
     return user if user is not None and user.is_active else None
 
 

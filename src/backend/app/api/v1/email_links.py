@@ -5,7 +5,7 @@ from http import HTTPStatus
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.email_links import (
@@ -13,6 +13,7 @@ from app.accounts.email_links import (
     request_verification_email,
     verify_email,
 )
+from app.accounts.register import email_is_valid
 from app.db import get_db
 
 email_links_router = APIRouter(prefix="/auth", tags=["auth"])
@@ -24,6 +25,15 @@ class TokenRequest(BaseModel):
 
 class EmailRequest(BaseModel):
     email: str = Field(min_length=1, max_length=254)
+
+    @field_validator("email")
+    @classmethod
+    def _check_format(cls, value: str) -> str:
+        # same check as sign-up; a 422 for a malformed address says nothing about accounts
+        value = value.strip().lower()
+        if not email_is_valid(value):
+            raise ValueError("not a valid email address")
+        return value
 
 
 class StatusResponse(BaseModel):
