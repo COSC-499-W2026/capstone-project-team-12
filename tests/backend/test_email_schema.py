@@ -53,7 +53,7 @@ def add_token(db: Session, user: User, **fields: object) -> EmailToken:
 @pytest.mark.parametrize(
     ("name", "expected"),
     [
-        (PENDING_DUE_INDEX, ["(priority, created_at)", "pending"]),
+        (PENDING_DUE_INDEX, ["(priority, next_attempt_at)", "pending"]),
         (RECENT_INDEX, ["(to_email, template, created_at)"]),
         (ONE_PENDING_RESET_INDEX, ["UNIQUE", "(user_id)", "reset_password", "pending"]),
     ],
