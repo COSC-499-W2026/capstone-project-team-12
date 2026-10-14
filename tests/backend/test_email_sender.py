@@ -182,3 +182,19 @@ def test_a_sent_row_is_sent_once(db: Session, make_user: Callable[..., User]) ->
     send_due_emails(db, mailer)
     send_due_emails(db, mailer)
     assert len(mailer.sent) == 1
+
+
+@pytest.mark.parametrize("kind", [EmailKind.VERIFY_EMAIL, EmailKind.SET_PASSWORD])
+def test_mail_to_an_address_the_user_no_longer_has_is_not_sent(
+    db: Session, make_user: Callable[..., User], kind: EmailKind
+) -> None:
+    user = make_user()
+    old = queue(db, user, kind)
+    user.email = "corrected@example.com"  # e.g. an admin fixed a typo
+    db.commit()
+    new = queue(db, user, kind)
+    mailer = FakeMailer()
+    assert send_due_emails(db, mailer) == SendReport(sent=1, failed=1)
+    # only the current address gets a link, so the old row can't replace it
+    assert [m.to_email for m in mailer.sent] == ["corrected@example.com"]
+    assert (old.status, new.status) == (EmailStatus.FAILED, EmailStatus.SENT)

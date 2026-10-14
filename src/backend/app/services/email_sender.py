@@ -35,6 +35,15 @@ SERVER_PAUSE = timedelta(minutes=5)
 _PENDING = text(PENDING_WHERE)
 
 
+# mail that only makes sense at the user's current address (change_email goes to the new one,
+# the notice to the old one)
+_CURRENT_ADDRESS_KINDS = (EmailKind.VERIFY_EMAIL, EmailKind.RESET_PASSWORD, EmailKind.SET_PASSWORD)
+
+
+class _OldAddressError(Exception):
+    """The user's address changed after this mail was queued."""
+
+
 class MailUnavailableError(Exception):
     """The mail server can't take mail at all right now (down, unreachable, login refused).
 
@@ -88,10 +97,18 @@ def send_due_emails(db: Session, mailer: Mailer, *, limit: int = BATCH_SIZE) -> 
             break
         row_id = row.id
         try:  # making the token can fail too, and must not leave the row due forever
+            if _to_old_address(row, db):
+                raise _OldAddressError
             token = _token_for(row, db)
             mailer.send(
                 OutgoingMail(row.to_email, EmailKind(row.template), dict(row.params), token)
             )
+        except _OldAddressError:
+            # its link would replace the one sent to the current address, so never send it
+            row.status = EmailStatus.FAILED
+            db.commit()
+            report.failed += 1
+            continue
         except MailUnavailableError as error:
             logger.warning("Mail server unavailable, pausing the queue: %s", error)
             db.rollback()
@@ -128,6 +145,12 @@ def _lock_next_due(db: Session) -> EmailOutbox | None:
         # the CLI's sessions keep objects after commit; read the row as it is now
         execution_options={"populate_existing": True},
     ).one_or_none()
+
+
+def _to_old_address(row: EmailOutbox, db: Session) -> bool:
+    if EmailKind(row.template) not in _CURRENT_ADDRESS_KINDS:
+        return False
+    return db.get_one(User, row.user_id).email != row.to_email
 
 
 def _token_for(row: EmailOutbox, db: Session) -> str | None:
