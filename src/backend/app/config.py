@@ -14,6 +14,13 @@ class Settings(BaseSettings):
     secret_key: str = "change-me"
     smtp_host: str = "localhost"
     smtp_port: int = 1025
+    # Mailpit needs neither; a real provider needs STARTTLS and a login
+    smtp_starttls: bool = False
+    smtp_username: str = ""
+    smtp_password: str = ""
+    mail_from: str = "Hunt <no-reply@localhost>"
+    # where the links in emails point: the web app, whose pages read the token from the link
+    app_base_url: str = "http://localhost:5173"
     media_dir: str = "/data/media"
     media_url_ttl_seconds: PositiveInt = 900
     gps_radius_meters: PositiveInt = 30  # default for a new location; each location stores its own
