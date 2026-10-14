@@ -129,6 +129,7 @@ def refused(code: int, reply: bytes) -> smtplib.SMTPRecipientsRefused:
         (smtplib.SMTPDataError(421, b"try again later"), MailUnavailableError),
         (smtplib.SMTPDataError(451, b"local error in processing"), MailUnavailableError),
         (smtplib.SMTPAuthenticationError(535, b"bad credentials"), MailUnavailableError),
+        (smtplib.SMTPSenderRefused(553, b"sender not allowed", "a@b.ca"), MailUnavailableError),
         (smtplib.SMTPServerDisconnected("connection lost"), MailUnavailableError),
         # about one recipient, so only this mail fails
         (refused(452, b"4.2.2 over quota"), smtplib.SMTPRecipientsRefused),

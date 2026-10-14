@@ -17,6 +17,12 @@ _LIMIT_CODES = {452}
 _LIMIT_WORDS = ("5.4.5", "sending limit", "daily limit", "rate limit")
 _RECIPIENT_WORDS = ("mailbox", "over quota")  # about the recipient, so only this mail failed
 _TIMEOUT_SECONDS = 20
+_SERVER_ERRORS = (
+    smtplib.SMTPAuthenticationError,
+    smtplib.SMTPConnectError,
+    smtplib.SMTPHeloError,
+    smtplib.SMTPSenderRefused,
+)
 
 
 def _is_limit(code: int, reply: bytes | str) -> bool:
@@ -46,10 +52,8 @@ class SmtpMailer:
         except smtplib.SMTPResponseException as error:
             if _is_limit(error.smtp_code, error.smtp_error):
                 raise MailQuotaError(str(error)) from error
-            if error.smtp_code in (421, 451) or isinstance(
-                error,
-                smtplib.SMTPAuthenticationError | smtplib.SMTPConnectError | smtplib.SMTPHeloError,
-            ):
+            # a refused sender (MAIL FROM) is our address or account, so every mail would fail
+            if error.smtp_code in (421, 451) or isinstance(error, _SERVER_ERRORS):
                 raise MailUnavailableError(str(error)) from error
             raise  # the server rejected this mail
         except OSError as error:
