@@ -1,14 +1,15 @@
-"""Tables owned by 5.0 Content (Eddy): locations and clues (audio tables follow).
+"""Tables owned by 5.0 Content (Eddy): locations, clues, audio_assets and feedback_audio.
 
 Everything here is for staff and the server: location names, room numbers, accepted answers and
-entrance points are the answers to the game and never reach a student.
+entrance points are the answers to the game and never reach a student. Audio files are stored
+under random keys (StorageService), so a file path never reveals a location either.
 """
 
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, ForeignKey, UniqueConstraint, true
+from sqlalchemy import CheckConstraint, ForeignKey, Index, UniqueConstraint, false, text, true
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column
@@ -23,7 +24,7 @@ from app.models.columns import (
     updated_at,
     uuid_pk,
 )
-from app.models.enums import VerificationType
+from app.models.enums import AudioSourceType, FeedbackCode, VerificationType
 
 # A room number as printed on the sign: building code, a space, then the number, e.g. "SCI 333".
 # The client confirmed 3 letters + 3 digits everywhere except one building, which uses 4 digits.
@@ -93,3 +94,59 @@ class Clue(Base):
     text: Mapped[str | None]
     created_at: Mapped[datetime] = created_at()
     updated_at: Mapped[datetime] = updated_at()
+
+
+class AudioAsset(Base):
+    """One recording of a clue. The primary one is what new draws use (AudioService).
+
+    Never deleted while an open game's snapshot points at it: replacing a recording only moves
+    is_primary, so a game in progress keeps hearing the clue its answers belong to.
+    """
+
+    __tablename__ = "audio_assets"
+    __table_args__ = (
+        in_check("source_type", AudioSourceType, name="source_type"),
+        # the upper limits (5 MB, 60 s) are settings, checked when the file is uploaded
+        CheckConstraint("duration_seconds > 0", name="duration_seconds"),
+        CheckConstraint("file_size_kb > 0", name="file_size_kb"),
+        # a clue has at most one primary recording
+        Index(
+            "uq_audio_assets_one_primary_per_clue",
+            "clue_id",
+            unique=True,
+            postgresql_where=text("is_primary"),
+        ),
+    )
+
+    id: Mapped[UUID] = uuid_pk()
+    clue_id: Mapped[UUID] = mapped_column(ForeignKey("clues.id"), index=True)
+    # StorageService key: a random UUID plus the extension, never derived from the clue
+    file_path: Mapped[str] = mapped_column(unique=True)
+    source_type: Mapped[str] = mapped_column(
+        default=AudioSourceType.UPLOADED, server_default=AudioSourceType.UPLOADED.value
+    )
+    provider: Mapped[str]  # who made it: "teacher" for uploads, a TTS service later
+    is_primary: Mapped[bool] = mapped_column(default=False, server_default=false())
+    duration_seconds: Mapped[float]
+    file_size_kb: Mapped[int]
+    uploaded_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))  # null if generated
+    created_at: Mapped[datetime] = created_at()
+
+
+class FeedbackAudio(Base):
+    """The fixed phrase library: one recording per feedback code and language.
+
+    A bulk import replaces a phrase by pointing file_path at the new file. Games ask
+    AudioService for the current phrase each time, so no snapshot is involved.
+    """
+
+    __tablename__ = "feedback_audio"
+    __table_args__ = (
+        in_check("code", FeedbackCode, name="code"),
+        language_check(),
+    )
+
+    code: Mapped[str] = mapped_column(primary_key=True)
+    language: Mapped[str] = mapped_column(primary_key=True)
+    file_path: Mapped[str] = mapped_column(unique=True)  # StorageService key, as for clues
+    transcript: Mapped[str | None]  # null when the phrase came from a zip import

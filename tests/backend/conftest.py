@@ -17,9 +17,9 @@ from app.config import get_settings
 from app.db import get_db
 from app.main import create_app
 from app.models.accounts import ClassStaff, User
-from app.models.content import Clue, Location
+from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
 from app.models.engagement import ACCESS_CODE_ALPHABET, AccessCode, Class, ClassEnrollment
-from app.models.enums import ClassStaffRole, Difficulty, Language, UserRole
+from app.models.enums import ClassStaffRole, Difficulty, FeedbackCode, Language, UserRole
 from app.models.game import GameSession, SessionLocation
 from app.services.storage import MEDIA_URL_PREFIX
 
@@ -256,5 +256,36 @@ def make_clue(db: Session, make_location: Callable[..., Location]) -> Callable[.
         if "location_id" not in fields:
             values["location_id"] = (location or make_location()).id
         return _add(db, Clue(**(values | fields)))
+
+    return make
+
+
+@pytest.fixture
+def make_audio_asset(db: Session, make_clue: Callable[..., Clue]) -> Callable[..., AudioAsset]:
+    """A 5-second uploaded recording that is not primary, for a new clue unless given one."""
+
+    def make(clue: Clue | None = None, **fields: Any) -> AudioAsset:
+        values: dict[str, Any] = {
+            "file_path": f"{uuid4()}.mp3",
+            "provider": "teacher",
+            "duration_seconds": 5.0,
+            "file_size_kb": 80,
+        }
+        if "clue_id" not in fields:
+            values["clue_id"] = (clue or make_clue()).id
+        return _add(db, AudioAsset(**(values | fields)))
+
+    return make
+
+
+@pytest.fixture
+def make_feedback_audio(db: Session) -> Callable[..., FeedbackAudio]:
+    """The phrase `code` in `language` (NAV_START in Japanese by default)."""
+
+    def make(
+        code: str = FeedbackCode.NAV_START, language: str = Language.JA, **fields: Any
+    ) -> FeedbackAudio:
+        values: dict[str, Any] = {"code": code, "language": language, "file_path": f"{uuid4()}.mp3"}
+        return _add(db, FeedbackAudio(**(values | fields)))
 
     return make
