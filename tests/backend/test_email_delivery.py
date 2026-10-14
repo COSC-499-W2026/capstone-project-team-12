@@ -124,16 +124,28 @@ def refused(code: int, reply: bytes) -> smtplib.SMTPRecipientsRefused:
 @pytest.mark.parametrize(
     ("error", "raised"),
     [
-        (smtplib.SMTPDataError(421, b"try again later"), MailQuotaError),
         (smtplib.SMTPDataError(452, b"too many messages"), MailQuotaError),
         (smtplib.SMTPDataError(550, b"5.4.5 Daily user sending limit exceeded"), MailQuotaError),
-        (refused(452, b"4.5.3 too many recipients"), MailQuotaError),
+        (smtplib.SMTPDataError(421, b"try again later"), MailUnavailableError),
         (smtplib.SMTPAuthenticationError(535, b"bad credentials"), MailUnavailableError),
         (smtplib.SMTPServerDisconnected("connection lost"), MailUnavailableError),
+        # about one recipient, so only this mail fails
+        (refused(452, b"4.2.2 over quota"), smtplib.SMTPRecipientsRefused),
         (refused(550, b"no such user"), smtplib.SMTPRecipientsRefused),
+        (smtplib.SMTPDataError(552, b"5.2.2 Mailbox quota exceeded"), smtplib.SMTPDataError),
         (smtplib.SMTPDataError(554, b"message rejected"), smtplib.SMTPDataError),
     ],
-    ids=["421", "452", "550 5.4.5", "refused 452", "535 login", "disconnected", "550", "554"],
+    ids=[
+        "452",
+        "550 5.4.5",
+        "421",
+        "535 login",
+        "disconnected",
+        "refused over quota",
+        "refused unknown",
+        "552 mailbox full",
+        "554",
+    ],
 )
 def test_server_problems_stop_the_run_and_mail_problems_fail_the_row(
     smtp: type[FakeSmtp], error: Exception, raised: type[Exception]

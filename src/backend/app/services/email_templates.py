@@ -46,8 +46,8 @@ def render(mail: OutgoingMail, app_base_url: str) -> RenderedEmail:
             return RenderedEmail(
                 "Reset your password",
                 f"Open this link to choose a new password:\n\n{link}\n\n"
-                "The link works once, for 60 minutes. Resetting your password signs you out "
-                "on every device." + _SIGN_OFF,
+                "The link works once, for 60 minutes. After that, log in with your new "
+                "password." + _SIGN_OFF,
             )
         case EmailKind.SET_PASSWORD:
             return RenderedEmail(

@@ -8,16 +8,21 @@ from app.config import Settings
 from app.services.email_sender import MailQuotaError, MailUnavailableError, OutgoingMail
 from app.services.email_templates import render
 
-# 421 service closing / too busy, 451 and 452 local error or out of resources
-_LIMIT_CODES = {421, 451, 452}
-# some providers answer a daily limit with a 5xx instead, e.g. Gmail's "550 5.4.5 Daily user
-# sending limit exceeded"; check this list against the provider we end up choosing
-_LIMIT_WORDS = ("5.4.5", "quota", "sending limit", "daily limit", "rate limit")
+# 451 and 452 for the whole message (not one recipient): the server is out of resources or
+# we hit its limit. 421 only means "busy, try again soon" and is handled as unavailable.
+_LIMIT_CODES = {451, 452}
+# how providers word a limit on the sender, e.g. Gmail's "550 5.4.5 Daily user sending limit
+# exceeded"; check this list against the provider we end up choosing. Not plain "quota": "552
+# mailbox quota exceeded" means this recipient's mailbox is full.
+_LIMIT_WORDS = ("5.4.5", "sending limit", "daily limit", "rate limit")
+_RECIPIENT_WORDS = ("mailbox", "over quota")  # about the recipient, so only this mail failed
 _TIMEOUT_SECONDS = 20
 
 
 def _is_limit(code: int, reply: bytes | str) -> bool:
     text = (reply.decode(errors="replace") if isinstance(reply, bytes) else reply).lower()
+    if any(word in text for word in _RECIPIENT_WORDS):
+        return False
     return code in _LIMIT_CODES or any(word in text for word in _LIMIT_WORDS)
 
 
@@ -36,14 +41,12 @@ class SmtpMailer:
         message = self._message(mail)
         try:
             self._deliver(message)
-        except smtplib.SMTPRecipientsRefused as error:
-            if any(_is_limit(code, reply) for code, reply in error.recipients.values()):
-                raise MailQuotaError(str(error)) from error
-            raise  # this address is refused
+        except smtplib.SMTPRecipientsRefused:
+            raise  # about this address (full, unknown...): a normal failed attempt
         except smtplib.SMTPResponseException as error:
             if _is_limit(error.smtp_code, error.smtp_error):
                 raise MailQuotaError(str(error)) from error
-            if isinstance(
+            if error.smtp_code == 421 or isinstance(
                 error,
                 smtplib.SMTPAuthenticationError | smtplib.SMTPConnectError | smtplib.SMTPHeloError,
             ):
