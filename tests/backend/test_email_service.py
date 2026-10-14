@@ -36,7 +36,8 @@ def test_queue_email_sets_priority_and_stores_no_token(
     assert (row.to_email, row.template, row.priority) == (user.email, kind, priority_for(kind))
     assert row.status == EmailStatus.PENDING and row.attempts == 0 and row.params == {}
     assert row.sent_at is None
-    assert db.scalar(select(func.count()).select_from(EmailToken)) == 0
+    tokens = select(func.count()).where(EmailToken.user_id == user.id)
+    assert db.scalar(tokens) == 0
 
 
 def test_second_pending_reset_returns_the_queued_row(
@@ -49,7 +50,9 @@ def test_second_pending_reset_returns_the_queued_row(
     first.status, first.sent_at = EmailStatus.SENT, datetime.now(UTC)
     db.flush()
     assert EmailService.queue_email(user, EmailKind.RESET_PASSWORD, db).id != first.id
-    resets = select(func.count()).where(EmailOutbox.template == EmailKind.RESET_PASSWORD)
+    resets = select(func.count()).where(
+        EmailOutbox.user_id == user.id, EmailOutbox.template == EmailKind.RESET_PASSWORD
+    )
     assert db.scalar(resets) == 2
 
 
@@ -133,7 +136,9 @@ def test_many_calls_on_one_connection_keep_working(
     for i in range(15):
         kind = EmailKind.RESET_PASSWORD if i % 2 else EmailKind.VERIFY_EMAIL
         assert EmailService.queue_email(user, kind, db).status == EmailStatus.PENDING
-    resets = select(func.count()).where(EmailOutbox.template == EmailKind.RESET_PASSWORD)
+    resets = select(func.count()).where(
+        EmailOutbox.user_id == user.id, EmailOutbox.template == EmailKind.RESET_PASSWORD
+    )
     assert db.scalar(resets) == 1
 
 
@@ -201,17 +206,22 @@ def test_create_token_stores_only_the_hash(
         user, EmailKind.CHANGE_EMAIL, db, new_email="Next@Example.com"
     )
     reset = db.scalars(
-        select(EmailToken).where(EmailToken.purpose == EmailKind.RESET_PASSWORD)
+        select(EmailToken).where(
+            EmailToken.user_id == user.id, EmailToken.purpose == EmailKind.RESET_PASSWORD
+        )
     ).one()
     changed = db.scalars(
-        select(EmailToken).where(EmailToken.purpose == EmailKind.CHANGE_EMAIL)
+        select(EmailToken).where(
+            EmailToken.user_id == user.id, EmailToken.purpose == EmailKind.CHANGE_EMAIL
+        )
     ).one()
     assert reset.token_hash == EmailService.hash_token(raw) and raw not in reset.token_hash
     db_now = db.execute(select(func.now())).scalar_one()  # the database clock
     assert reset.expires_at == db_now + TOKEN_TTL[EmailKind.RESET_PASSWORD]
     assert changed.new_email == "next@example.com"
     stored = db.execute(text("SELECT t::text FROM email_tokens AS t")).all()
-    outbox: str = db.execute(text("SELECT t::text FROM email_outbox AS t")).scalar_one()
+    own_mail = text("SELECT t::text FROM email_outbox AS t WHERE t.user_id = :user_id")
+    outbox: str = db.execute(own_mail, {"user_id": user.id}).scalar_one()
     assert raw not in " ".join(row[0] for row in stored) and raw not in outbox
     assert change not in outbox
     assert "commit" not in transaction_calls
@@ -226,7 +236,7 @@ def test_bad_tokens_raise_invalid_token(db: Session, make_user: Callable[..., Us
     assert unknown.value.status == HTTPStatus.BAD_REQUEST
     with pytest.raises(AppError):
         EmailService.consume_token(raw, EmailKind.VERIFY_EMAIL, db)
-    row = db.scalars(select(EmailToken)).one()
+    row = db.scalars(select(EmailToken).where(EmailToken.user_id == user.id)).one()
     assert row.used_at is None
     row.expires_at = datetime.now(UTC) - timedelta(hours=1)
     db.flush()
