@@ -2,7 +2,7 @@
 
 import os
 from collections.abc import Callable
-from datetime import datetime
+from time import time
 from typing import Annotated
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
-from app.models.enums import ClassStaffRole
+from app.models.enums import ClassStaffRole, UserRole
 
 __all__ = [
     "ClassStaffRole",
@@ -36,13 +36,13 @@ def get_current_user(
     """Returns the authenticated user represented by the access token."""
     payload = decode(token, str(ACCESS_TOKEN_KEY), ["HS256"])
     user_id = payload.get("sub")
-    expiry = payload.get("exp")
-    if expiry is None:
+    expires_at = payload.get("exp")
+    if expires_at is None:
         raise AppError(
             ErrorCode.INVALID_TOKEN,
             "Something went wrong when validating your account, please login to your account again",
         )
-    if expiry < datetime.now(ZoneInfo("America/Los_Angeles")):
+    if expires_at < int(time()):
         raise AppError(
             ErrorCode.INVALID_TOKEN,
             "Something went wrong when validating your account, please login to your account again",
@@ -74,6 +74,11 @@ def require_class_role(*allowed_roles: ClassStaffRole) -> Callable[..., None]:
             raise AppError(ErrorCode.FORBIDDEN_ROLE)
 
     return role_checker
+
+
+def require_admin(user: Annotated[User, Depends(get_current_user)]) -> None:
+    if not user.role == UserRole.ADMIN:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE)
 
 
 def is_class_staff(user_id: UUID, class_id: UUID, db: Session) -> bool:
