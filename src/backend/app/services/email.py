@@ -51,7 +51,9 @@ class EmailService:
         reset; its params are kept. params must not hold a token. Does not create one.
         """
         kind = EmailKind(kind)
-        to_email = (to_email or user.email).strip().lower()
+        to_email = (user.email if to_email is None else to_email).strip().lower()
+        if not to_email:
+            raise ValueError("to_email is empty")
         if params and not params.keys().isdisjoint({"token", "token_hash"}):
             raise ValueError("params must not hold a token")
         values = {

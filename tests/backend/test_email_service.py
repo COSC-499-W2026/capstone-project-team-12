@@ -63,7 +63,7 @@ def test_reset_sent_between_conflict_and_read_is_queued_again(
 
     def send_first_then_read(*args: object, **kwargs: object) -> object:
         calls["n"] += 1
-        if calls["n"] == 2:  # the read after the conflict: the job sent it meanwhile
+        if calls["n"] == 2:  # the UPDATE after the conflict: the job sent it meanwhile
             first.status, first.sent_at = EmailStatus.SENT, datetime.now(UTC)
             db.flush()
         return real_scalars(*args, **kwargs)  # type: ignore[call-overload]
@@ -114,6 +114,9 @@ def test_queue_email_takes_an_address_and_params(
     assert (row.to_email, row.params) == ("new@x.com", {"name": "Mia"})
     hour = timedelta(hours=1)
     assert EmailService.count_recent("new@x.com", EmailKind.CHANGE_EMAIL, hour, db) == 1
+    for blank in ("", " "):  # not silently sent to user.email, and never stored empty
+        with pytest.raises(ValueError, match="empty"):
+            EmailService.queue_email(user, EmailKind.VERIFY_EMAIL, db, to_email=blank)
     with pytest.raises(ValueError, match="token"):
         EmailService.queue_email(user, EmailKind.VERIFY_EMAIL, db, params={"token": "x"})
     first = EmailService.queue_email(user, EmailKind.RESET_PASSWORD, db, params={"n": 1})
