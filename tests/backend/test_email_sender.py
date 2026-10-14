@@ -12,6 +12,7 @@ from app.models.email import MAX_EMAIL_ATTEMPTS, EmailOutbox, EmailToken
 from app.models.enums import EmailKind, EmailStatus
 from app.services.email import EmailService
 from app.services.email_sender import (
+    QUOTA_PAUSE,
     MailQuotaError,
     OutgoingMail,
     SendReport,
@@ -122,14 +123,44 @@ def test_the_last_failed_attempt_gives_up(db: Session, make_user: Callable[..., 
     assert EmailService.queue_email(user, EmailKind.RESET_PASSWORD, db).id != row.id
 
 
-def test_a_sending_limit_stops_the_run_without_counting(
+def test_a_sending_limit_pauses_the_queue_without_counting(
     db: Session, make_user: Callable[..., User]
 ) -> None:
     rows = [queue(db, make_user(), EmailKind.VERIFY_EMAIL) for _ in range(2)]
+    later = queue(db, make_user(), EmailKind.VERIFY_EMAIL)
+    later.next_attempt_at = func.now() + QUOTA_PAUSE + timedelta(minutes=5)
+    db.commit()
     report = send_due_emails(db, FakeMailer(MailQuotaError()))
     assert report == SendReport(quota_reached=True)
-    assert all((row.status, row.attempts) == (EmailStatus.PENDING, 0) for row in rows)
+    pause_end = db_now(db) + QUOTA_PAUSE
+    for row in rows:
+        db.refresh(row)
+        assert (row.status, row.attempts, row.next_attempt_at) == (
+            EmailStatus.PENDING,
+            0,
+            pause_end,
+        )
+    db.refresh(later)
+    assert later.next_attempt_at == pause_end + timedelta(minutes=5)  # not moved earlier
     assert db.scalar(select(func.count()).select_from(EmailToken)) == 0
+    assert send_due_emails(db, FakeMailer()) == SendReport()  # nothing due during the pause
+
+
+def test_an_error_before_sending_counts_as_a_failed_attempt(
+    db: Session, make_user: Callable[..., User], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = queue(db, make_user(), EmailKind.RESET_PASSWORD)
+
+    def broken(*args: object, **kwargs: object) -> str:
+        raise RuntimeError("token table unavailable")
+
+    monkeypatch.setattr(EmailService, "create_token", broken)
+    mailer = FakeMailer()
+    assert send_due_emails(db, mailer) == SendReport(retried=1)
+    assert mailer.sent == []
+    db.refresh(row)
+    assert (row.status, row.attempts) == (EmailStatus.PENDING, 1)
+    assert send_due_emails(db, mailer) == SendReport()  # waits instead of failing every minute
 
 
 def test_only_due_rows_are_sent_and_at_most_the_limit(
