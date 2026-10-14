@@ -104,23 +104,3 @@ def test_cannot_manage_content(client: TestClient, make_user: User):
     client.headers = {"Authorization": f"Bearer {jwt}"}
     response = client.post(f"{PREFIX}/content")
     assert response.status_code == 403
-
-
-def test_admin(client: TestClient, make_user: User):
-    user = make_user(role=UserRole.ADMIN)
-    jwt = encode(
-        {"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(ACCESS_TOKEN_KEY), ALGORITHM
-    )
-    client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = client.post(f"{PREFIX}/admin")
-    assert response.status_code == 200
-
-
-def test_not_admin(client: TestClient, make_user: User):
-    user = make_user(role=UserRole.STAFF)
-    jwt = encode(
-        {"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(ACCESS_TOKEN_KEY), ALGORITHM
-    )
-    client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = client.post(f"{PREFIX}/admin")
-    assert response.status_code == 403

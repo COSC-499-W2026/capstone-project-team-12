@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
-from app.models.enums import ClassStaffRole, UserRole
+from app.models.enums import ClassStaffRole
 
 __all__ = [
     "ClassStaffRole",
@@ -73,11 +73,6 @@ def require_class_role(*allowed_roles: ClassStaffRole) -> Callable[..., None]:
             raise AppError(ErrorCode.FORBIDDEN_ROLE)
 
     return role_checker
-
-
-def require_admin(user: Annotated[User, Depends(get_current_user)]) -> None:
-    if not user.role == UserRole.ADMIN:
-        raise AppError(ErrorCode.FORBIDDEN_ROLE)
 
 
 def is_class_staff(user_id: UUID, class_id: UUID, db: Session) -> bool:
