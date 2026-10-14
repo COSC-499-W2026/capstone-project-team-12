@@ -117,9 +117,9 @@ API error responses must not expose stack traces, database errors, internal host
 - Headers that a code needs, such as `Retry-After` for `UPLOAD_IN_PROGRESS` and `OCR_BUSY`, are passed with `headers=`.
 
 ## Interface and Service Functions
-Functions in a component's `interface.py` and in the shared services (`app/services`) that use the database take the session as `db: Session`, placed **after all required arguments**. Arguments with a default value come after `db`.
+Functions in a component's `interface.py` and in the shared services (`app/services`) that use the database take the session as `db: Session`, placed **after all required arguments**. Arguments with a default value come after `db`. The same rule applies to the other functions inside a component, such as `register_account(request, db)` and `username_exists(username, db)` in `app/accounts/register.py`.
 
-```
+```python
 location_snapshot(location_id, language, difficulty, db)
 require_class_role(user, class_id, required_role, db)
 end_open_sessions(class_id, db, student_id=None)
