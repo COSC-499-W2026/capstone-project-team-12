@@ -36,12 +36,17 @@ def get_current_user(
     """Returns the authenticated user represented by the access token."""
     payload = decode(token, str(ACCESS_TOKEN_KEY), ["HS256"])
     user_id = payload.get("sub")
-    expiry: datetime = payload.get("exp")
+    expiry = payload.get("exp")
+    if expiry is None:
+        raise AppError(
+            ErrorCode.INVALID_TOKEN,
+            "Something went wrong when validating your account, please login to your account again",
+        )
     if expiry < datetime.now(ZoneInfo("America/Los_Angeles")):
         raise AppError(
             ErrorCode.INVALID_TOKEN,
             "Something went wrong when validating your account, please login to your account again",
-            )
+        )
     user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
     if user is None:
         raise AppError(
