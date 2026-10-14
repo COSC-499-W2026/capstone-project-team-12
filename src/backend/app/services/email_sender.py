@@ -29,12 +29,26 @@ logger = logging.getLogger(__name__)
 BATCH_SIZE = 50  # per run; the job runs every minute
 # after the provider's sending limit, the whole queue waits this long instead of asking every minute
 QUOTA_PAUSE = timedelta(hours=1)
+# when the mail server is down or refuses our login, the queue waits this long before trying again
+SERVER_PAUSE = timedelta(minutes=5)
 
 _PENDING = text(PENDING_WHERE)
 
 
-class MailQuotaError(Exception):
-    """The provider's sending limit is reached. The run stops and no attempt is counted."""
+class MailUnavailableError(Exception):
+    """The mail server can't take mail at all right now (down, unreachable, login refused).
+
+    Nothing is wrong with the mail, so the run stops, no attempt is counted and the queue
+    waits `pause`.
+    """
+
+    pause = SERVER_PAUSE
+
+
+class MailQuotaError(MailUnavailableError):
+    """The provider's sending limit is reached."""
+
+    pause = QUOTA_PAUSE
 
 
 @dataclass(frozen=True)
@@ -47,7 +61,8 @@ class OutgoingMail:
 
 class Mailer(Protocol):
     def send(self, mail: OutgoingMail) -> None:
-        """Deliver one mail. Raise MailQuotaError at a sending limit, anything else on failure."""
+        """Deliver one mail. Raise MailUnavailableError (or MailQuotaError) when the server
+        can't take any mail, anything else when this mail failed."""
 
 
 @dataclass
@@ -56,6 +71,7 @@ class SendReport:
     retried: int = 0  # failed, will be tried again later
     failed: int = 0  # failed for the last time
     quota_reached: bool = False
+    server_unavailable: bool = False
 
 
 def retry_delay(attempts: int) -> timedelta:
@@ -76,11 +92,13 @@ def send_due_emails(db: Session, mailer: Mailer, *, limit: int = BATCH_SIZE) -> 
             mailer.send(
                 OutgoingMail(row.to_email, EmailKind(row.template), dict(row.params), token)
             )
-        except MailQuotaError:
+        except MailUnavailableError as error:
+            logger.warning("Mail server unavailable, pausing the queue: %s", error)
             db.rollback()
-            _pause_queue(db)
+            _pause_queue(error.pause, db)
             db.commit()
-            report.quota_reached = True
+            report.quota_reached = isinstance(error, MailQuotaError)
+            report.server_unavailable = not report.quota_reached
             break
         except Exception:
             logger.exception("Sending outbox row %s failed", row_id)
@@ -121,15 +139,15 @@ def _token_for(row: EmailOutbox, db: Session) -> str | None:
     return EmailService.create_token(user, kind, db, new_email=new_email)
 
 
-def _pause_queue(db: Session) -> None:
-    """Move every pending row that is due within QUOTA_PAUSE to the end of the pause.
+def _pause_queue(pause: timedelta, db: Session) -> None:
+    """Move every pending row that is due within `pause` to the end of the pause.
 
     Attempts are not counted: the mail itself didn't fail.
     """
     db.execute(
         update(EmailOutbox)
-        .where(_PENDING, EmailOutbox.next_attempt_at < func.now() + QUOTA_PAUSE)
-        .values(next_attempt_at=func.now() + QUOTA_PAUSE)
+        .where(_PENDING, EmailOutbox.next_attempt_at < func.now() + pause)
+        .values(next_attempt_at=func.now() + pause)
     )
 
 

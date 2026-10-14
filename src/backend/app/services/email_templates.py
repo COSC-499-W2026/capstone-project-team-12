@@ -39,8 +39,8 @@ def render(mail: OutgoingMail, app_base_url: str) -> RenderedEmail:
             return RenderedEmail(
                 "Confirm your email address",
                 f"Welcome! Open this link to confirm your email address:\n\n{link}\n\n"
-                "The link works for 7 days. You can play before confirming, but we can only "
-                "send password reset links to a confirmed address." + _SIGN_OFF,
+                "The link works for 7 days. You can play before confirming. If this address is "
+                "wrong, you won't be able to get password reset links." + _SIGN_OFF,
             )
         case EmailKind.RESET_PASSWORD:
             return RenderedEmail(

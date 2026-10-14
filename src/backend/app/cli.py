@@ -23,7 +23,11 @@ def send_emails() -> int:
         report.sent,
         report.retried,
         report.failed,
-        ", stopped at the provider's sending limit" if report.quota_reached else "",
+        ", stopped at the provider's sending limit"
+        if report.quota_reached
+        else ", stopped: mail server unavailable"
+        if report.server_unavailable
+        else "",
     )
     return 0
 
