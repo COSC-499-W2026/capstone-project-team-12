@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.models.accounts import User
@@ -198,3 +198,26 @@ def test_mail_to_an_address_the_user_no_longer_has_is_not_sent(
     # only the current address gets a link, so the old row can't replace it
     assert [m.to_email for m in mailer.sent] == ["corrected@example.com"]
     assert (old.status, new.status) == (EmailStatus.FAILED, EmailStatus.SENT)
+
+
+def test_a_reset_to_an_old_address_is_not_sent(db: Session, make_user: Callable[..., User]) -> None:
+    user = make_user()
+    row = queue(db, user, EmailKind.RESET_PASSWORD)
+    user.email = "corrected@example.com"
+    db.commit()
+    assert send_due_emails(db, FakeMailer()) == SendReport(failed=1)
+    assert row.status == EmailStatus.FAILED
+
+
+def test_the_address_check_reads_the_database_not_the_session(
+    db: Session, make_user: Callable[..., User], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(db, "expire_on_commit", False)  # like SessionLocal
+    user = make_user()
+    row = queue(db, user, EmailKind.VERIFY_EMAIL)
+    # changed outside this session: the User object here still has the old address
+    db.execute(text("UPDATE users SET email = 'moved@example.com' WHERE id = :id"), {"id": user.id})
+    db.commit()
+    assert send_due_emails(db, FakeMailer()) == SendReport(failed=1)
+    db.refresh(row)
+    assert row.status == EmailStatus.FAILED
