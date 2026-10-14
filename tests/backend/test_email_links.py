@@ -147,20 +147,27 @@ def test_requests_sent_at_once_still_queue_only_three(test_engine: Engine) -> No
         )
         setup.add(user)
         setup.commit()
-    start = threading.Barrier(5)
+    start = threading.Barrier(5, timeout=10)
+    errors: list[BaseException] = []  # a thread's exception is otherwise only printed
 
     def resend() -> None:
-        with Session(test_engine) as session:
-            start.wait()
-            request_verification_email(user.email, session)
-            session.commit()
+        try:
+            with Session(test_engine) as session:
+                start.wait()
+                request_verification_email(user.email, session)
+                session.commit()
+        except BaseException as error:
+            errors.append(error)
 
     try:
         threads = [threading.Thread(target=resend) for _ in range(5)]
         for thread in threads:
             thread.start()
         for thread in threads:
-            thread.join()
+            thread.join(timeout=10)
+        assert not any(thread.is_alive() for thread in threads), "a request is stuck"
+        if errors:
+            raise errors[0]
         with Session(test_engine) as check:
             rows = select(func.count()).where(EmailOutbox.user_id == user.id)
             assert check.scalar(rows) == 3
