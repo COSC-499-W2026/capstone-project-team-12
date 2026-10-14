@@ -62,7 +62,8 @@ class Location(Base):
     )
     room_number: Mapped[str | None]  # canonical form, e.g. "SCI 333"
     # MutableList so that changing a list in place (e.g. append) is saved, as with
-    # SessionLocation.flags
+    # SessionLocation.flags. It only tracks the list itself: to change an entrance's lat or lng,
+    # replace the list (or the point), not a value inside the dict.
     # normalised as OCR text is (no space), e.g. ["SCI333"]
     accepted_answers: Mapped[list[str]] = mapped_column(MutableList.as_mutable(JSONB))
     # one {"lat": ..., "lng": ...} per building entrance
@@ -101,6 +102,10 @@ class AudioAsset(Base):
 
     Never deleted while an open game's snapshot points at it: replacing a recording only moves
     is_primary, so a game in progress keeps hearing the clue its answers belong to.
+
+    To move is_primary, clear it on the old recording and flush before setting it on the new
+    one. The one-primary index is checked row by row and cannot be deferred, so doing both in
+    one flush fails or succeeds depending on the order SQLAlchemy writes the rows in.
     """
 
     __tablename__ = "audio_assets"
@@ -129,7 +134,8 @@ class AudioAsset(Base):
     is_primary: Mapped[bool] = mapped_column(default=False, server_default=false())
     duration_seconds: Mapped[float]
     file_size_kb: Mapped[int]
-    uploaded_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))  # null if generated
+    # null for generated audio, and allowed for uploads with no user (e.g. seeded demo data)
+    uploaded_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = created_at()
 
 
