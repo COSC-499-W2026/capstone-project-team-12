@@ -132,14 +132,16 @@ def _lock_next_due(db: Session) -> EmailOutbox | None:
 def _to_old_address(row: EmailOutbox, db: Session) -> bool:
     if EmailKind(row.template) not in _CURRENT_ADDRESS_KINDS:
         return False
-    return db.get_one(User, row.user_id).email != row.to_email
+    # populate_existing: the CLI's session keeps objects after commit, and an earlier mail to the
+    # same user this run would otherwise leave the old address in it
+    return db.get_one(User, row.user_id, populate_existing=True).email != row.to_email
 
 
 def _token_for(row: EmailOutbox, db: Session) -> str | None:
     kind = EmailKind(row.template)
     if kind not in TOKEN_KINDS:
         return None
-    user = db.get_one(User, row.user_id)
+    user = db.get_one(User, row.user_id, populate_existing=True)
     new_email = row.to_email if kind == EmailKind.CHANGE_EMAIL else None  # sent to the new one
     return EmailService.create_token(user, kind, db, new_email=new_email)
 
