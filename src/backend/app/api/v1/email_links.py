@@ -1,6 +1,7 @@
 """Auth routes reached from an email or before login: verify the address, resend the link,
 forget the password (A3). None of them need an access token."""
 
+from http import HTTPStatus
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -39,7 +40,11 @@ def post_verify_email(
     return StatusResponse()
 
 
-@email_links_router.post("/resend-verification", operation_id="resendVerificationEmail")
+@email_links_router.post(
+    "/resend-verification",
+    operation_id="resendVerificationEmail",
+    status_code=HTTPStatus.ACCEPTED,  # queued, sent by send-emails
+)
 def post_resend_verification(
     request: EmailRequest, db: Annotated[Session, Depends(get_db)]
 ) -> StatusResponse:
@@ -49,7 +54,11 @@ def post_resend_verification(
     return StatusResponse()
 
 
-@email_links_router.post("/forgot-password", operation_id="requestPasswordReset")
+@email_links_router.post(
+    "/forgot-password",
+    operation_id="requestPasswordReset",
+    status_code=HTTPStatus.ACCEPTED,
+)
 def post_forgot_password(
     request: EmailRequest, db: Annotated[Session, Depends(get_db)]
 ) -> StatusResponse:

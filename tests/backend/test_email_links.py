@@ -63,7 +63,7 @@ def test_requests_queue_mail_for_an_account(
 ) -> None:
     user = make_user()
     response = client.post(f"{API}/{path}", json={"email": f"  {user.email.upper()} "})
-    assert (response.status_code, response.json()) == (HTTPStatus.OK, {"status": "ok"})
+    assert (response.status_code, response.json()) == (HTTPStatus.ACCEPTED, {"status": "ok"})
     row = db.scalars(select(EmailOutbox).where(EmailOutbox.template == kind)).one()
     assert (row.user_id, row.to_email) == (user.id, user.email)
 
@@ -87,7 +87,7 @@ def test_requests_for_no_usable_account_look_the_same_and_queue_nothing(
     elif account == "verified":
         email = make_user(email_verified_at=datetime.now(UTC)).email
     response = client.post(f"{API}/{path}", json={"email": email})
-    assert (response.status_code, response.json()) == (HTTPStatus.OK, {"status": "ok"})
+    assert (response.status_code, response.json()) == (HTTPStatus.ACCEPTED, {"status": "ok"})
     assert db.scalar(select(func.count()).select_from(EmailOutbox)) == 0
 
 
@@ -97,7 +97,8 @@ def test_more_than_three_requests_an_hour_queue_nothing_more(
     user = make_user()
     for _ in range(5):
         response = client.post(f"{API}/resend-verification", json={"email": user.email})
-        assert response.status_code == HTTPStatus.OK  # no 429: it would show the account exists
+        # no 429: it would show that the account exists
+        assert response.status_code == HTTPStatus.ACCEPTED
     assert queued(db, EmailKind.VERIFY_EMAIL) == 3
 
 
