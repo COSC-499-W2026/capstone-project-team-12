@@ -20,8 +20,11 @@ from app.services.email import EmailService
 API = "/api/v1/auth"
 
 
-def queued(db: Session, kind: EmailKind) -> int:
-    query = select(func.count()).select_from(EmailOutbox).where(EmailOutbox.template == kind)
+def queued(db: Session, email: str, kind: EmailKind | None = None) -> int:
+    """Outbox rows for this address only, so rows already in a dev database don't count."""
+    query = select(func.count()).where(EmailOutbox.to_email == email)
+    if kind is not None:
+        query = query.where(EmailOutbox.template == kind)
     return db.execute(query).scalar_one()
 
 
@@ -86,7 +89,8 @@ def test_requests_queue_mail_for_an_account(
     user = make_user()
     response = client.post(f"{API}/{path}", json={"email": f"  {user.email.upper()} "})
     assert (response.status_code, response.json()) == (HTTPStatus.ACCEPTED, {"status": "ok"})
-    row = db.scalars(select(EmailOutbox).where(EmailOutbox.template == kind)).one()
+    query = select(EmailOutbox).where(EmailOutbox.user_id == user.id, EmailOutbox.template == kind)
+    row = db.scalars(query).one()
     assert (row.user_id, row.to_email) == (user.id, user.email)
 
 
@@ -110,7 +114,7 @@ def test_requests_for_no_usable_account_look_the_same_and_queue_nothing(
         email = make_user(email_verified_at=datetime.now(UTC)).email
     response = client.post(f"{API}/{path}", json={"email": email})
     assert (response.status_code, response.json()) == (HTTPStatus.ACCEPTED, {"status": "ok"})
-    assert db.scalar(select(func.count()).select_from(EmailOutbox)) == 0
+    assert queued(db, email) == 0
 
 
 def test_more_than_three_requests_an_hour_queue_nothing_more(
@@ -121,7 +125,7 @@ def test_more_than_three_requests_an_hour_queue_nothing_more(
         response = client.post(f"{API}/resend-verification", json={"email": user.email})
         # no 429: it would show that the account exists
         assert response.status_code == HTTPStatus.ACCEPTED
-    assert queued(db, EmailKind.VERIFY_EMAIL) == 3
+    assert queued(db, user.email, EmailKind.VERIFY_EMAIL) == 3
 
 
 def test_forgot_password_also_stops_at_three_an_hour(
@@ -132,8 +136,9 @@ def test_forgot_password_also_stops_at_three_an_hour(
         response = client.post(f"{API}/forgot-password", json={"email": user.email})
         assert response.status_code == HTTPStatus.ACCEPTED
         # mark it sent, or the next request would only find the pending reset
-        db.execute(update(EmailOutbox).values(status=EmailStatus.SENT, sent_at=func.now()))
-    assert queued(db, EmailKind.RESET_PASSWORD) == 3
+        sent = update(EmailOutbox).where(EmailOutbox.user_id == user.id)
+        db.execute(sent.values(status=EmailStatus.SENT, sent_at=func.now()))
+    assert queued(db, user.email, EmailKind.RESET_PASSWORD) == 3
 
 
 def test_requests_sent_at_once_still_queue_only_three(test_engine: Engine) -> None:
@@ -185,7 +190,7 @@ def test_a_second_forgot_password_while_one_is_pending_adds_nothing(
     for _ in range(2):
         response = client.post(f"{API}/forgot-password", json={"email": user.email})
         assert response.status_code == HTTPStatus.ACCEPTED
-    assert queued(db, EmailKind.RESET_PASSWORD) == 1
+    assert queued(db, user.email, EmailKind.RESET_PASSWORD) == 1
 
 
 @pytest.mark.parametrize(
