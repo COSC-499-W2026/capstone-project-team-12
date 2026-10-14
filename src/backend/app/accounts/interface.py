@@ -5,7 +5,6 @@ from collections.abc import Callable
 from time import time
 from typing import Annotated
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from fastapi import Depends, Path
 from fastapi.security import OAuth2PasswordBearer
