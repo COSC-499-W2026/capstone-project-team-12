@@ -1,12 +1,11 @@
 import os
-from typing import Annotated
-import pytest
 
-from jwt import encode
 from fastapi.testclient import TestClient
+from jwt import encode
 
-from app.models.accounts import *
+from app.models.accounts import ClassStaff, User
 from app.models.engagement import Class
+from app.models.enums import ClassStaffRole, UserRole
 
 PREFIX = "/api/v1/auth/test"
 ACCESS_TOKEN_KEY = os.getenv("ACCESS_TOKEN_KEY")
@@ -23,14 +22,12 @@ def test_student_cannot_access_class(client: TestClient, make_class: Class, make
     assert response.status_code == 403
 
 
-def test_assistant_access(client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff):
+def test_assistant_access(
+    client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff
+):
     test_class = make_class()
     user = make_user()
-    class_staff = make_class_staff(
-        school_class=test_class,
-        user=user,
-        role=ClassStaffRole.ASSISTANT
-    )
+    make_class_staff(school_class=test_class, user=user, role=ClassStaffRole.ASSISTANT)
     class_id = test_class.id
     jwt = encode({"sub": f"{user.id}"}, str(ACCESS_TOKEN_KEY), ALGORITHM)
     client.headers = {"Authorization": f"Bearer {jwt}"}
@@ -38,14 +35,12 @@ def test_assistant_access(client: TestClient, make_class: Class, make_user: User
     assert response.status_code == 200
 
 
-def test_assistant_cannot_access_teacher(client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff):
+def test_assistant_cannot_access_teacher(
+    client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff
+):
     test_class = make_class()
     user = make_user()
-    make_class_staff(
-        school_class=test_class,
-        user=user,
-        role=ClassStaffRole.ASSISTANT
-    )
+    make_class_staff(school_class=test_class, user=user, role=ClassStaffRole.ASSISTANT)
     class_id = test_class.id
     jwt = encode({"sub": f"{user.id}"}, str(ACCESS_TOKEN_KEY), ALGORITHM)
     client.headers = {"Authorization": f"Bearer {jwt}"}
@@ -53,14 +48,12 @@ def test_assistant_cannot_access_teacher(client: TestClient, make_class: Class, 
     assert response.status_code == 403
 
 
-def test_teacher_access(client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff):
+def test_teacher_access(
+    client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff
+):
     test_class = make_class()
     user = make_user()
-    make_class_staff(
-        school_class=test_class,
-        user=user,
-        role=ClassStaffRole.OWNER
-    )
+    make_class_staff(school_class=test_class, user=user, role=ClassStaffRole.OWNER)
     class_id = test_class.id
     jwt = encode({"sub": f"{user.id}"}, str(ACCESS_TOKEN_KEY), ALGORITHM)
     client.headers = {"Authorization": f"Bearer {jwt}"}
@@ -68,15 +61,13 @@ def test_teacher_access(client: TestClient, make_class: Class, make_user: User, 
     assert response.status_code == 200
 
 
-def test_teacher_cannot_access_another_class(client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff):
+def test_teacher_cannot_access_another_class(
+    client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff
+):
     other_test_class = make_class()
     accessed_test_class = make_class()
     user = make_user()
-    make_class_staff(
-        school_class=other_test_class,
-        user=user,
-        role=ClassStaffRole.OWNER
-    )
+    make_class_staff(school_class=other_test_class, user=user, role=ClassStaffRole.OWNER)
     accessed_class_id = accessed_test_class.id
     jwt = encode({"sub": f"{user.id}"}, str(ACCESS_TOKEN_KEY), ALGORITHM)
     client.headers = {"Authorization": f"Bearer {jwt}"}
