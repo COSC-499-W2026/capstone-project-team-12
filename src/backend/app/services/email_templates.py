@@ -29,11 +29,12 @@ class RenderedEmail:
 
 def render(mail: OutgoingMail, app_base_url: str) -> RenderedEmail:
     """The email for `mail`. A kind with a link needs `mail.token`; the others ignore it."""
+    base = app_base_url.rstrip("/")
     if mail.kind in LINK_PATHS:
         if mail.token is None:
             raise ValueError(f"{mail.kind} needs a token")
         query = urlencode({"token": mail.token})
-        link = f"{app_base_url.rstrip('/')}{LINK_PATHS[mail.kind]}?{query}"
+        link = f"{base}{LINK_PATHS[mail.kind]}?{query}"
     match mail.kind:
         case EmailKind.VERIFY_EMAIL:
             return RenderedEmail(
@@ -74,7 +75,7 @@ def render(mail: OutgoingMail, app_base_url: str) -> RenderedEmail:
             return RenderedEmail(
                 f"You're invited to be a TA for {class_name}",
                 f"You've been invited to help teach {class_name}. Log in to the app to accept "
-                f"or decline:\n\n{app_base_url.rstrip('/')}/\n\nThe invitation expires after "
+                f"or decline:\n\n{base}/\n\nThe invitation expires after "
                 "7 days." + _SIGN_OFF,
             )
     raise ValueError(f"No template for {mail.kind!r}")  # pragma: no cover (match is exhaustive)

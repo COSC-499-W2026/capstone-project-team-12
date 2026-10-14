@@ -15,7 +15,6 @@ _LIMIT_CODES = {452}
 # exceeded"; check this list against the provider we end up choosing. Not plain "quota": "552
 # mailbox quota exceeded" means this recipient's mailbox is full.
 _LIMIT_WORDS = ("5.4.5", "sending limit", "daily limit", "rate limit")
-_RECIPIENT_WORDS = ("mailbox", "over quota")  # about the recipient, so only this mail failed
 _TIMEOUT_SECONDS = 20
 _SERVER_ERRORS = (
     smtplib.SMTPAuthenticationError,
@@ -27,8 +26,6 @@ _SERVER_ERRORS = (
 
 def _is_limit(code: int, reply: bytes | str) -> bool:
     text = (reply.decode(errors="replace") if isinstance(reply, bytes) else reply).lower()
-    if any(word in text for word in _RECIPIENT_WORDS):
-        return False
     return code in _LIMIT_CODES or any(word in text for word in _LIMIT_WORDS)
 
 

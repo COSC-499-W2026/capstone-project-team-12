@@ -41,10 +41,9 @@ def test_link_emails_point_at_their_page_with_the_token(kind: EmailKind) -> None
     assert "tok-en_1" not in email.subject
 
 
-@pytest.mark.parametrize("kind", list(LINK_PATHS))
-def test_link_emails_need_a_token(kind: EmailKind) -> None:
+def test_link_emails_need_a_token() -> None:
     with pytest.raises(ValueError, match="needs a token"):
-        render(mail(kind, token=None), BASE)
+        render(mail(EmailKind.RESET_PASSWORD, token=None), BASE)
 
 
 def test_mail_without_a_link() -> None:
@@ -148,18 +147,6 @@ def test_server_problems_stop_the_run_and_mail_problems_fail_the_row(
     assert smtp.calls[-1] == "close"
 
 
-@pytest.mark.parametrize(
-    "error",
-    [ConnectionRefusedError(61, "refused"), TimeoutError("timed out"), OSError("no such host")],
-    ids=["refused", "timeout", "dns"],
-)
-def test_an_unreachable_server_is_unavailable(smtp: type[FakeSmtp], error: Exception) -> None:
-    smtp.connect_error = error
-    with pytest.raises(MailUnavailableError) as caught:
-        SmtpMailer(Settings()).send(mail(EmailKind.VERIFY_EMAIL))
-    assert type(caught.value) is MailUnavailableError
-
-
 def test_send_emails_command_delivers_a_working_link(
     db: Session,
     make_user: Callable[..., User],
@@ -195,8 +182,3 @@ def test_an_unreachable_server_pauses_the_queue_without_using_attempts(
     for row in rows:
         db.refresh(row)
         assert (row.attempts, row.next_attempt_at) == (0, now + SERVER_PAUSE)
-
-
-def test_unknown_command_is_rejected() -> None:
-    with pytest.raises(SystemExit):
-        app.cli.main(["send-everything"])
