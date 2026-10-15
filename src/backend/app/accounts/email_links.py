@@ -14,7 +14,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.accounts import User
-from app.models.enums import EmailKind
+from app.models.email import EmailOutbox
+from app.models.enums import EmailKind, EmailStatus
 from app.services.email import EmailService
 
 # spec, Rate limits: 3 per hour per address; until requests are counted, queued mails are
@@ -39,7 +40,14 @@ def request_verification_email(email: str, db: Session) -> None:
     user = _active_user(email, db)
     if user is None or user.email_verified_at is not None:
         return
-    _queue_within_limit(user, EmailKind.VERIFY_EMAIL, db)
+    pending = select(EmailOutbox.id).where(
+        EmailOutbox.user_id == user.id,
+        EmailOutbox.template == EmailKind.VERIFY_EMAIL,
+        EmailOutbox.status == EmailStatus.PENDING,
+    )
+    # a pending mail already gets the newest link; the user lock keeps this race-free
+    if db.scalar(pending.limit(1)) is None:
+        _queue_within_limit(user, EmailKind.VERIFY_EMAIL, db)
 
 
 def request_password_reset(email: str, db: Session) -> None:
