@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     locations_per_game: PositiveInt = 5
     max_shuffles_per_session: NonNegativeInt = 2
     max_photo_attempts: PositiveInt = 6
+    # "today" for day-based rules, e.g. carry-over
+    app_timezone: str = "America/Vancouver"
 
 
 @lru_cache
