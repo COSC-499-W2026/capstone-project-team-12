@@ -1,11 +1,12 @@
 """Email verification and the forgot-password request (A3).
 
 A request that can't be served gets the same answer and does nothing: an unknown or inactive
-address, a resend for an address that is already verified, or a reset for one that isn't
-(reset links only go to verified addresses). The 3-per-hour limit works the same way, by
-quietly not queueing, since a 429 only for addresses that exist would give them away. It counts
-queued mails, the verification email sent at sign-up included, not requests. Response times
-still differ a little between real and unknown addresses. Nothing here commits; the route does.
+address, a resend for an address that is already verified or still has a verify mail waiting,
+or a reset for one that isn't verified (reset links only go to verified addresses). The
+3-per-hour limit works the same way, by quietly not queueing, since a 429 only for addresses
+that exist would give them away. It counts queued mails, the verification email sent at
+sign-up included, not requests. Response times still differ a little between real and
+unknown addresses. Nothing here commits; the route does.
 """
 
 from datetime import timedelta
@@ -36,7 +37,7 @@ def verify_email(token: str, db: Session) -> None:
 
 
 def request_verification_email(email: str, db: Session) -> None:
-    """Queue a new verification email for an unverified, active account."""
+    """Queue a verification email for an unverified, active account, unless one is waiting."""
     user = _active_user(email, db)
     if user is None or user.email_verified_at is not None:
         return
@@ -44,6 +45,7 @@ def request_verification_email(email: str, db: Session) -> None:
         EmailOutbox.user_id == user.id,
         EmailOutbox.template == EmailKind.VERIFY_EMAIL,
         EmailOutbox.status == EmailStatus.PENDING,
+        EmailOutbox.to_email == user.email,  # one to an old address will be skipped
     )
     # a pending mail already gets the newest link; the user lock keeps this race-free
     if db.scalar(pending.limit(1)) is None:

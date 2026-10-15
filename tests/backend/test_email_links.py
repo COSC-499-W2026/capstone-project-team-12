@@ -207,9 +207,11 @@ def test_a_second_resend_while_one_is_pending_adds_nothing(
     client: TestClient, db: Session, make_user: Callable[..., User]
 ) -> None:
     user = make_user()
+    EmailService.queue_email(user, EmailKind.VERIFY_EMAIL, db, to_email="old@example.com")
     for _ in range(2):
         response = client.post(f"{API}/resend-verification", json={"email": user.email})
         assert response.status_code == HTTPStatus.ACCEPTED
+    # a pending one to an address the user no longer has doesn't hold the resend back
     assert queued(db, user.email, EmailKind.VERIFY_EMAIL) == 1
 
 
