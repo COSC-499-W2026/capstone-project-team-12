@@ -11,6 +11,7 @@ from app.accounts.interface import (
     can_manage_content,
     get_current_user,
     is_class_staff,
+    require_admin,
     require_class_role,
 )
 from app.config import get_settings
@@ -60,6 +61,11 @@ def teacher_access(
 def content_manager(
     require_content_manager: Annotated[None, Depends(can_manage_content)],
 ) -> None:
+    return
+
+
+@test_router.post("/admin", tags=["test"], status_code=200)
+def admin(require_admin: Annotated[None, Depends(require_admin)]) -> None:
     return
 
 
@@ -183,24 +189,36 @@ def test_cannot_manage_content(test_client: TestClient, make_user: User):
     assert response.status_code == 403
 
 
-def test_admin(client: TestClient, make_user: User):
+def test_admin(test_client: TestClient, make_user: User):
     user = make_user(role=UserRole.ADMIN)
-    jwt = encode(
-        {"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(ACCESS_TOKEN_KEY), ALGORITHM
-    )
-    client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = client.post(f"{PREFIX}/admin")
+    jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
+    test_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = test_client.post(f"{PREFIX}/admin")
     assert response.status_code == 200
 
 
-def test_not_admin(client: TestClient, make_user: User):
-    user = make_user(role=UserRole.STAFF)
-    jwt = encode(
-        {"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(ACCESS_TOKEN_KEY), ALGORITHM
-    )
-    client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = client.post(f"{PREFIX}/admin")
+def test_not_admin(test_client: TestClient, make_user: User):
+    user_1 = make_user()  #  Student by default
+    user_2 = make_user(role=UserRole.STAFF)
+    jwt_1 = encode({"sub": f"{user_1.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
+    test_client.headers = {"Authorization": f"Bearer {jwt_1}"}
+    response_1 = test_client.post(f"{PREFIX}/admin")
+
+    jwt_2 = encode({"sub": f"{user_2.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
+    test_client.headers = {"Authorization": f"Bearer {jwt_2}"}
+    response_2 = test_client.post(f"{PREFIX}/admin")
+
+    assert response_1.status_code == 403 and response_2.status_code == 403
+
+
+def test_inactive_admin(test_client: TestClient, make_user: User):
+    user = make_user(role=UserRole.ADMIN, is_active=False)
+    jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
+    test_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = test_client.post(f"{PREFIX}/admin")
     assert response.status_code == 403
+
+
 def test_is_class_staff(
     make_user: User, make_class: Class, make_class_staff: ClassStaff, db: Session
 ):
