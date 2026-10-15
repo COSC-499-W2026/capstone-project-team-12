@@ -1,5 +1,6 @@
 """The send-emails job against a fake mailer. The job commits, so tests commit their setup first."""
 
+import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from uuid import UUID
@@ -228,3 +229,35 @@ def test_the_address_check_reads_the_database_not_the_session(
     assert send_due_emails(FakeMailer(), db) == SendReport(failed=1)
     db.refresh(row)
     assert row.status == EmailStatus.FAILED
+
+
+def test_an_older_mail_that_retries_doesnt_cancel_a_newer_link(
+    db: Session, make_user: Callable[..., User]
+) -> None:
+    user = make_user()
+    typo = EmailService.queue_email(user, EmailKind.CHANGE_EMAIL, db, to_email="typo@example.com")
+    typo.created_at = func.now() - timedelta(minutes=5)  # tests share one transaction's now()
+    typo.next_attempt_at = func.now() + timedelta(minutes=2)  # its first send failed
+    db.commit()
+    right = EmailService.queue_email(user, EmailKind.CHANGE_EMAIL, db, to_email="right@example.com")
+    db.commit()
+    mailer = FakeMailer()
+    assert send_due_emails(mailer, db) == SendReport(sent=1)
+    typo.next_attempt_at = func.now()  # the retry is due
+    db.commit()
+    assert send_due_emails(mailer, db) == SendReport(failed=1)
+    assert (typo.status, right.status) == (EmailStatus.FAILED, EmailStatus.SENT)
+    raw = mailer.sent[0].token
+    assert raw is not None
+    assert EmailService.consume_token(raw, EmailKind.CHANGE_EMAIL, db).new_email == right.to_email
+
+
+def test_tokens_and_addresses_stay_out_of_repr_and_logs(
+    db: Session, make_user: Callable[..., User], caplog: pytest.LogCaptureFixture
+) -> None:
+    mail = OutgoingMail("a@example.com", EmailKind.RESET_PASSWORD, {}, "secret-token")
+    assert "secret-token" not in repr(mail)
+    row = queue(db, make_user(), EmailKind.EMAIL_CHANGED_NOTICE)
+    with caplog.at_level(logging.ERROR):
+        send_due_emails(FakeMailer(RuntimeError(f"refused {row.to_email}")), db)
+    assert str(row.id) in caplog.text and row.to_email not in caplog.text
