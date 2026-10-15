@@ -231,25 +231,27 @@ def test_the_address_check_reads_the_database_not_the_session(
     assert row.status == EmailStatus.FAILED
 
 
-def test_an_older_mail_that_retries_doesnt_cancel_a_newer_link(
-    db: Session, make_user: Callable[..., User]
+@pytest.mark.parametrize("newer_status", [EmailStatus.PENDING, EmailStatus.FAILED])
+def test_an_older_mail_is_skipped_unless_the_newer_one_failed(
+    db: Session, make_user: Callable[..., User], newer_status: EmailStatus
 ) -> None:
     user = make_user()
     typo = EmailService.queue_email(user, EmailKind.CHANGE_EMAIL, db, to_email="typo@example.com")
     typo.created_at = func.now() - timedelta(minutes=5)  # tests share one transaction's now()
     typo.next_attempt_at = func.now() + timedelta(minutes=2)  # its first send failed
-    db.commit()
     right = EmailService.queue_email(user, EmailKind.CHANGE_EMAIL, db, to_email="right@example.com")
+    right.status = newer_status  # failed: e.g. it gave up after the last attempt
     db.commit()
     mailer = FakeMailer()
-    assert send_due_emails(mailer, db) == SendReport(sent=1)
+    send_due_emails(mailer, db)  # sends the newer one if it's pending
     typo.next_attempt_at = func.now()  # the retry is due
     db.commit()
-    assert send_due_emails(mailer, db) == SendReport(failed=1)
-    assert (typo.status, right.status) == (EmailStatus.FAILED, EmailStatus.SENT)
-    raw = mailer.sent[0].token
-    assert raw is not None
-    assert EmailService.consume_token(raw, EmailKind.CHANGE_EMAIL, db).new_email == right.to_email
+    skipped = newer_status == EmailStatus.PENDING
+    assert send_due_emails(mailer, db) == (SendReport(failed=1) if skipped else SendReport(sent=1))
+    assert typo.status == (EmailStatus.FAILED if skipped else EmailStatus.SENT)
+    # the link sent last still works
+    used = EmailService.consume_token(mailer.sent[-1].token or "", EmailKind.CHANGE_EMAIL, db)
+    assert used.new_email == (right.to_email if skipped else typo.to_email)
 
 
 def test_tokens_and_addresses_stay_out_of_repr_and_logs(

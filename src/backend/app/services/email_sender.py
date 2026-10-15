@@ -38,8 +38,7 @@ _CURRENT_ADDRESS_KINDS = (EmailKind.VERIFY_EMAIL, EmailKind.RESET_PASSWORD, Emai
 
 
 class _SkipError(Exception):
-    """This mail must not go out: the user's address changed after it was queued, or a newer
-    mail of the same kind exists. Its link would replace the one that mail sent."""
+    """The address changed or a newer mail of the kind exists; its link would replace theirs."""
 
 
 class MailQuotaError(Exception):
@@ -81,8 +80,7 @@ def send_due_emails(mailer: Mailer, db: Session, *, limit: int = BATCH_SIZE) -> 
         if row is None:
             break
         try:  # making the token can fail too, and must not leave the row due forever
-            # a savepoint: a failure rolls back the new token but keeps the row locked, so an
-            # overlapping run can't take it before the failure is recorded
+            # a savepoint: a failure drops the new token but keeps the row locked until recorded
             with db.begin_nested():
                 token = _token_for(row, db)
                 mailer.send(
@@ -94,6 +92,7 @@ def send_due_emails(mailer: Mailer, db: Session, *, limit: int = BATCH_SIZE) -> 
             report.failed += 1
             continue
         except MailQuotaError:
+            db.rollback()  # unlock the row first, or two runs pausing at once would deadlock
             _pause_queue(db)
             db.commit()
             report.quota_reached = True
@@ -131,10 +130,11 @@ def _lock_next_due(db: Session) -> EmailOutbox | None:
 def _token_for(row: EmailOutbox, db: Session) -> str | None:
     """Make the row's link token, or raise _SkipError if the mail must not go out.
 
-    The user is locked first and read once, so an address change can't slip in between the
-    check and the token. create_token takes the same lock, so it doesn't wait.
+    The user is locked and read once, for both the address check and the token.
     """
     kind = EmailKind(row.template)
+    if kind not in TOKEN_KINDS:  # no link and no address check, so no need to lock the user
+        return None
     user = db.scalars(
         select(User).where(User.id == row.user_id).with_for_update(key_share=True),
         # the CLI's session keeps objects after commit; read the address as it is now
@@ -142,8 +142,6 @@ def _token_for(row: EmailOutbox, db: Session) -> str | None:
     ).one()
     if kind in _CURRENT_ADDRESS_KINDS and user.email != row.to_email:
         raise _SkipError
-    if kind not in TOKEN_KINDS:
-        return None
     if _newer_mail_exists(row, db):
         raise _SkipError  # e.g. a retried change_email to a typo would cancel the right link
     new_email = row.to_email if kind == EmailKind.CHANGE_EMAIL else None  # sent to the new one
