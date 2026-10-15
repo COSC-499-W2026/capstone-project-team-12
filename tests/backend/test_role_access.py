@@ -21,7 +21,7 @@ from app.models.engagement import Class
 from app.models.enums import ClassStaffRole, UserRole
 
 PREFIX = "/authtest"
-KEY = get_settings().secret_key
+KEY = get_settings().access_token_secret_key
 ALGORITHM = "HS256"
 
 test_app = FastAPI(title="Role Access Test App")

@@ -24,7 +24,7 @@ __all__ = [
 ]
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
-KEY = get_settings().secret_key
+KEY = get_settings().access_token_secret_key
 
 
 def get_current_user(
