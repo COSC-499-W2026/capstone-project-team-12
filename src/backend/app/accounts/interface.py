@@ -1,7 +1,6 @@
 """Public interface of app.accounts: the only module other components may import."""
 
 from collections.abc import Callable
-from time import time
 from typing import Annotated
 from uuid import UUID
 
@@ -35,12 +34,11 @@ def get_current_user(
     try:
         payload = decode(token, str(KEY), ["HS256"], options={"require": ["exp", "sub"]})
         user_id = UUID(payload.get("sub"))
-        expires_at = payload.get("exp")
     except (InvalidTokenError, ValueError) as err:
         raise AppError(
             ErrorCode.NOT_AUTHENTICATED,
             "Something went wrong when validating your account, please login to your account again",
-        )
+        ) from err
     user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
     if user is None:
         raise AppError(

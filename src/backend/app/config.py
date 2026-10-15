@@ -24,7 +24,6 @@ class Settings(BaseSettings):
     max_shuffles_per_session: NonNegativeInt = 2
     max_photo_attempts: PositiveInt = 6
 
-
     @model_validator(mode="after")
     def _check_token_settings(self) -> "Settings":
         if self.app_env == "development":

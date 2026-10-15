@@ -44,22 +44,19 @@ def test_get_settings_is_cached() -> None:
 @pytest.mark.parametrize(
     ("variable", "value", "message"),
     [
-        ("ACCESS_TOKEN_SECRET_KEY", 
-         "change-me", 
-         "ACCESS_TOKEN_SECRET_KEY must be changed from default value"
+        (
+            "ACCESS_TOKEN_SECRET_KEY",
+            "change-me",
+            "ACCESS_TOKEN_SECRET_KEY must be changed from default value",
         ),
-        ("ACCESS_TOKEN_SECRET_KEY",
-         "",
-         "ACCESS_TOKEN_SECRET_KEY not set"
+        ("ACCESS_TOKEN_SECRET_KEY", "", "ACCESS_TOKEN_SECRET_KEY not set"),
+        (
+            "ACCESS_TOKEN_SECRET_KEY",
+            "abcd",
+            "ACCESS_TOKEN_SECRET_KEY must be at least 16 characters.",
         ),
-        ("ACCESS_TOKEN_SECRET_KEY",
-         "abcd",
-         "ACCESS_TOKEN_SECRET_KEY must be at least 16 characters."
-        )
     ],
 )
-
-
 def test_unsafe_token_settings(
     monkeypatch: pytest.MonkeyPatch, variable: str, value: str, message: str
 ) -> None:
