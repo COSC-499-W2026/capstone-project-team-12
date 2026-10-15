@@ -39,12 +39,20 @@ def mail(kind: EmailKind, token: str | None = "tok-en_1", **params: Any) -> Outg
     return OutgoingMail("student@example.com", kind, params, token)
 
 
+# expiry each email promises, matching TOKEN_TTL
+LASTS = {
+    EmailKind.VERIFY_EMAIL: "7 days",
+    EmailKind.RESET_PASSWORD: "60 minutes",
+    EmailKind.SET_PASSWORD: "3 days",
+}
+
+
 @pytest.mark.parametrize("kind", list(LINK_PATHS))
 def test_link_emails_point_at_their_page_with_the_token(kind: EmailKind) -> None:
     email = render(mail(kind), BASE)
     assert f"https://hunt.example.ca{LINK_PATHS[kind]}?token=tok-en_1\n" in email.body
     assert "tok-en_1" not in email.subject
-    assert ("60 minutes" if kind == EmailKind.RESET_PASSWORD else "7 days") in email.body
+    assert LASTS[kind] in email.body
 
 
 def test_link_emails_need_a_token_and_other_kinds_have_no_template_yet() -> None:
