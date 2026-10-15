@@ -1,4 +1,4 @@
-"""Email verification and the forgot-password request (A3).
+"""Email verification, the forgot-password request and the password reset (A3).
 
 A request that can't be served gets the same answer and does nothing: an unknown or inactive
 address, a resend for an address that is already verified or still has a verify mail waiting,
@@ -11,9 +11,11 @@ unknown addresses. Nothing here commits; the route does.
 
 from datetime import timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from app.accounts.password import hash_password, validate_password_security
+from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.email import EmailOutbox
 from app.models.enums import EmailKind, EmailStatus
@@ -22,6 +24,7 @@ from app.services.email import EmailService
 # spec, Rate limits: 3 per hour per address; until requests are counted, queued mails are
 MAILS_PER_HOUR = 3
 _HOUR = timedelta(hours=1)
+_INVALID_LINK = "Verification or reset link is invalid, used or expired"  # as consume_token
 
 
 def verify_email(token: str, db: Session) -> None:
@@ -33,6 +36,35 @@ def verify_email(token: str, db: Session) -> None:
     user = db.get_one(User, used.user_id, populate_existing=True)
     if user.email_verified_at is None:
         user.email_verified_at = func.now()
+    db.flush()
+
+
+def reset_password(token: str, new_password: str, db: Session) -> None:
+    """Set a new password with a link from the reset email.
+
+    The password is checked first, so a weak one (422) doesn't use the link up. A bad link, or
+    one for an account that is deactivated or unverified, is INVALID_TOKEN (400) and stays unused.
+    """
+    validate_password_security(new_password)
+    password_hash = hash_password(new_password)  # slow (bcrypt), so before the user is locked
+    with db.begin_nested():  # a refused link is rolled back, so it isn't used up
+        used = EmailService.consume_token(token, EmailKind.RESET_PASSWORD, db)  # locks the user
+        user = db.get_one(User, used.user_id, populate_existing=True)
+        if not user.is_active or user.email_verified_at is None:
+            raise AppError(ErrorCode.INVALID_TOKEN, _INVALID_LINK)
+    user.password_hash = password_hash
+    # a reset mail still waiting would send another link and keep the one-pending slot taken.
+    # SKIP LOCKED: the send job locks the row before the user, so waiting here could deadlock;
+    # a row it is sending right now just goes out
+    waiting = select(EmailOutbox.id).where(
+        EmailOutbox.user_id == user.id,
+        EmailOutbox.template == EmailKind.RESET_PASSWORD,
+        EmailOutbox.status == EmailStatus.PENDING,
+    )
+    stale = EmailOutbox.id.in_(waiting.with_for_update(skip_locked=True))
+    db.execute(update(EmailOutbox).where(stale).values(status=EmailStatus.FAILED))
+    # spec: resetting also revokes all refresh tokens. They come with A2 (revoke_refresh_tokens);
+    # whichever of A2 and this merges second adds the call here.
     db.flush()
 
 
