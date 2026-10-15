@@ -88,7 +88,7 @@ def retry_delay(attempts: int) -> timedelta:
     return timedelta(minutes=2**attempts)
 
 
-def send_due_emails(db: Session, mailer: Mailer, *, limit: int = BATCH_SIZE) -> SendReport:
+def send_due_emails(mailer: Mailer, db: Session, *, limit: int = BATCH_SIZE) -> SendReport:
     """Send up to `limit` due rows and commit after each one."""
     report = SendReport()
     for _ in range(limit):
