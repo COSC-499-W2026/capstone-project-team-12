@@ -141,6 +141,7 @@ def refused(code: int, reply: bytes) -> smtplib.SMTPRecipientsRefused:
         ("send", refused(550, b"no such user"), smtplib.SMTPRecipientsRefused),
         ("send", smtplib.SMTPDataError(552, b"5.2.2 mailbox full"), smtplib.SMTPDataError),
         ("send", smtplib.SMTPDataError(554, b"message rejected"), smtplib.SMTPDataError),
+        ("send", smtplib.SMTPNotSupportedError("no SMTPUTF8"), smtplib.SMTPNotSupportedError),
     ],
 )
 def test_server_problems_stop_the_run_and_mail_problems_fail_the_row(

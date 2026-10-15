@@ -54,7 +54,9 @@ class SmtpMailer:
             if error.smtp_code in (421, 451) or isinstance(error, smtplib.SMTPSenderRefused):
                 raise MailUnavailableError from error
             raise  # the server rejected this mail
-        except OSError as error:  # disconnected or timed out while sending (SMTPException too)
+        # only a lost connection is the server's; other errors (e.g. SMTPNotSupportedError for
+        # an address the server can't take) are about this mail, or it would pause the queue forever
+        except (smtplib.SMTPServerDisconnected, TimeoutError, ConnectionError) as error:
             raise MailUnavailableError from error
 
     def _message(self, mail: OutgoingMail) -> EmailMessage:
