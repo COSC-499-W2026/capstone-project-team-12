@@ -1,5 +1,6 @@
 """The send-emails job against a fake mailer. The job commits, so tests commit their setup first."""
 
+import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from uuid import UUID
@@ -228,3 +229,37 @@ def test_the_address_check_reads_the_database_not_the_session(
     assert send_due_emails(FakeMailer(), db) == SendReport(failed=1)
     db.refresh(row)
     assert row.status == EmailStatus.FAILED
+
+
+@pytest.mark.parametrize("newer_status", [EmailStatus.PENDING, EmailStatus.FAILED])
+def test_an_older_mail_is_skipped_unless_the_newer_one_failed(
+    db: Session, make_user: Callable[..., User], newer_status: EmailStatus
+) -> None:
+    user = make_user()
+    typo = EmailService.queue_email(user, EmailKind.CHANGE_EMAIL, db, to_email="typo@example.com")
+    typo.created_at = func.now() - timedelta(minutes=5)  # tests share one transaction's now()
+    typo.next_attempt_at = func.now() + timedelta(minutes=2)  # its first send failed
+    right = EmailService.queue_email(user, EmailKind.CHANGE_EMAIL, db, to_email="right@example.com")
+    right.status = newer_status  # failed: e.g. it gave up after the last attempt
+    db.commit()
+    mailer = FakeMailer()
+    send_due_emails(mailer, db)  # sends the newer one if it's pending
+    typo.next_attempt_at = func.now()  # the retry is due
+    db.commit()
+    skipped = newer_status == EmailStatus.PENDING
+    assert send_due_emails(mailer, db) == (SendReport(failed=1) if skipped else SendReport(sent=1))
+    assert typo.status == (EmailStatus.FAILED if skipped else EmailStatus.SENT)
+    # the link sent last still works
+    used = EmailService.consume_token(mailer.sent[-1].token or "", EmailKind.CHANGE_EMAIL, db)
+    assert used.new_email == (right.to_email if skipped else typo.to_email)
+
+
+def test_tokens_and_addresses_stay_out_of_repr_and_logs(
+    db: Session, make_user: Callable[..., User], caplog: pytest.LogCaptureFixture
+) -> None:
+    mail = OutgoingMail("a@example.com", EmailKind.RESET_PASSWORD, {}, "secret-token")
+    assert "secret-token" not in repr(mail)
+    row = queue(db, make_user(), EmailKind.EMAIL_CHANGED_NOTICE)
+    with caplog.at_level(logging.ERROR):
+        send_due_emails(FakeMailer(RuntimeError(f"refused {row.to_email}")), db)
+    assert str(row.id) in caplog.text and row.to_email not in caplog.text
