@@ -18,6 +18,8 @@ from app.services.email import TOKEN_TTL, EmailService
 
 def test_every_link_kind_has_a_lifetime_and_tokens_are_sha256() -> None:
     assert set(TOKEN_TTL) == set(TOKEN_KINDS)
+    assert TOKEN_TTL[EmailKind.RESET_PASSWORD] == timedelta(minutes=60)  # spec, email_tokens
+    assert TOKEN_TTL[EmailKind.VERIFY_EMAIL] == timedelta(days=7)
     assert EmailService.hash_token("abc") == hashlib.sha256(b"abc").hexdigest()
 
 
@@ -148,7 +150,12 @@ def test_a_new_link_replaces_the_older_one_of_the_same_kind(
         EmailService.consume_token(older, EmailKind.RESET_PASSWORD, db)
     # only this user's links of this kind stop working
     assert EmailService.consume_token(newer, EmailKind.RESET_PASSWORD, db).user_id == user.id
-    assert EmailService.consume_token(verify, EmailKind.VERIFY_EMAIL, db).user_id == user.id
+    used = EmailService.consume_token(verify, EmailKind.VERIFY_EMAIL, db)
+    used.used_at = earlier = datetime.now(UTC) - timedelta(days=1)  # tests share one now()
+    db.flush()
+    EmailService.create_token(user, EmailKind.VERIFY_EMAIL, db)  # must not touch a used link
+    db.refresh(used)
+    assert (used.user_id, used.used_at) == (user.id, earlier)
     assert EmailService.consume_token(others, EmailKind.RESET_PASSWORD, db).user_id == other.id
 
 
