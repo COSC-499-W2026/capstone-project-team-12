@@ -20,6 +20,8 @@ def test_every_link_kind_has_a_lifetime_and_tokens_are_sha256() -> None:
     assert set(TOKEN_TTL) == set(TOKEN_KINDS)
     assert TOKEN_TTL[EmailKind.RESET_PASSWORD] == timedelta(minutes=60)  # spec, email_tokens
     assert TOKEN_TTL[EmailKind.VERIFY_EMAIL] == timedelta(days=7)
+    assert TOKEN_TTL[EmailKind.SET_PASSWORD] == timedelta(days=3)
+    assert TOKEN_TTL[EmailKind.CHANGE_EMAIL] == timedelta(hours=24)
     assert EmailService.hash_token("abc") == hashlib.sha256(b"abc").hexdigest()
 
 
