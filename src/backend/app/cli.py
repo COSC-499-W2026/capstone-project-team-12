@@ -17,7 +17,7 @@ logger = logging.getLogger("app.cli")
 
 def send_emails() -> int:
     with SessionLocal() as db:
-        report = send_due_emails(db, SmtpMailer(get_settings()))
+        report = send_due_emails(SmtpMailer(get_settings()), db)
     logger.info(
         "send-emails: %d sent, %d to retry, %d failed%s",
         report.sent,

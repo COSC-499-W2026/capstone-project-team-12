@@ -176,7 +176,7 @@ def test_an_unreachable_server_pauses_the_queue_without_using_attempts(
     rows = [EmailService.queue_email(make_user(), EmailKind.RESET_PASSWORD, db) for _ in range(3)]
     db.commit()
     smtp.connect_error = ConnectionRefusedError(61, "refused")
-    report = send_due_emails(db, SmtpMailer(Settings()))
+    report = send_due_emails(SmtpMailer(Settings()), db)
     assert report == SendReport(server_unavailable=True)
     now = db.execute(select(func.now())).scalar_one()
     for row in rows:
