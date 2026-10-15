@@ -86,7 +86,8 @@ def test_requests_queue_mail_for_an_account(
     path: str,
     kind: EmailKind,
 ) -> None:
-    user = make_user()
+    # resend is for an unverified address, reset only for a verified one
+    user = make_user(email_verified_at=datetime.now(UTC) if path == "forgot-password" else None)
     response = client.post(f"{API}/{path}", json={"email": f"  {user.email.upper()} "})
     assert (response.status_code, response.json()) == (HTTPStatus.ACCEPTED, {"status": "ok"})
     query = select(EmailOutbox).where(EmailOutbox.user_id == user.id, EmailOutbox.template == kind)
@@ -102,16 +103,21 @@ def test_requests_queue_mail_for_an_account(
         ("resend-verification", "verified"),
         ("forgot-password", "none"),
         ("forgot-password", "inactive"),
+        ("forgot-password", "unverified"),
     ],
 )
 def test_requests_for_no_usable_account_look_the_same_and_queue_nothing(
     client: TestClient, db: Session, make_user: Callable[..., User], path: str, account: str
 ) -> None:
     email = "nobody@example.com"
+    # otherwise usable for that route, so only the named reason stops it
+    usable = datetime.now(UTC) if path == "forgot-password" else None
     if account == "inactive":
-        email = make_user(is_active=False).email
+        email = make_user(is_active=False, email_verified_at=usable).email
     elif account == "verified":
         email = make_user(email_verified_at=datetime.now(UTC)).email
+    elif account == "unverified":
+        email = make_user().email
     response = client.post(f"{API}/{path}", json={"email": email})
     assert (response.status_code, response.json()) == (HTTPStatus.ACCEPTED, {"status": "ok"})
     assert queued(db, email) == 0
@@ -131,7 +137,7 @@ def test_more_than_three_requests_an_hour_queue_nothing_more(
 def test_forgot_password_also_stops_at_three_an_hour(
     client: TestClient, db: Session, make_user: Callable[..., User]
 ) -> None:
-    user = make_user()
+    user = make_user(email_verified_at=datetime.now(UTC))
     for _ in range(5):
         response = client.post(f"{API}/forgot-password", json={"email": user.email})
         assert response.status_code == HTTPStatus.ACCEPTED
@@ -186,7 +192,7 @@ def test_requests_sent_at_once_still_queue_only_three(test_engine: Engine) -> No
 def test_a_second_forgot_password_while_one_is_pending_adds_nothing(
     client: TestClient, db: Session, make_user: Callable[..., User]
 ) -> None:
-    user = make_user()
+    user = make_user(email_verified_at=datetime.now(UTC))
     for _ in range(2):
         response = client.post(f"{API}/forgot-password", json={"email": user.email})
         assert response.status_code == HTTPStatus.ACCEPTED

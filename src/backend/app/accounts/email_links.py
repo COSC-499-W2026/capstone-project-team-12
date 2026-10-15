@@ -1,7 +1,9 @@
 """Email verification and the forgot-password request (A3).
 
-The answers never say whether an address has an account: a request for an unknown, inactive
-or already verified address does nothing and looks the same to the caller. The 3-per-hour
+The answers never say whether an address has an account: a request that can't be served does
+nothing and looks the same to the caller. That is an unknown or inactive address, a resend for
+an address that is already verified, or a reset for one that isn't (reset links only go to
+verified addresses). The 3-per-hour
 limit is applied the same way, by quietly not queueing, since a 429 only for addresses that
 exist would give that away. The verification email sent at sign-up counts toward it too.
 Nothing here commits; the route does.
@@ -42,9 +44,12 @@ def request_verification_email(email: str, db: Session) -> None:
 
 
 def request_password_reset(email: str, db: Session) -> None:
-    """Queue a reset email for an active account. A pending one is not doubled (queue_email)."""
+    """Queue a reset email for an active, verified account.
+
+    A pending one is not doubled (queue_email). An unverified user has to verify first.
+    """
     user = _active_user(email, db)
-    if user is not None:
+    if user is not None and user.email_verified_at is not None:
         _queue_within_limit(user, EmailKind.RESET_PASSWORD, db)
 
 
