@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.content import interface as content
-from app.game.draw import draw_locations
+from app.errors import AppError, ErrorCode
+from app.game.draw import _completed, draw_locations
 from app.models.accounts import User
 from app.models.engagement import Class
 from app.models.enums import (
@@ -102,10 +103,59 @@ def test_uncompleted_locations_come_first(
 
     drawn = _ids(draw_locations(student.id, None, JA, BASIC, db))
 
-    assert set(eligible[:4]) <= set(drawn)  # the only 4 not completed yet
-    # completions at another difficulty don't count
-    other = draw_locations(student.id, None, JA, Difficulty.ADVANCING, db)
-    assert len(other) == 5
+    # the only 4 not completed yet
+    assert set(eligible[:4]) <= set(drawn)
+    # completions only count in their own language and difficulty
+    assert _completed(student.id, JA, BASIC, db) == set(eligible[4:])
+    assert _completed(student.id, JA, Difficulty.ADVANCING, db) == set()
+    assert _completed(student.id, Language.KO, BASIC, db) == set()
+
+
+def test_not_enough_eligible_locations(
+    db: Session,
+    make_user: Callable[..., User],
+    eligible: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: frozenset(eligible[:4]))
+
+    with pytest.raises(AppError) as raised:
+        draw_locations(make_user().id, None, JA, BASIC, db)
+    assert raised.value.code == ErrorCode.NOT_ENOUGH_CONTENT
+
+
+@pytest.mark.parametrize("failing", [1, 2])
+def test_snapshot_failures_are_skipped(
+    db: Session,
+    make_user: Callable[..., User],
+    eligible: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
+    failing: int,
+) -> None:
+    # 6 eligible, and the snapshot fails for the first `failing` of them (e.g. deactivated
+    # after the eligible list was read): 1 failure still leaves 5, 2 failures leave only 4.
+    six, gone = eligible[:6], set(eligible[:failing])
+    real_snapshot = content.location_snapshot
+
+    def snapshot(
+        db: Session, location_id: UUID, language: Language, difficulty: Difficulty
+    ) -> content.LocationSnapshot:
+        if location_id in gone:
+            raise content.LocationNotEligibleError(location_id)
+        return real_snapshot(db, location_id, language, difficulty)
+
+    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: frozenset(six))
+    monkeypatch.setattr(content, "location_snapshot", snapshot)
+    # try the failing ones first, so they are always reached
+    monkeypatch.setattr("app.game.draw.random.shuffle", lambda ids: ids.sort(key=six.index))
+
+    if failing == 2:
+        with pytest.raises(AppError) as raised:
+            draw_locations(make_user().id, None, JA, BASIC, db)
+        assert raised.value.code == ErrorCode.NOT_ENOUGH_CONTENT
+        return
+    drawn = _ids(draw_locations(make_user().id, None, JA, BASIC, db))
+    assert drawn == six[1:]
 
 
 @pytest.mark.parametrize("in_class", [False, True])
@@ -124,7 +174,8 @@ def test_quit_today_carries_unplayed_locations_over(
 
     drawn = _ids(draw_locations(student.id, class_id, JA, BASIC, db))
 
-    assert drawn[:2] == eligible[1:3]  # in their old order, before the new draw
+    # in their old order, before the new draw
+    assert drawn[:2] == eligible[1:3]
 
 
 def test_no_carry_over_from_yesterday(
@@ -145,7 +196,19 @@ def test_no_carry_over_from_yesterday(
     assert not set(drawn) & set(eligible[1:3])
 
 
-@pytest.mark.parametrize("case", ["other_mode", "other_difficulty", "reset", "played_since"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "class_then_practice",
+        "practice_then_class",
+        "other_class",
+        "other_difficulty",
+        "reset",
+        "expired",
+        "class_closed",
+        "played_since",
+    ],
+)
 def test_no_carry_over(
     db: Session,
     make_user: Callable[..., User],
@@ -157,16 +220,24 @@ def test_no_carry_over(
     case: str,
 ) -> None:
     student = make_user()
-    earlier = datetime.now(UTC) - timedelta(seconds=10)
-    if case == "other_mode":
-        quit_game(student, class_id=make_class().id)  # a class game, then Practice
+    # the mode of the new game; None is Practice
+    draw_class_id = None
+    if case == "class_then_practice":
+        quit_game(student, class_id=make_class().id)
+    elif case == "practice_then_class":
+        quit_game(student)
+        draw_class_id = make_class().id
+    elif case == "other_class":
+        quit_game(student, class_id=make_class().id)
+        draw_class_id = make_class().id
     elif case == "other_difficulty":
         quit_game(student, difficulty=Difficulty.CHALLENGING)
-    elif case == "reset":
+    elif case in ("reset", "expired", "class_closed"):
         game = quit_game(student)
-        game.end_reason = SessionEndReason.RESET
-    else:  # a later game in the same mode replayed them already
-        quit_game(student, at=earlier)
+        game.end_reason = SessionEndReason(case)
+    else:
+        # a later game in the same mode replayed them already
+        quit_game(student, at=datetime.now(UTC) - timedelta(seconds=10))
         now = datetime.now(UTC)
         make_game_session(
             student, state=SessionState.COMPLETED, completed_at=now, last_activity_at=now
@@ -174,7 +245,7 @@ def test_no_carry_over(
     db.flush()
     _only_carry_over_could_pick(monkeypatch, eligible)
 
-    drawn = _ids(draw_locations(student.id, None, JA, BASIC, db))
+    drawn = _ids(draw_locations(student.id, draw_class_id, JA, BASIC, db))
 
     assert not set(drawn) & set(eligible[1:3])
 
