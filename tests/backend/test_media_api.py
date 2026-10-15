@@ -36,9 +36,16 @@ def media_url(key: str, **query: object) -> str:
 
 
 @pytest.fixture
-def storage(tmp_path: Path, client: TestClient) -> StorageService:
+def media_dir(tmp_path: Path) -> Path:
+    """The media directory, inside the test's own folder so that `tmp_path` itself is just
+    outside it. `save` creates it."""
+    return tmp_path / "media"
+
+
+@pytest.fixture
+def storage(media_dir: Path, client: TestClient) -> StorageService:
     """The StorageService the client's requests use, on an empty temporary media directory."""
-    service = make_service(tmp_path)
+    service = make_service(media_dir)
     client.app.dependency_overrides[get_storage_service] = lambda: service
     return service
 
@@ -96,10 +103,10 @@ def test_link_for_another_file_is_forbidden(
 
 
 def test_expired_link_is_forbidden(
-    client: TestClient, storage: StorageService, tmp_path: Path
+    client: TestClient, storage: StorageService, media_dir: Path
 ) -> None:
     key = storage.save(b"x", ".mp3")
-    expired = make_service(tmp_path, now=NOW - TTL).signed_url(key)
+    expired = make_service(media_dir, now=NOW - TTL).signed_url(key)
     assert error_of(client, expired) == FORBIDDEN
 
 
@@ -113,10 +120,14 @@ def test_valid_link_to_a_missing_file_is_not_found(
 
 @pytest.mark.parametrize("key", ["../outside.jpg", "album.jpg"], ids=["outside", "directory"])
 def test_valid_link_to_something_that_is_not_a_media_file_is_not_found(
-    client: TestClient, storage: StorageService, split_media_url: SplitUrl, tmp_path: Path, key: str
+    client: TestClient,
+    storage: StorageService,
+    split_media_url: SplitUrl,
+    media_dir: Path,
+    key: str,
 ) -> None:
-    (tmp_path / "album.jpg").mkdir()
-    (tmp_path.parent / "outside.jpg").write_bytes(b"x")
+    (media_dir / "album.jpg").mkdir(parents=True)
+    (media_dir.parent / "outside.jpg").write_bytes(b"x")
     assert error_of(client, signed(storage, split_media_url, key)) == NOT_FOUND
 
 
