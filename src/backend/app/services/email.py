@@ -113,11 +113,6 @@ class EmailService:
         ).one()
 
     @staticmethod
-    def generate_token() -> str:
-        """A new random link token. Only hash_token() of it is stored."""
-        return secrets.token_urlsafe(32)
-
-    @staticmethod
     def hash_token(raw: str) -> str:
         """SHA-256 hex of the raw token. This is what email_tokens.token_hash stores."""
         return hashlib.sha256(raw.encode()).hexdigest()
@@ -137,7 +132,7 @@ class EmailService:
         # two requests at once must not both keep a live link
         _lock_user(user.id, db)
         EmailService.invalidate_user_tokens(user.id, kind, db)  # raises if not a link kind
-        raw = EmailService.generate_token()
+        raw = secrets.token_urlsafe(32)  # only its hash is stored
         db.add(
             EmailToken(
                 user_id=user.id,
@@ -205,10 +200,8 @@ def _new_email_for(kind: EmailKind, new_email: str | None) -> str | None:
 
 
 def _lock_user(user_id: UUID, db: Session) -> None:
-    """Lock the user row until the transaction ends.
+    """Lock the user row until the transaction ends, always before touching email_tokens.
 
-    FOR NO KEY UPDATE, so inserts that only reference the user (the foreign key check
-    takes FOR KEY SHARE) are not blocked. create_token and consume_token both take this
-    lock before touching email_tokens, so they always lock in the same order.
+    FOR NO KEY UPDATE, so inserts that only reference the user (FOR KEY SHARE) aren't blocked.
     """
     db.execute(select(User.id).where(User.id == user_id).with_for_update(key_share=True))
