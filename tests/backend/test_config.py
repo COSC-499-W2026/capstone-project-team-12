@@ -41,18 +41,10 @@ def test_get_settings_is_cached() -> None:
     assert get_settings() is get_settings()
 
 
-def test_email_settings_must_be_set_outside_development(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("APP_ENV", "production")
-    with pytest.raises(ValidationError, match="APP_BASE_URL and MAIL_FROM"):
-        Settings(_env_file=None)
-    monkeypatch.setenv("APP_BASE_URL", "https://hunt.example.ca")
-    monkeypatch.setenv("MAIL_FROM", "Hunt <no-reply@hunt.example.ca>")
-    assert Settings(_env_file=None).app_env == "production"
-
-
 @pytest.mark.parametrize(
     ("variable", "value", "message"),
     [
+        ("APP_BASE_URL", "http://localhost:5173", "APP_BASE_URL and MAIL_FROM"),
         ("APP_BASE_URL", "http://127.0.0.1:5173", "APP_BASE_URL and MAIL_FROM"),
         ("SMTP_USERNAME", "apikey", "SMTP_STARTTLS"),  # the password would be sent in the clear
         ("MAIL_FROM", "no-reply", "MAIL_FROM needs an address"),
@@ -64,6 +56,7 @@ def test_unsafe_email_settings(
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("APP_BASE_URL", "https://hunt.example.ca")
     monkeypatch.setenv("MAIL_FROM", "Hunt <no-reply@hunt.example.ca>")
+    assert Settings(_env_file=None).app_env == "production"  # fine until one value is unsafe
     monkeypatch.setenv(variable, value)
     with pytest.raises(ValidationError, match=message):
         Settings(_env_file=None)

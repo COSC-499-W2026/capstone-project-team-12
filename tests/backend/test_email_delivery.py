@@ -174,8 +174,8 @@ def test_send_emails_command_delivers_a_working_link(
     monkeypatch.setattr(app.cli, "SessionLocal", lambda: nullcontext(db))
     monkeypatch.setattr(app.cli, "get_settings", settings)
     assert app.cli.main(["send-emails"]) == 0
-    (message,) = smtp.sent
-    assert message["To"] == row.to_email
+    # other due mail in a dev database may go out too; check ours
+    (message,) = [sent for sent in smtp.sent if sent["To"] == row.to_email]
     db.refresh(row)
     assert row.status == EmailStatus.SENT
     # the token in the link is the one stored (hashed) for the user, so the link works

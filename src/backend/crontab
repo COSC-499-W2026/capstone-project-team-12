@@ -1,5 +1,5 @@
 # Scheduled jobs run by supercronic in the scheduler container.
 # Jobs are added as they are implemented (see Technical Specification, Scheduled Jobs):
-# */10 * * * * python -m app.cli expire-sessions
+# */5 * * * *  python -m app.cli expire-sessions
 # 0 3 * * *   python -m app.cli purge-media
 * * * * *   python -m app.cli send-emails
