@@ -1,5 +1,6 @@
 """Application settings, read from environment variables (see .env.example)."""
 
+from email.utils import parseaddr
 from functools import lru_cache
 
 from pydantic import NonNegativeInt, PositiveInt, model_validator
@@ -31,12 +32,16 @@ class Settings(BaseSettings):
     max_photo_attempts: PositiveInt = 6
 
     @model_validator(mode="after")
-    def _email_settings_outside_development(self) -> "Settings":
-        # links to localhost or a @localhost sender would reach no one outside development
-        if self.app_env != "development" and (
-            "localhost" in self.app_base_url or "@localhost" in self.mail_from
-        ):
+    def _check_email_settings(self) -> "Settings":
+        if "@" not in parseaddr(self.mail_from)[1]:
+            raise ValueError("MAIL_FROM needs an address with an @")
+        if self.app_env == "development":
+            return self
+        # links to this machine would reach no one outside development
+        if any(host in self.app_base_url + self.mail_from for host in ("localhost", "127.0.0.1")):
             raise ValueError("set APP_BASE_URL and MAIL_FROM outside development")
+        if self.smtp_username and not self.smtp_starttls:  # the password would go in the clear
+            raise ValueError("set SMTP_STARTTLS when SMTP_USERNAME is set outside development")
         return self
 
 

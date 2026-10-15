@@ -1,6 +1,7 @@
 """Deliver outbox mail over SMTP: Mailpit in development, the chosen provider in production."""
 
 import smtplib
+import ssl
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid, parseaddr
 
@@ -16,25 +17,19 @@ _LIMIT_CODES = {452}
 # mailbox quota exceeded" means this recipient's mailbox is full.
 _LIMIT_WORDS = ("5.4.5", "sending limit", "daily limit", "rate limit")
 _TIMEOUT_SECONDS = 20
-_SERVER_ERRORS = (
-    smtplib.SMTPAuthenticationError,
-    smtplib.SMTPConnectError,
-    smtplib.SMTPHeloError,
-    smtplib.SMTPSenderRefused,
-)
 
 
-def _is_limit(code: int, reply: bytes | str) -> bool:
+def _says_limit(reply: bytes | str) -> bool:
     text = (reply.decode(errors="replace") if isinstance(reply, bytes) else reply).lower()
-    return code in _LIMIT_CODES or any(word in text for word in _LIMIT_WORDS)
+    return any(word in text for word in _LIMIT_WORDS)
 
 
 class SmtpMailer:
     """A `Mailer` that opens one SMTP connection per mail; the job sends at most 50 a minute.
 
-    A sending limit raises MailQuotaError, and a server that is down, unreachable or refuses our
-    login raises MailUnavailableError, so the job pauses instead of failing every row. Any other
-    error is about this one mail.
+    A sending limit raises MailQuotaError, and a server that is down, busy or fails before the
+    mail itself is sent (connect, STARTTLS, login, our sender) raises MailUnavailableError, so the
+    job pauses instead of failing every row. Any other error is about this one mail.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -44,18 +39,23 @@ class SmtpMailer:
         message = self._message(mail)
         try:
             self._deliver(message)
-        except smtplib.SMTPRecipientsRefused:
+        except smtplib.SMTPRecipientsRefused as error:
+            ((code, reply),) = error.recipients.values()  # one recipient per mail
+            # throttling can be answered here too; a 452 here is this mailbox being full
+            if _says_limit(reply):
+                raise MailQuotaError from error
+            if code in (421, 451):
+                raise MailUnavailableError from error
             raise  # about this address (full, unknown...): a normal failed attempt
         except smtplib.SMTPResponseException as error:
-            if _is_limit(error.smtp_code, error.smtp_error):
-                raise MailQuotaError(str(error)) from error
+            if error.smtp_code in _LIMIT_CODES or _says_limit(error.smtp_error):
+                raise MailQuotaError from error
             # a refused sender (MAIL FROM) is our address or account, so every mail would fail
-            if error.smtp_code in (421, 451) or isinstance(error, _SERVER_ERRORS):
-                raise MailUnavailableError(str(error)) from error
+            if error.smtp_code in (421, 451) or isinstance(error, smtplib.SMTPSenderRefused):
+                raise MailUnavailableError from error
             raise  # the server rejected this mail
-        except OSError as error:
-            # refused, timed out, DNS, disconnected, no STARTTLS (SMTPException is an OSError)
-            raise MailUnavailableError(str(error) or type(error).__name__) from error
+        except OSError as error:  # disconnected or timed out while sending (SMTPException too)
+            raise MailUnavailableError from error
 
     def _message(self, mail: OutgoingMail) -> EmailMessage:
         rendered = render(mail, self._settings.app_base_url)
@@ -70,16 +70,21 @@ class SmtpMailer:
         return message
 
     def _deliver(self, message: EmailMessage) -> None:
-        settings = self._settings
-        smtp = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=_TIMEOUT_SECONDS)
+        config = self._settings
+        smtp: smtplib.SMTP | None = None
         try:
-            if settings.smtp_starttls:
-                smtp.starttls()
-            if settings.smtp_username:
-                smtp.login(settings.smtp_username, settings.smtp_password)
+            try:  # anything before the mail itself is sent is the server's or our login's problem
+                smtp = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=_TIMEOUT_SECONDS)
+                if config.smtp_starttls:  # the default context checks the certificate and host
+                    smtp.starttls(context=ssl.create_default_context())
+                if config.smtp_username:
+                    smtp.login(config.smtp_username, config.smtp_password)
+            except OSError as error:
+                raise MailUnavailableError from error
             smtp.send_message(message)
         except BaseException:
-            smtp.close()
+            if smtp is not None:
+                smtp.close()
             raise
         # the mail is delivered now: a failed QUIT must not roll back its token or resend it
         try:
