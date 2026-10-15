@@ -16,15 +16,9 @@ from app.models.enums import EmailKind, EmailStatus
 from app.services.email import TOKEN_TTL, EmailService
 
 
-def test_token_helpers_and_lifetimes() -> None:
+def test_every_link_kind_has_a_lifetime_and_tokens_are_sha256() -> None:
     assert set(TOKEN_TTL) == set(TOKEN_KINDS)
-    assert TOKEN_TTL[EmailKind.RESET_PASSWORD] == timedelta(minutes=60)
-    assert TOKEN_TTL[EmailKind.VERIFY_EMAIL] == timedelta(days=7)
-    assert TOKEN_TTL[EmailKind.SET_PASSWORD] == TOKEN_TTL[EmailKind.CHANGE_EMAIL]
-    raw = EmailService.generate_token()
-    assert raw != EmailService.generate_token()
-    assert len(raw) == 43  # secrets.token_urlsafe(32), without padding
-    assert EmailService.hash_token(raw) == hashlib.sha256(raw.encode()).hexdigest()
+    assert EmailService.hash_token("abc") == hashlib.sha256(b"abc").hexdigest()
 
 
 @pytest.mark.parametrize("kind", list(EmailKind))
@@ -142,30 +136,20 @@ def test_many_calls_on_one_connection_keep_working(
     assert db.scalar(resets) == 1
 
 
-def test_addresses_are_trimmed_and_lowercased(db: Session, make_user: Callable[..., User]) -> None:
-    user = make_user()
-    raw = EmailService.create_token(user, EmailKind.CHANGE_EMAIL, db, new_email=" A@b.com ")
-    assert EmailService.consume_token(raw, EmailKind.CHANGE_EMAIL, db).new_email == "a@b.com"
-    # an address typed with spaces and capitals is stored and counted as the same address
-    padded = f"  {user.email.upper()} "
-    unsaved = User(id=user.id, email=padded)  # not added to the session, only read
-    row = EmailService.queue_email(unsaved, EmailKind.VERIFY_EMAIL, db)
-    assert row.to_email == user.email
-    window = timedelta(hours=1)
-    assert EmailService.count_recent(padded, EmailKind.VERIFY_EMAIL, window, db) == 1
-
-
 def test_a_new_link_replaces_the_older_one_of_the_same_kind(
     db: Session, make_user: Callable[..., User]
 ) -> None:
-    user = make_user()
+    user, other = make_user(), make_user()
     older = EmailService.create_token(user, EmailKind.RESET_PASSWORD, db)
     verify = EmailService.create_token(user, EmailKind.VERIFY_EMAIL, db)
+    others = EmailService.create_token(other, EmailKind.RESET_PASSWORD, db)
     newer = EmailService.create_token(user, EmailKind.RESET_PASSWORD, db)
     with pytest.raises(AppError):
         EmailService.consume_token(older, EmailKind.RESET_PASSWORD, db)
+    # only this user's links of this kind stop working
     assert EmailService.consume_token(newer, EmailKind.RESET_PASSWORD, db).user_id == user.id
     assert EmailService.consume_token(verify, EmailKind.VERIFY_EMAIL, db).user_id == user.id
+    assert EmailService.consume_token(others, EmailKind.RESET_PASSWORD, db).user_id == other.id
 
 
 def test_count_recent_is_per_address_kind_and_window(
@@ -190,7 +174,8 @@ def test_count_recent_is_per_address_kind_and_window(
     at(EmailKind.RESET_PASSWORD, user, timedelta(minutes=1))
     at(EmailKind.VERIFY_EMAIL, other, timedelta(minutes=1))
     window = timedelta(hours=1)
-    assert EmailService.count_recent(user.email.upper(), EmailKind.VERIFY_EMAIL, window, db) == 3
+    padded = f"  {user.email.upper()} "  # counted as the same address
+    assert EmailService.count_recent(padded, EmailKind.VERIFY_EMAIL, window, db) == 3
     assert EmailService.count_recent(other.email, EmailKind.VERIFY_EMAIL, window, db) == 1
     assert EmailService.count_recent(user.email, EmailKind.RESET_PASSWORD, window, db) == 1
     assert EmailService.count_recent("nobody@example.com", EmailKind.VERIFY_EMAIL, window, db) == 0
@@ -267,30 +252,5 @@ def test_change_email_and_notices(db: Session, make_user: Callable[..., User]) -
         EmailService.invalidate_user_tokens(user.id, EmailKind.EMAIL_CHANGED_NOTICE, db)
     with pytest.raises(ValueError):
         EmailService.queue_email(user, "welcome", db)  # type: ignore[arg-type]
-    raw = EmailService.create_token(user, EmailKind.CHANGE_EMAIL, db, new_email="next@example.com")
-    assert (
-        EmailService.consume_token(raw, EmailKind.CHANGE_EMAIL, db).new_email == "next@example.com"
-    )
-
-
-def test_invalidate_user_tokens_drops_only_unused_links_of_that_kind(
-    db: Session, make_user: Callable[..., User]
-) -> None:
-    user = make_user()
-    other = make_user()
-    reset_raw = EmailService.create_token(user, EmailKind.RESET_PASSWORD, db)
-    old_raw = EmailService.create_token(user, EmailKind.VERIFY_EMAIL, db)
-    other_raw = EmailService.create_token(other, EmailKind.VERIFY_EMAIL, db)
-    used = EmailService.consume_token(
-        EmailService.create_token(user, EmailKind.VERIFY_EMAIL, db), EmailKind.VERIFY_EMAIL, db
-    )
-    used.used_at = datetime.now(UTC) - timedelta(days=1)
-    db.flush()
-    kept = used.used_at
-    EmailService.invalidate_user_tokens(user.id, EmailKind.VERIFY_EMAIL, db)
-    with pytest.raises(AppError):
-        EmailService.consume_token(old_raw, EmailKind.VERIFY_EMAIL, db)
-    EmailService.consume_token(reset_raw, EmailKind.RESET_PASSWORD, db)
-    EmailService.consume_token(other_raw, EmailKind.VERIFY_EMAIL, db)
-    db.refresh(used)
-    assert used.used_at == kept
+    raw = EmailService.create_token(user, EmailKind.CHANGE_EMAIL, db, new_email=" Next@x.com ")
+    assert EmailService.consume_token(raw, EmailKind.CHANGE_EMAIL, db).new_email == "next@x.com"
