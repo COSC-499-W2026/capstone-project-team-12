@@ -67,9 +67,9 @@ pip install -r requirements-dev.txt   # the pinned versions, so everyone exports
 python ../../utils/export_openapi.py
 ```
 
-CI fails with "out of date" if you forget. For every new route:
+CI fails with "out of date" if you forget. When you add a route:
 
-- Set `operation_id` in camelCase, following the Operation IDs table in `docs/api-conventions.md` (for example `operation_id="pauseGame"`). FastAPI's default names don't follow it.
-- List the error statuses the route can return with `responses=error_responses(...)` from `app.errors`, for example `error_responses(HTTPStatus.CONFLICT)`. Errors raised as `AppError` in a service are invisible to FastAPI, so they only appear in the document if the route lists them. 422 is already added for every route under `/api/v1`.
+- **Required:** set `operation_id` in camelCase, following the Operation IDs table in `docs/api-conventions.md` (for example `operation_id="pauseGame"`). FastAPI's default names don't follow it, and a test fails if one is missing.
+- **Recommended:** if the route can return other errors (e.g. 404, 409), list them with `responses=error_responses(...)` from `app.errors`, for example `error_responses(HTTPStatus.CONFLICT)`, so they show up in the spec. Errors raised as `AppError` in a service are invisible to FastAPI otherwise. Reviewers can point out missing ones, but it isn't a blocker. 422 is already added for every route under `/api/v1`.
 
 A failing CI check must be fixed before the PR can be merged.
