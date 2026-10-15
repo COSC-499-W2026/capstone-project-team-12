@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from uuid import UUID
 
 import pytest
 from sqlalchemy import func, select, text
@@ -44,6 +45,12 @@ def db_now(db: Session) -> datetime:
     return db.execute(select(func.now())).scalar_one()
 
 
+def tokens(db: Session, *user_ids: UUID) -> int:
+    """Link tokens of these users only, so links left in a dev database don't count."""
+    query = select(func.count()).where(EmailToken.user_id.in_(user_ids))
+    return db.execute(query).scalar_one()
+
+
 def test_priority_one_goes_first(db: Session, make_user: Callable[..., User]) -> None:
     verify = queue(db, make_user(), EmailKind.VERIFY_EMAIL)
     notice = queue(db, make_user(), EmailKind.EMAIL_CHANGED_NOTICE)
@@ -61,7 +68,7 @@ def test_the_link_token_is_made_when_the_mail_is_sent(
 ) -> None:
     user = make_user()
     queue(db, user, EmailKind.RESET_PASSWORD)
-    assert db.scalar(select(func.count()).select_from(EmailToken)) == 0
+    assert tokens(db, user.id) == 0
     mailer = FakeMailer()
     send_due_emails(db, mailer)
     (mail,) = mailer.sent
@@ -94,7 +101,7 @@ def test_mail_without_a_link_gets_no_token(
     mailer = FakeMailer()
     send_due_emails(db, mailer)
     assert mailer.sent == [OutgoingMail(row.to_email, kind, {"class_name": "JAPN 101"}, None)]
-    assert db.scalar(select(func.count()).select_from(EmailToken)) == 0
+    assert tokens(db, row.user_id) == 0
 
 
 def test_a_failed_send_waits_and_keeps_the_older_link(
@@ -108,7 +115,7 @@ def test_a_failed_send_waits_and_keeps_the_older_link(
     assert (row.status, row.attempts) == (EmailStatus.PENDING, 1)
     assert row.next_attempt_at == db_now(db) + retry_delay(1)
     # the failed send's token was rolled back, so the link already sent still works
-    assert db.scalar(select(func.count()).select_from(EmailToken)) == 1
+    assert tokens(db, user.id) == 1
     assert EmailService.consume_token(older, EmailKind.VERIFY_EMAIL, db).user_id == user.id
     # not due again yet
     assert send_due_emails(db, FakeMailer()) == SendReport()
@@ -142,7 +149,7 @@ def test_a_sending_limit_pauses_the_queue_without_counting(
         )
     db.refresh(later)
     assert later.next_attempt_at == pause_end + timedelta(minutes=5)  # not moved earlier
-    assert db.scalar(select(func.count()).select_from(EmailToken)) == 0
+    assert tokens(db, *(row.user_id for row in [*rows, later])) == 0
     assert send_due_emails(db, FakeMailer()) == SendReport()  # nothing due during the pause
 
 
