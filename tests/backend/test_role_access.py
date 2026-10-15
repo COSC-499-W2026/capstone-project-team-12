@@ -151,3 +151,17 @@ def test_not_class_staff(make_user: User, make_class: Class, db: Session):
     user = make_user()
     test_class = make_class()
     assert not is_class_staff(user.id, test_class.id, db)
+
+
+def test_different_class_staff(
+    make_user: User, make_class: Class, make_class_staff: ClassStaff, db: Session
+):
+    teacher_1 = make_user()
+    test_class_1 = make_class()
+    make_class_staff(school_class=test_class_1, user=teacher_1)
+    teacher_2 = make_user()
+    test_class_2 = make_class()
+    make_class_staff(school_class=test_class_2, user=teacher_2)
+    assert not is_class_staff(teacher_1.id, test_class_2.id, db) and not is_class_staff(
+        teacher_2.id, test_class_1.id, db
+    )
