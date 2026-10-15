@@ -33,16 +33,10 @@ def get_current_user(
 ) -> User:
     """Returns the authenticated user represented by the access token."""
     try:
-        payload = decode(token, str(KEY), ["HS256"])
+        payload = decode(token, str(KEY), ["HS256"], options={"require": ["exp", "sub"]})
         user_id = UUID(payload.get("sub"))
-        expires_at = str(payload.get("exp"))
-    except (InvalidTokenError, ValueError, TypeError) as err:
-        raise AppError(
-            ErrorCode.NOT_AUTHENTICATED,
-            "Something went wrong when validating your account, please login to your account again",
-        ) from err
-
-    if int(expires_at) < int(time()):
+        expires_at = payload.get("exp")
+    except (InvalidTokenError, ValueError) as err:
         raise AppError(
             ErrorCode.NOT_AUTHENTICATED,
             "Something went wrong when validating your account, please login to your account again",

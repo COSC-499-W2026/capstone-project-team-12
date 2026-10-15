@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     database_url: str = "postgresql+psycopg://hunt:hunt@localhost:5432/hunt"
     secret_key: str = "change-me"
+    access_token_secret_key: str = "change-me"
     smtp_host: str = "localhost"
     smtp_port: int = 1025
     media_dir: str = "/data/media"
