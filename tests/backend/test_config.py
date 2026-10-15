@@ -37,5 +37,11 @@ def test_gps_radius_must_be_positive(monkeypatch: pytest.MonkeyPatch, radius: st
         Settings(_env_file=None)
 
 
+def test_app_timezone_must_exist(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_TIMEZONE", "America/Vancover")
+    with pytest.raises(ValidationError, match="app_timezone"):
+        Settings(_env_file=None)
+
+
 def test_get_settings_is_cached() -> None:
     assert get_settings() is get_settings()

@@ -1,8 +1,9 @@
 """Application settings, read from environment variables (see .env.example)."""
 
 from functools import lru_cache
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import NonNegativeInt, PositiveInt
+from pydantic import NonNegativeInt, PositiveInt, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +25,16 @@ class Settings(BaseSettings):
     max_photo_attempts: PositiveInt = 6
     # "today" for day-based rules, e.g. carry-over
     app_timezone: str = "America/Vancouver"
+
+    @field_validator("app_timezone")
+    @classmethod
+    def _known_timezone(cls, value: str) -> str:
+        # fail at startup, not with a 500 when the first game starts
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as error:
+            raise ValueError(f"unknown time zone {value!r}") from error
+        return value
 
 
 @lru_cache
