@@ -1,12 +1,11 @@
 """Email verification and the forgot-password request (A3).
 
-The answers never say whether an address has an account: a request that can't be served does
-nothing and looks the same to the caller. That is an unknown or inactive address, a resend for
-an address that is already verified, or a reset for one that isn't (reset links only go to
-verified addresses). The 3-per-hour
-limit is applied the same way, by quietly not queueing, since a 429 only for addresses that
-exist would give that away. The verification email sent at sign-up counts toward it too.
-Nothing here commits; the route does.
+A request that can't be served gets the same answer and does nothing: an unknown or inactive
+address, a resend for an address that is already verified, or a reset for one that isn't
+(reset links only go to verified addresses). The 3-per-hour limit works the same way, by
+quietly not queueing, since a 429 only for addresses that exist would give them away. It counts
+queued mails, the verification email sent at sign-up included, not requests. Response times
+still differ a little between real and unknown addresses. Nothing here commits; the route does.
 """
 
 from datetime import timedelta
@@ -18,8 +17,8 @@ from app.models.accounts import User
 from app.models.enums import EmailKind
 from app.services.email import EmailService
 
-# spec, Rate limits: forgot password and resend verification, 3 per hour per email address
-REQUESTS_PER_HOUR = 3
+# spec, Rate limits: 3 per hour per address; until requests are counted, queued mails are
+MAILS_PER_HOUR = 3
 _HOUR = timedelta(hours=1)
 
 
@@ -72,5 +71,5 @@ def _active_user(email: str, db: Session) -> User | None:
 
 
 def _queue_within_limit(user: User, kind: EmailKind, db: Session) -> None:
-    if EmailService.count_recent(user.email, kind, _HOUR, db) < REQUESTS_PER_HOUR:
+    if EmailService.count_recent(user.email, kind, _HOUR, db) < MAILS_PER_HOUR:
         EmailService.queue_email(user, kind, db)

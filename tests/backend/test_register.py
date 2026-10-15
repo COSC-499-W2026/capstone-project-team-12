@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from app.accounts.register import RegisterRequest, register_account
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
+from app.models.email import EmailOutbox
+from app.models.enums import EmailKind
 
 
 def test_valid_register(db: Session):
@@ -19,6 +21,13 @@ def test_valid_register(db: Session):
     rows: Row = result.first()
     for row in rows:
         assert row.lower() == request.username.lower()
+
+
+def test_sign_up_queues_a_verification_email(db: Session) -> None:
+    request = RegisterRequest(email="new@email.com", username="NewStudent", password="Valid1pass")
+    register_account(request, db)
+    row = db.scalars(select(EmailOutbox).where(EmailOutbox.to_email == request.email)).one()
+    assert row.template == EmailKind.VERIFY_EMAIL
 
 
 def test_valid_hash(db: Session):

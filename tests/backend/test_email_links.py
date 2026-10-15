@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, delete, func, select, update
+from sqlalchemy import Engine, delete, func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.accounts.email_links import request_verification_email
@@ -184,6 +184,7 @@ def test_requests_sent_at_once_still_queue_only_three(test_engine: Engine) -> No
             assert check.scalar(rows) == 3
     finally:
         with Session(test_engine) as cleanup:
+            cleanup.execute(text("SET lock_timeout = '10s'"))  # a stuck thread can't hang pytest
             cleanup.execute(delete(EmailOutbox).where(EmailOutbox.user_id == user.id))
             cleanup.execute(delete(User).where(User.id == user.id))
             cleanup.commit()
