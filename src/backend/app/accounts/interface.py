@@ -1,14 +1,13 @@
 """Public interface of app.accounts: the only module other components may import."""
 
-import os
 from collections.abc import Callable
 from time import time
-from typing import Annotated, Any
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, Path
 from fastapi.security import OAuth2PasswordBearer
-from jwt import decode, InvalidTokenError
+from jwt import InvalidTokenError, decode
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -28,22 +27,22 @@ __all__ = [
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 KEY = get_settings().secret_key
 
+
 def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)], db: Annotated[Session, Depends(get_db)]
 ) -> User:
     """Returns the authenticated user represented by the access token."""
-    payload: dict[str, Any]
     try:
         payload = decode(token, str(KEY), ["HS256"])
         user_id = UUID(payload.get("sub"))
-        expires_at = payload.get("exp")
+        expires_at = str(payload.get("exp"))
     except (InvalidTokenError, ValueError, TypeError) as err:
         raise AppError(
             ErrorCode.NOT_AUTHENTICATED,
             "Something went wrong when validating your account, please login to your account again",
         ) from err
-    
-    if expires_at < int(time()):
+
+    if int(expires_at) < int(time()):
         raise AppError(
             ErrorCode.NOT_AUTHENTICATED,
             "Something went wrong when validating your account, please login to your account again",
@@ -55,10 +54,7 @@ def get_current_user(
             "Something went wrong when validating your account, please login to your account again",
         )
     if not user.is_active:
-        raise AppError(
-            ErrorCode.ACCOUNT_DISABLED,
-            "Your account has been disabled."
-        )
+        raise AppError(ErrorCode.ACCOUNT_DISABLED, "Your account has been disabled.")
     return user
 
 

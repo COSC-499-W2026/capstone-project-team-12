@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import can_manage_content, require_class_role, get_current_user
+from app.accounts.interface import can_manage_content, get_current_user, require_class_role
 from app.accounts.register import RegisterRequest, register_account
 from app.db import get_db
 from app.models.accounts import User
@@ -23,10 +23,8 @@ def register(request: RegisterRequest, db: Annotated[Session, Depends(get_db)]) 
 
 
 #  TEST ROUTES
-@test_router.post("/restricted", tags="test", status_code=200)
-def test_needs_login(
-    user: Annotated[User, Depends(get_current_user)]
-) -> None:
+@test_router.post("/restricted", tags=["test"], status_code=200)
+def test_needs_login(user: Annotated[User, Depends(get_current_user)]) -> None:
     return
 
 
