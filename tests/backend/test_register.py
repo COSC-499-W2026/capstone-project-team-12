@@ -1,7 +1,10 @@
+from uuid import uuid4
+
 import pytest
 from bcrypt import checkpw
 from fastapi.testclient import TestClient
 from sqlalchemy import Result, Row, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.accounts.register import RegisterRequest, register_account
@@ -9,6 +12,7 @@ from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.email import EmailOutbox
 from app.models.enums import EmailKind
+from app.services.email import EmailService
 
 
 def test_valid_register(db: Session):
@@ -28,6 +32,19 @@ def test_sign_up_queues_a_verification_email(db: Session) -> None:
     register_account(request, db)
     row = db.scalars(select(EmailOutbox).where(EmailOutbox.to_email == request.email)).one()
     assert row.template == EmailKind.VERIFY_EMAIL
+
+
+def test_an_unexpected_integrity_error_is_raised(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise IntegrityError("INSERT INTO email_outbox", {}, Exception("another constraint"))
+
+    monkeypatch.setattr(EmailService, "queue_email", fail)
+    name = uuid4().hex[:12]
+    request = RegisterRequest(email=f"{name}@example.com", username=name, password="Valid1pass")
+    with pytest.raises(IntegrityError):
+        register_account(request, db)
 
 
 def test_valid_hash(db: Session):

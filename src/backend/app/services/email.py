@@ -24,8 +24,8 @@ from app.models.enums import EmailKind
 TOKEN_TTL = {
     EmailKind.VERIFY_EMAIL: timedelta(days=7),
     EmailKind.RESET_PASSWORD: timedelta(minutes=60),
-    EmailKind.SET_PASSWORD: timedelta(days=7),
-    EmailKind.CHANGE_EMAIL: timedelta(days=7),
+    EmailKind.SET_PASSWORD: timedelta(days=3),
+    EmailKind.CHANGE_EMAIL: timedelta(hours=24),
 }
 
 INVALID_LINK = "Verification or reset link is invalid, used or expired"
@@ -123,7 +123,7 @@ class EmailService:
     ) -> str:
         """Store a hashed token and return the raw token once.
 
-        Reset lasts 60 minutes. Verify, set-password and change-email last 7 days.
+        Reset lasts 60 minutes, change-email 24 hours, set-password 3 days, verify 7 days.
         change_email needs new_email; the other kinds must not pass one. The user's
         older unused links of the same kind stop working, so only the newest one does.
         """

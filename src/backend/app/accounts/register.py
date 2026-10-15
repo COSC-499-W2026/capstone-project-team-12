@@ -70,6 +70,8 @@ def register_account(request: RegisterRequest, db: Session) -> None:
             raise AppError(
                 ErrorCode.USERNAME_TAKEN, "The username you have chosen is already in use."
             ) from err
+        # any other constraint is a real error
+        raise
 
 
 def username_exists(username: str, db: Session) -> bool:

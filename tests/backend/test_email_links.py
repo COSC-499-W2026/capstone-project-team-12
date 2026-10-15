@@ -131,6 +131,9 @@ def test_more_than_three_requests_an_hour_queue_nothing_more(
         response = client.post(f"{API}/resend-verification", json={"email": user.email})
         # no 429: it would show that the account exists
         assert response.status_code == HTTPStatus.ACCEPTED
+        # mark it sent, or the next request would only find the pending one
+        sent = update(EmailOutbox).where(EmailOutbox.user_id == user.id)
+        db.execute(sent.values(status=EmailStatus.SENT, sent_at=func.now()))
     assert queued(db, user.email, EmailKind.VERIFY_EMAIL) == 3
 
 
@@ -147,7 +150,7 @@ def test_forgot_password_also_stops_at_three_an_hour(
     assert queued(db, user.email, EmailKind.RESET_PASSWORD) == 3
 
 
-def test_requests_sent_at_once_still_queue_only_three(test_engine: Engine) -> None:
+def test_requests_sent_at_once_still_queue_only_one(test_engine: Engine) -> None:
     """Five resend requests racing, each in its own committed transaction (the savepoint
     session the other tests use can't run two at once)."""
     with Session(test_engine, expire_on_commit=False) as setup:
@@ -181,7 +184,7 @@ def test_requests_sent_at_once_still_queue_only_three(test_engine: Engine) -> No
             raise errors[0]
         with Session(test_engine) as check:
             rows = select(func.count()).where(EmailOutbox.user_id == user.id)
-            assert check.scalar(rows) == 3
+            assert check.scalar(rows) == 1
     finally:
         with Session(test_engine) as cleanup:
             cleanup.execute(text("SET lock_timeout = '10s'"))  # a stuck thread can't hang pytest
@@ -198,6 +201,16 @@ def test_a_second_forgot_password_while_one_is_pending_adds_nothing(
         response = client.post(f"{API}/forgot-password", json={"email": user.email})
         assert response.status_code == HTTPStatus.ACCEPTED
     assert queued(db, user.email, EmailKind.RESET_PASSWORD) == 1
+
+
+def test_a_second_resend_while_one_is_pending_adds_nothing(
+    client: TestClient, db: Session, make_user: Callable[..., User]
+) -> None:
+    user = make_user()
+    for _ in range(2):
+        response = client.post(f"{API}/resend-verification", json={"email": user.email})
+        assert response.status_code == HTTPStatus.ACCEPTED
+    assert queued(db, user.email, EmailKind.VERIFY_EMAIL) == 1
 
 
 @pytest.mark.parametrize(

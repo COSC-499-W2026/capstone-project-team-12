@@ -73,7 +73,14 @@ def request_verification_email(email: str, db: Session) -> None:
     user = _active_user(email, db)
     if user is None or user.email_verified_at is not None:
         return
-    _queue_within_limit(user, EmailKind.VERIFY_EMAIL, db)
+    pending = select(EmailOutbox.id).where(
+        EmailOutbox.user_id == user.id,
+        EmailOutbox.template == EmailKind.VERIFY_EMAIL,
+        EmailOutbox.status == EmailStatus.PENDING,
+    )
+    # a pending mail already gets the newest link; the user lock keeps this race-free
+    if db.scalar(pending.limit(1)) is None:
+        _queue_within_limit(user, EmailKind.VERIFY_EMAIL, db)
 
 
 def request_password_reset(email: str, db: Session) -> None:
