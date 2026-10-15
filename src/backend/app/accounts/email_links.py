@@ -61,7 +61,7 @@ def reset_password(token: str, new_password: str, db: Session) -> None:
     )
     stale = EmailOutbox.id.in_(waiting.with_for_update(skip_locked=True))
     db.execute(update(EmailOutbox).where(stale).values(status=EmailStatus.FAILED))
-    # an unused set-password link (7 days) could overwrite the new password
+    # an unused set-password link (3 days) could overwrite the new password
     EmailService.invalidate_user_tokens(user.id, EmailKind.SET_PASSWORD, db)
     # spec: resetting also revokes all refresh tokens. They come with A2 (revoke_refresh_tokens);
     # whichever of A2 and this merges second adds the call here.
