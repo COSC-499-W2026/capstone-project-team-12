@@ -28,7 +28,7 @@ TOKEN_TTL = {
     EmailKind.CHANGE_EMAIL: timedelta(hours=24),
 }
 
-_INVALID_LINK = "Verification or reset link is invalid, used or expired"
+INVALID_LINK = "Verification or reset link is invalid, used or expired"
 
 _PENDING_RESET = text(ONE_PENDING_RESET_WHERE)  # see models/email.py
 
@@ -168,7 +168,7 @@ class EmailService:
             .returning(EmailToken)
         ).one_or_none()
         if token is None:
-            raise AppError(ErrorCode.INVALID_TOKEN, _INVALID_LINK)
+            raise AppError(ErrorCode.INVALID_TOKEN, INVALID_LINK)
         return token
 
     @staticmethod

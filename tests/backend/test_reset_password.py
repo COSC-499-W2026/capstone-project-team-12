@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.accounts.password import hash_password
+from app.errors import AppError
 from app.models.accounts import User
 from app.models.email import EmailToken
 from app.models.enums import EmailKind, EmailStatus
@@ -27,6 +28,11 @@ def test_a_reset_link_sets_the_new_password_once(
     user = make_user(email_verified_at=datetime.now(UTC), password_hash=hash_password(old))
     token = EmailService.create_token(user, EmailKind.RESET_PASSWORD, db)
     waiting = EmailService.queue_email(user, EmailKind.RESET_PASSWORD, db)  # e.g. paused
+    others = [
+        EmailService.queue_email(make_user(), EmailKind.RESET_PASSWORD, db),
+        EmailService.queue_email(user, EmailKind.VERIFY_EMAIL, db),
+    ]
+    setup = EmailService.create_token(user, EmailKind.SET_PASSWORD, db)
     response = client.post(URL, json={"token": token, "new_password": NEW})
     assert (response.status_code, response.json()) == (HTTPStatus.OK, {"status": "ok"})
     db.refresh(user)
@@ -35,17 +41,24 @@ def test_a_reset_link_sets_the_new_password_once(
     assert not checkpw(old.encode(), user.password_hash.encode())
     db.refresh(waiting)
     assert waiting.status == EmailStatus.FAILED  # won't send another link
+    for row in others:  # only this user's reset mail
+        db.refresh(row)
+        assert row.status == EmailStatus.PENDING
+    with pytest.raises(AppError):  # it can't overwrite the new password
+        EmailService.consume_token(setup, EmailKind.SET_PASSWORD, db)
     again = client.post(URL, json={"token": token, "new_password": "Another1pass"})
     assert again.status_code == HTTPStatus.BAD_REQUEST
     assert again.json()["error"]["code"] == "INVALID_TOKEN"
 
 
-def test_a_weak_password_doesnt_use_the_link_up(
-    client: TestClient, db: Session, make_user: Callable[..., User]
+# too short, over bcrypt's 70 bytes, over the request's 200 characters
+@pytest.mark.parametrize("bad", ["short", "Aa1" + "x" * 68, "Aa1" + "x" * 200])
+def test_a_rejected_password_doesnt_use_the_link_up(
+    client: TestClient, db: Session, make_user: Callable[..., User], bad: str
 ) -> None:
     user = make_user(email_verified_at=datetime.now(UTC))
     token = EmailService.create_token(user, EmailKind.RESET_PASSWORD, db)
-    weak = client.post(URL, json={"token": token, "new_password": "short"})
+    weak = client.post(URL, json={"token": token, "new_password": bad})
     assert (weak.status_code, weak.json()["error"]["code"]) == (
         HTTPStatus.UNPROCESSABLE_ENTITY,
         "VALIDATION_ERROR",

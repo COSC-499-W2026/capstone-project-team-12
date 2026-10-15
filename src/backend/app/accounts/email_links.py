@@ -19,12 +19,11 @@ from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.email import EmailOutbox
 from app.models.enums import EmailKind, EmailStatus
-from app.services.email import EmailService
+from app.services.email import INVALID_LINK, EmailService
 
 # spec, Rate limits: 3 per hour per address; until requests are counted, queued mails are
 MAILS_PER_HOUR = 3
 _HOUR = timedelta(hours=1)
-_INVALID_LINK = "Verification or reset link is invalid, used or expired"  # as consume_token
 
 
 def verify_email(token: str, db: Session) -> None:
@@ -51,7 +50,7 @@ def reset_password(token: str, new_password: str, db: Session) -> None:
         used = EmailService.consume_token(token, EmailKind.RESET_PASSWORD, db)  # locks the user
         user = db.get_one(User, used.user_id, populate_existing=True)
         if not user.is_active or user.email_verified_at is None:
-            raise AppError(ErrorCode.INVALID_TOKEN, _INVALID_LINK)
+            raise AppError(ErrorCode.INVALID_TOKEN, INVALID_LINK)
     user.password_hash = password_hash
     # a reset mail still waiting would send another link and keep the one-pending slot taken.
     # SKIP LOCKED: the send job locks the row before the user, so waiting here could deadlock;
@@ -63,6 +62,8 @@ def reset_password(token: str, new_password: str, db: Session) -> None:
     )
     stale = EmailOutbox.id.in_(waiting.with_for_update(skip_locked=True))
     db.execute(update(EmailOutbox).where(stale).values(status=EmailStatus.FAILED))
+    # an unused set-password link (7 days) could overwrite the new password
+    EmailService.invalidate_user_tokens(user.id, EmailKind.SET_PASSWORD, db)
     # spec: resetting also revokes all refresh tokens. They come with A2 (revoke_refresh_tokens);
     # whichever of A2 and this merges second adds the call here.
     db.flush()
