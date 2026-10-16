@@ -92,15 +92,25 @@ class StorageService:
         return path
 
     def stored_file(self, key: str) -> StoredFile:
-        """The existing file `key`; `MediaNotFoundError` if there is no such file."""
+        """The existing media file `key`; `MediaNotFoundError` if there is no such file.
+
+        Only files with a suffix in `MEDIA_TYPES` count, so a `.part` file left by an interrupted
+        `save` is never served. A `PermissionError` is a server fault, not a missing file, so it
+        is not turned into a 404.
+        """
         try:
             path = self._inside_root(key)
             stat = path.stat()
-        except (ValueError, FileNotFoundError, NotADirectoryError):
+        except PermissionError:
+            raise
+        except (ValueError, RuntimeError, OSError):
+            # Outside the media directory, missing, a name that is too long, or a symlink loop
+            # (Python 3.11's resolve raises RuntimeError for that).
             raise MediaNotFoundError from None
-        if not S_ISREG(stat.st_mode):
+        media_type = MEDIA_TYPES.get(path.suffix)
+        if media_type is None or not S_ISREG(stat.st_mode):
             raise MediaNotFoundError
-        return StoredFile(path, MEDIA_TYPES.get(path.suffix, "application/octet-stream"), stat)
+        return StoredFile(path, media_type, stat)
 
     def save(self, data: bytes, suffix: str) -> str:
         """Store `data` under a new key, a random UUID plus `suffix` (e.g. ".mp3"); return the key.

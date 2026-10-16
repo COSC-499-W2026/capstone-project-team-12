@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import os
 import time
 from collections.abc import Callable
 from http import HTTPStatus
@@ -131,20 +132,53 @@ def test_stored_file_is_the_saved_file_with_its_media_type(tmp_path: Path) -> No
     assert stored.stat.st_size == len(b"png bytes")
 
 
-def test_stored_file_without_a_known_extension_is_binary(tmp_path: Path) -> None:
-    (tmp_path / "clip").write_bytes(b"x")
-    assert make_service(tmp_path).stored_file("clip").media_type == "application/octet-stream"
+NOT_A_MEDIA_FILE = {
+    "missing": "missing.jpg",
+    "directory": "album.jpg",
+    "outside the media directory": "../outside.jpg",
+    "the media directory itself": "",
+    "under a file": "a.jpg/b.jpg",
+    "no suffix": "clip",
+    "partial save": "clip.mp3.part",
+    "name too long": "a" * 300 + ".jpg",
+}
 
 
-@pytest.mark.parametrize("key", ["missing.jpg", "photos", "../outside.jpg", "", "a.jpg/b"])
-def test_stored_file_is_not_found_without_a_file(tmp_path: Path, key: str) -> None:
+@pytest.mark.parametrize("key", NOT_A_MEDIA_FILE.values(), ids=NOT_A_MEDIA_FILE.keys())
+def test_stored_file_is_not_found_without_a_media_file(tmp_path: Path, key: str) -> None:
     media_dir = tmp_path / "media"
-    (media_dir / "photos").mkdir(parents=True)
-    (media_dir / "a.jpg").write_bytes(b"x")
+    (media_dir / "album.jpg").mkdir(parents=True)
+    for name in ["a.jpg", "clip", "clip.mp3.part"]:
+        (media_dir / name).write_bytes(b"x")
     (tmp_path / "outside.jpg").write_bytes(b"x")
     with pytest.raises(MediaNotFoundError) as missing:
         make_service(media_dir).stored_file(key)
     assert missing.value.status == HTTPStatus.NOT_FOUND
+
+
+def test_stored_file_in_a_symlink_loop_is_not_found(tmp_path: Path) -> None:
+    try:
+        (tmp_path / "a.jpg").symlink_to(tmp_path / "b.jpg")
+        (tmp_path / "b.jpg").symlink_to(tmp_path / "a.jpg")
+    except OSError:
+        pytest.skip("this system does not allow symbolic links")
+    with pytest.raises(MediaNotFoundError):
+        make_service(tmp_path).stored_file("a.jpg")
+
+
+def test_stored_file_without_permission_is_a_server_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A permission problem is the server's fault, so it is not hidden behind a 404."""
+
+    def refuse(path: Path, **kwargs: object) -> os.stat_result:
+        raise PermissionError(path)
+
+    service = make_service(tmp_path)
+    key = service.save(b"x", ".jpg")
+    monkeypatch.setattr(Path, "stat", refuse)
+    with pytest.raises(PermissionError):
+        service.stored_file(key)
 
 
 def test_path_is_the_file_in_the_media_directory(tmp_path: Path) -> None:
