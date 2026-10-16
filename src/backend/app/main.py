@@ -11,7 +11,7 @@ def create_app() -> FastAPI:
     app.include_router(api_router)
     add_error_handlers(app)
 
-    @app.get("/health", tags=["health"])
+    @app.get("/health", tags=["health"], operation_id="getHealth")
     def health() -> dict[str, str]:
         """Liveness check used by Docker and CI. Does not touch the database."""
         return {"status": "ok"}

@@ -1,0 +1,474 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Japanese Scavenger Hunt Game API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/auth/register": {
+      "post": {
+        "tags": [
+          "register"
+        ],
+        "summary": "Register",
+        "description": "Student sign-up: email, username, password, optional access code.",
+        "operationId": "registerUser",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Registeruser"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/games": {
+      "post": {
+        "tags": [
+          "games"
+        ],
+        "summary": "Start New Game",
+        "description": "Start a class game (`class_id`) or a Practice game (`language`).\n\nSend exactly one of them. The game gets 5 different locations in the language. Locations the\nstudent has not completed yet come first. After a quit the same day, the locations that were\nnot played carry over to the new game, but not after a reset. Names, rooms and coordinates\nare never sent, only the first clue's audio link.\n\n409 SESSION_ALREADY_OPEN if the student has an active or paused game (its id is in `details`),\nunless it has been idle for 24 hours, then it is expired and the new game starts.\n409 NOT_ENOUGH_CONTENT if the language has fewer than 5 locations to draw.\n409 CLASS_ARCHIVED for a student whose enrolment ended when the class was archived.\n404 NOT_FOUND for a class the student is not in. 403 FORBIDDEN_ROLE for an admin.",
+        "operationId": "startGame",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartGameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartGameResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/media/{key}": {
+      "get": {
+        "tags": [
+          "media"
+        ],
+        "summary": "Get Media File",
+        "description": "Send a media file through a link made by StorageService.signed_url.\n\nNo access token: audio players and image tags cannot send one, so the signature is the\npermission. 403 FORBIDDEN for a tampered or expired link, 404 NOT_FOUND once the file is gone.",
+        "operationId": "getMediaFile",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          },
+          {
+            "name": "expires",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Expires"
+            }
+          },
+          {
+            "name": "sig",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sig"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Health",
+        "description": "Liveness check used by Docker and CI. Does not touch the database.",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Gethealth"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Difficulty": {
+        "type": "integer",
+        "enum": [
+          1,
+          2,
+          3
+        ],
+        "title": "Difficulty"
+      },
+      "ErrorBody": {
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "details": {
+            "items": {},
+            "type": "array",
+            "title": "Details"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "title": "ErrorBody"
+      },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "INVALID_CREDENTIALS",
+          "INVALID_ACCESS_CODE",
+          "USERNAME_TAKEN",
+          "EMAIL_TAKEN",
+          "ALREADY_IN_CLASS_FOR_LANGUAGE",
+          "TA_SAME_CLASS_CONFLICT",
+          "SESSION_ALREADY_OPEN",
+          "NOT_ENOUGH_CONTENT",
+          "SESSION_NOT_ACTIVE",
+          "INVALID_STAGE",
+          "NOT_WITHIN_RADIUS",
+          "STALE_POSITION",
+          "ATTEMPTS_EXHAUSTED",
+          "SHUFFLE_LIMIT_REACHED",
+          "RESET_LIMIT_REACHED",
+          "GPS_OVERRIDE_NOT_ALLOWED",
+          "STATE_CHANGED",
+          "ACCOUNT_DISABLED",
+          "REMOVED_FROM_CLASS",
+          "CLASS_ARCHIVED",
+          "FORBIDDEN_ROLE",
+          "UPLOAD_IN_PROGRESS",
+          "ALREADY_REPORTED",
+          "IDEMPOTENCY_KEY_REUSED",
+          "INVALID_TOKEN",
+          "FILE_TOO_LARGE",
+          "AUDIO_TOO_LONG",
+          "USER_NOT_FOUND",
+          "LEADERBOARD_DISABLED",
+          "UNSUPPORTED_MEDIA_TYPE",
+          "RATE_LIMITED",
+          "OCR_BUSY",
+          "VALIDATION_ERROR",
+          "NOT_AUTHENTICATED",
+          "FORBIDDEN",
+          "NOT_FOUND",
+          "METHOD_NOT_ALLOWED",
+          "INTERNAL_ERROR"
+        ],
+        "title": "ErrorCode"
+      },
+      "ErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ErrorResponse",
+        "description": "The body of every error response, the same shape as AppError.body() (for OpenAPI)."
+      },
+      "Language": {
+        "type": "string",
+        "enum": [
+          "ja",
+          "zh",
+          "fr",
+          "de",
+          "ko",
+          "es"
+        ],
+        "title": "Language"
+      },
+      "RegisterRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "password": {
+            "type": "string",
+            "title": "Password"
+          },
+          "access_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "username",
+          "password"
+        ],
+        "title": "RegisterRequest"
+      },
+      "SessionState": {
+        "type": "string",
+        "enum": [
+          "active",
+          "paused",
+          "completed",
+          "abandoned"
+        ],
+        "title": "SessionState"
+      },
+      "StartGameRequest": {
+        "properties": {
+          "difficulty": {
+            "$ref": "#/components/schemas/Difficulty"
+          },
+          "class_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Id"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Language"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "difficulty"
+        ],
+        "title": "StartGameRequest"
+      },
+      "StartGameResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SessionState"
+          },
+          "position": {
+            "type": "integer",
+            "title": "Position"
+          },
+          "clue_audio_url": {
+            "type": "string",
+            "title": "Clue Audio Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "state",
+          "position",
+          "clue_audio_url"
+        ],
+        "title": "StartGameResponse"
+      }
+    },
+    "securitySchemes": {
+      "OAuth2PasswordBearer": {
+        "type": "oauth2",
+        "flows": {
+          "password": {
+            "scopes": {},
+            "tokenUrl": "login"
+          }
+        }
+      }
+    }
+  }
+}
