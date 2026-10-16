@@ -1,8 +1,8 @@
 """Export the backend's OpenAPI document and check that the committed copy is up to date.
 
-Usage (from the repo root or src/backend):
-    python utils/export_openapi.py            # rewrite docs/api/openapi.json
-    python utils/export_openapi.py --check    # exit 1 if docs/api/openapi.json is out of date (CI)
+Usage (from src/backend, the same as CI; from the repo root drop the "../../"):
+    python ../../utils/export_openapi.py          # rewrite docs/api/openapi.json
+    python ../../utils/export_openapi.py --check  # exit 1 if docs/api/openapi.json is out of date
 """
 
 from __future__ import annotations
@@ -49,8 +49,8 @@ def main(argv: list[str] | None = None, spec_file: Path = SPEC_FILE) -> int:
             print(f"{relative} is up to date.")
             return 0
         print(
-            f"{relative} is out of date. Run `python utils/export_openapi.py` "
-            "and commit the file with your change."
+            f"{relative} is out of date. From src/backend run "
+            "`python ../../utils/export_openapi.py` and commit the file with your change."
         )
         return 1
     spec_file.parent.mkdir(parents=True, exist_ok=True)

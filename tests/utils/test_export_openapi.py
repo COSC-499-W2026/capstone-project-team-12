@@ -25,7 +25,8 @@ def test_operations_skip_path_level_fields() -> None:
 def test_committed_spec_is_up_to_date() -> None:
     text = export_openapi.render(export_openapi.build_spec())
     assert export_openapi.is_up_to_date(export_openapi.SPEC_FILE, text), (
-        "docs/api/openapi.json is out of date: run python utils/export_openapi.py"
+        "docs/api/openapi.json is out of date: from src/backend run "
+        "python ../../utils/export_openapi.py"
     )
 
 
