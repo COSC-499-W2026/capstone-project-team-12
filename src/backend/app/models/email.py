@@ -87,7 +87,7 @@ class EmailToken(Base):
     purpose: Mapped[str]
     new_email: Mapped[str | None]  # only for change_email
     token_hash: Mapped[str] = mapped_column(unique=True)
-    expires_at: Mapped[datetime]  # from send time: reset 60 min, the other links 7 days
+    expires_at: Mapped[datetime]  # from send time, see TOKEN_TTL
     used_at: Mapped[datetime | None]
     created_at: Mapped[datetime] = created_at()
 

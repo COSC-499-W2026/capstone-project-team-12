@@ -6,6 +6,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -178,6 +179,23 @@ def test_quit_today_carries_unplayed_locations_over(
     assert drawn[:2] == eligible[1:3]
 
 
+def test_carry_over_can_be_turned_off(
+    db: Session,
+    make_user: Callable[..., User],
+    quit_game: Callable[..., GameSession],
+    eligible: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # what a reset passes, so the last quit game's locations don't come back
+    student = make_user()
+    quit_game(student)
+    _only_carry_over_could_pick(monkeypatch, eligible)
+
+    drawn = _ids(draw_locations(student.id, None, JA, BASIC, db, carry_over=False))
+
+    assert not set(drawn) & set(eligible[1:3])
+
+
 def test_no_carry_over_from_yesterday(
     db: Session,
     make_user: Callable[..., User],
@@ -266,6 +284,40 @@ def test_carried_location_no_longer_eligible_is_left_out(
     drawn = _ids(draw_locations(student.id, None, JA, BASIC, db))
 
     assert drawn[0] == eligible[2] and eligible[1] not in drawn
+
+
+def test_only_locations_skipped_by_the_quit_are_carried_over(
+    db: Session,
+    make_user: Callable[..., User],
+    quit_game: Callable[..., GameSession],
+    eligible: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    student = make_user()
+    game = quit_game(student)
+    third = db.scalars(
+        select(SessionLocation).where(
+            SessionLocation.session_id == game.id, SessionLocation.position == 3
+        )
+    ).one()
+    third.skip_reason = SkipReason.DEACTIVATED
+    db.flush()
+    _only_carry_over_could_pick(monkeypatch, eligible)
+
+    drawn = _ids(draw_locations(student.id, None, JA, BASIC, db))
+
+    assert eligible[1] in drawn and eligible[2] not in drawn
+
+
+def test_drawing_only_reads(
+    db: Session, make_user: Callable[..., User], transaction_calls: list[str]
+) -> None:
+    student = make_user()
+    transaction_calls.clear()  # creating the user flushed
+
+    draw_locations(student.id, None, JA, BASIC, db)
+
+    assert transaction_calls == []
 
 
 def _only_carry_over_could_pick(monkeypatch: pytest.MonkeyPatch, eligible: list[UUID]) -> None:

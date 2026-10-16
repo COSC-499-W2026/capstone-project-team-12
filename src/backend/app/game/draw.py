@@ -28,8 +28,13 @@ def draw_locations(
     language: Language,
     difficulty: Difficulty,
     db: Session,
+    *,
+    carry_over: bool = True,
 ) -> list[content.LocationSnapshot]:
     """Snapshots of the locations for a new game, in play order.
+
+    `carry_over=False` skips the carry-over: a reset passes it, since a reset must reroll and
+    the last quit game could otherwise bring its locations back.
 
     Raises 409 NOT_ENOUGH_CONTENT if fewer than `locations_per_game` locations can be drawn.
     Only reads.
@@ -39,11 +44,8 @@ def draw_locations(
     if len(eligible) < count:
         raise _not_enough_content()
 
-    carried = [
-        location_id
-        for location_id in _carried_over(student_id, class_id, language, difficulty, db)
-        if location_id in eligible
-    ]
+    unplayed = _carried_over(student_id, class_id, language, difficulty, db) if carry_over else []
+    carried = [location_id for location_id in unplayed if location_id in eligible]
     rest = eligible.difference(carried)
     completed = _completed(student_id, language, difficulty, db)
     fresh = list(rest - completed)
@@ -116,6 +118,7 @@ def _completed(
     return set(
         db.scalars(
             select(SessionLocation.location_id)
+            .distinct()
             .join(GameSession, GameSession.id == SessionLocation.session_id)
             .where(
                 GameSession.student_id == student_id,
