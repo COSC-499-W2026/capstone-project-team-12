@@ -148,11 +148,7 @@ class ErrorResponse(BaseModel):
 
 
 def error_responses(*statuses: HTTPStatus) -> dict[int | str, dict[str, Any]]:
-    """`responses=` for a route that can fail with these statuses, so they appear in OpenAPI.
-
-    Errors raised as AppError in a service are invisible to FastAPI, so each route lists
-    the statuses its codes map to, e.g. responses=error_responses(HTTPStatus.CONFLICT).
-    """
+    """`responses=` for a route's error statuses, e.g. error_responses(HTTPStatus.CONFLICT)."""
     return {
         status.value: {"model": ErrorResponse, "description": status.phrase} for status in statuses
     }

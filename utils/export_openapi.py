@@ -3,10 +3,6 @@
 Usage (from the repo root or src/backend):
     python utils/export_openapi.py            # rewrite docs/api/openapi.json
     python utils/export_openapi.py --check    # exit 1 if docs/api/openapi.json is out of date (CI)
-
-FastAPI builds the document from the routes, so it always matches the code. The committed
-copy is there so a PR shows every API change (new routes, renamed fields, new error codes)
-in its diff. After changing a route, run the export and commit openapi.json with it.
 """
 
 from __future__ import annotations
