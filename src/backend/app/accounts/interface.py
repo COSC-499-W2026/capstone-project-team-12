@@ -69,15 +69,12 @@ def require_class_role(*allowed_roles: ClassStaffRole) -> Callable[..., None]:
             raise AppError(ErrorCode.FORBIDDEN_ROLE)
 
     return role_checker
-<<<<<<< HEAD
 
 
 def require_admin(user: Annotated[User, Depends(get_current_user)]) -> None:
     """Raises a FORBIDDEN_ROLE (403) error if current user does not have the admin role"""
     if user.role != UserRole.ADMIN:
         raise AppError(ErrorCode.FORBIDDEN_ROLE)
-=======
->>>>>>> main
 
 
 def is_class_staff(user_id: UUID, class_id: UUID, db: Session) -> bool:
