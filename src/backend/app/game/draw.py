@@ -118,6 +118,7 @@ def _completed(
     return set(
         db.scalars(
             select(SessionLocation.location_id)
+            .distinct()
             .join(GameSession, GameSession.id == SessionLocation.session_id)
             .where(
                 GameSession.student_id == student_id,
