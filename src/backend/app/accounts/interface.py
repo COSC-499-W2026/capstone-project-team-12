@@ -21,6 +21,7 @@ __all__ = [
     "require_class_role",
     "is_class_staff",
     "can_manage_content",
+    "require_admin",
 ]
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
@@ -72,7 +73,7 @@ def require_class_role(*allowed_roles: ClassStaffRole) -> Callable[..., None]:
 
 def require_admin(user: Annotated[User, Depends(get_current_user)]) -> None:
     """Raises a FORBIDDEN_ROLE (403) error if current user does not have the admin role"""
-    if not user.role == UserRole.ADMIN:
+    if user.role != UserRole.ADMIN:
         raise AppError(ErrorCode.FORBIDDEN_ROLE)
 
 

@@ -197,18 +197,19 @@ def test_admin(test_client: TestClient, make_user: User):
     assert response.status_code == 200
 
 
-def test_not_admin(test_client: TestClient, make_user: User):
-    user_1 = make_user()  #  Student by default
-    user_2 = make_user(role=UserRole.STAFF)
-    jwt_1 = encode({"sub": f"{user_1.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
-    test_client.headers = {"Authorization": f"Bearer {jwt_1}"}
-    response_1 = test_client.post(f"{PREFIX}/admin")
-
-    jwt_2 = encode({"sub": f"{user_2.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
-    test_client.headers = {"Authorization": f"Bearer {jwt_2}"}
-    response_2 = test_client.post(f"{PREFIX}/admin")
-
-    assert response_1.status_code == 403 and response_2.status_code == 403
+@pytest.mark.parametrize(
+    ["role", "expected"],
+    [
+        (UserRole.STUDENT, "FORBIDDEN_ROLE"),
+        (UserRole.STAFF, "FORBIDDEN_ROLE"),
+    ],
+)
+def test_not_admin(test_client: TestClient, make_user: User, expected: str):
+    user = make_user()
+    jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
+    test_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = test_client.post(f"{PREFIX}/admin")
+    assert response.json()["error"]["code"] == expected
 
 
 def test_inactive_admin(test_client: TestClient, make_user: User):
@@ -216,7 +217,7 @@ def test_inactive_admin(test_client: TestClient, make_user: User):
     jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
     test_client.headers = {"Authorization": f"Bearer {jwt}"}
     response = test_client.post(f"{PREFIX}/admin")
-    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "ACCOUNT_DISABLED"
 
 
 def test_is_class_staff(
