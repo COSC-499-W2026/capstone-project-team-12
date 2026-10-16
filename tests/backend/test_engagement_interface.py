@@ -94,7 +94,8 @@ def test_missing_class_not_archived(db: Session) -> None:
         (EnrollmentEndReason.ARCHIVED, True),
         (EnrollmentEndReason.LEFT, False),
         (EnrollmentEndReason.REMOVED, False),
-        (None, False),  # still enrolled
+        # still enrolled
+        (None, False),
     ],
 )
 def test_enrolment_ended_by_archive(

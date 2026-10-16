@@ -77,8 +77,8 @@ def test_no_ids_changes_nothing(db: Session, make_game_session: Callable[..., Ga
 @pytest.mark.parametrize(
     ("idle_for", "expected"),
     [
-        (timedelta(hours=23, minutes=59), False),  # one minute short of the limit
-        (timedelta(hours=24), True),  # exactly the limit
+        (timedelta(hours=23, minutes=59), False),
+        (timedelta(hours=24), True),
         (timedelta(hours=24, minutes=1), True),
     ],
     ids=["23h59m", "24h", "24h01m"],
