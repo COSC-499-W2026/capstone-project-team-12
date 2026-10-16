@@ -33,7 +33,8 @@ class Settings(BaseSettings):
         # fail at startup, not with a 500 when the first game starts
         try:
             ZoneInfo(value)
-        except (ZoneInfoNotFoundError, ValueError) as error:
+        except (ZoneInfoNotFoundError, ValueError, OSError) as error:
+            # OSError: a directory name such as "America", not a zone
             raise ValueError(f"unknown time zone {value!r}") from error
         return value
 
