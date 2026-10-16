@@ -23,8 +23,8 @@ def abandon_sessions(session_ids: Sequence[UUID], reason: SessionEndReason, db: 
     """Abandon these games with `reason` and skip their unfinished locations (session_ended).
 
     Only open (active or paused) games change; one that has already ended keeps its state and
-    end reason. Points already earned stay, and so does last_activity_at, since none of these
-    reasons is something the student did. Doesn't commit.
+    end reason. Points already earned stay, and so does last_activity_at, since callers only pass
+    system reasons (CLASS_CLOSED, EXPIRED), never something the student did. Doesn't commit.
     """
     if not session_ids:
         return
@@ -34,7 +34,8 @@ def abandon_sessions(session_ids: Sequence[UUID], reason: SessionEndReason, db: 
         .values(
             state=SessionState.ABANDONED,
             end_reason=reason,
-            paused_at=None,  # set only while paused, so it has to be cleared
+            # set only while paused, so it has to be cleared
+            paused_at=None,
         )
         .returning(GameSession.id)
     ).all()
