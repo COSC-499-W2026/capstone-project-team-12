@@ -130,17 +130,19 @@ def test_open_game_blocks_a_new_one(
     assert _game_count(student, db) == 1
 
 
+@pytest.mark.parametrize("state", [SessionState.ACTIVE, SessionState.PAUSED])
 def test_idle_open_game_expires_instead(
     db: Session,
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
+    state: SessionState,
 ) -> None:
+    # an active game left open (e.g. the tab closed) expires the same way as a paused one
     student = make_user()
     idle_since = datetime.now(UTC) - timedelta(hours=24, minutes=1)
-    idle = make_game_session(
-        student, state=SessionState.PAUSED, paused_at=idle_since, last_activity_at=idle_since
-    )
+    paused_at = idle_since if state == SessionState.PAUSED else None
+    idle = make_game_session(student, state=state, paused_at=paused_at, last_activity_at=idle_since)
     done = make_session_location(
         idle,
         1,
@@ -242,6 +244,7 @@ def test_archived_class(
         "unknown",
         "not_enrolled",
         "left",
+        "removed",
         "staff",
         "archived_never_joined",
         "archived_but_left_before",
@@ -258,12 +261,14 @@ def test_class_the_user_is_not_in(
         archived_at=datetime.now(UTC) if case.startswith("archived") else None
     )
     user = make_user(role=UserRole.STAFF) if case == "staff" else make_user()
-    if case in ("left", "archived_but_left_before"):
+    if case in ("left", "removed", "archived_but_left_before"):
         make_enrollment(
             user,
             school_class,
             is_active=False,
-            end_reason=EnrollmentEndReason.LEFT,
+            end_reason=(
+                EnrollmentEndReason.REMOVED if case == "removed" else EnrollmentEndReason.LEFT
+            ),
             left_at=datetime.now(UTC),
         )
     class_id = uuid4() if case == "unknown" else school_class.id

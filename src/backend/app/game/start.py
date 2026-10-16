@@ -1,5 +1,6 @@
 """Starting a game (A7, spec Starting a Session; DFD 2.0 process 2.1)."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -9,10 +10,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.content.interface import LocationSnapshot
+from app.db import violated_constraint
 from app.engagement import interface as engagement
 from app.errors import AppError, ErrorCode
 from app.game.draw import draw_locations
-from app.game.sessions import abandon_sessions
+from app.game.sessions import abandon_sessions, is_idle
 from app.models.accounts import User
 from app.models.enums import (
     Difficulty,
@@ -66,50 +69,10 @@ def start_game(
     # before the game exists, so a missing recording fails like any other draw problem
     clue_url = clue_audio_url(snapshots[0].audio_asset_id, db)
 
-    game = GameSession(
-        student_id=user.id,
-        class_id=class_id,
-        target_language=language,
-        difficulty=difficulty,
-        last_activity_at=datetime.now(UTC),
-    )
-    try:
-        # a savepoint, so a lost race leaves the caller's transaction usable
-        with db.begin_nested():
-            db.add(game)
-            db.flush()
-    except IntegrityError as error:
-        if _violated_constraint(error) != _ONE_OPEN_GAME:
-            raise
-        # another start won the race: report its game
-        _check_no_open_game(user.id, db)
-        # it has already ended again (e.g. quit straight away), so a retry can succeed
-        raise AppError(
-            ErrorCode.SESSION_ALREADY_OPEN, "Another game was started at the same time"
-        ) from error
-
-    for position, snapshot in enumerate(snapshots, start=1):
-        db.add(
-            SessionLocation(
-                session_id=game.id,
-                location_id=snapshot.location_id,
-                position=position,
-                status=LocationStatus.NAVIGATING if position == 1 else LocationStatus.PENDING,
-                started_at=game.last_activity_at if position == 1 else None,
-                clue_id=snapshot.clue_id,
-                audio_asset_id=snapshot.audio_asset_id,
-                accepted_answers_snapshot=list(snapshot.accepted_answers),
-                gps_points_snapshot=[{"lat": p.lat, "lng": p.lng} for p in snapshot.gps_points],
-                radius_snapshot=snapshot.radius_meters,
-            )
-        )
+    game = _create_game(user.id, class_id, language, difficulty, db)
+    db.add_all(_session_locations(game, snapshots))
     db.flush()
-    return StartedGame(
-        session_id=game.id,
-        state=SessionState(game.state),
-        position=game.current_position,
-        clue_audio_url=clue_url,
-    )
+    return StartedGame(game.id, SessionState(game.state), game.current_position, clue_url)
 
 
 def _class_language(user: User, class_id: UUID, db: Session) -> Language:
@@ -130,11 +93,6 @@ def _class_language(user: User, class_id: UUID, db: Session) -> Language:
     return language
 
 
-def _violated_constraint(error: IntegrityError) -> str | None:
-    diagnostics = getattr(error.orig, "diag", None)
-    return None if diagnostics is None else diagnostics.constraint_name
-
-
 def _check_no_open_game(student_id: UUID, db: Session) -> None:
     """Raise SESSION_ALREADY_OPEN if the student has an open game, after expiring it if it has
     been idle too long (spec: expiry is also checked when a new game is started)."""
@@ -146,14 +104,63 @@ def _check_no_open_game(student_id: UUID, db: Session) -> None:
     if game is None:
         return
     idle_limit = timedelta(hours=get_settings().session_idle_expiry_hours)
-    if game.last_activity_at > datetime.now(UTC) - idle_limit:
+    if not is_idle(game, datetime.now(UTC), idle_limit):
         raise AppError(
             ErrorCode.SESSION_ALREADY_OPEN,
             "Finish or quit your current game first",
             details=[{"session_id": str(game.id)}],
         )
-    _expire(game, db)
-
-
-def _expire(game: GameSession, db: Session) -> None:
     abandon_sessions([game.id], SessionEndReason.EXPIRED, db)
+
+
+def _create_game(
+    student_id: UUID,
+    class_id: UUID | None,
+    language: Language,
+    difficulty: Difficulty,
+    db: Session,
+) -> GameSession:
+    """Save the new game, or raise SESSION_ALREADY_OPEN if another start won the race."""
+    game = GameSession(
+        student_id=student_id,
+        class_id=class_id,
+        target_language=language,
+        difficulty=difficulty,
+        last_activity_at=datetime.now(UTC),
+    )
+    try:
+        # a savepoint, so a lost race leaves the caller's transaction usable
+        with db.begin_nested():
+            db.add(game)
+            db.flush()
+    except IntegrityError as error:
+        if violated_constraint(error) != _ONE_OPEN_GAME:
+            raise
+        # another start won the race: report its game
+        _check_no_open_game(student_id, db)
+        # it has already ended again (e.g. quit straight away), so a retry can succeed
+        raise AppError(
+            ErrorCode.SESSION_ALREADY_OPEN, "Another game was started at the same time"
+        ) from error
+    return game
+
+
+def _session_locations(
+    game: GameSession, snapshots: Sequence[LocationSnapshot]
+) -> list[SessionLocation]:
+    """One row per drawn location with its content snapshot. The first is being navigated."""
+    return [
+        SessionLocation(
+            session_id=game.id,
+            location_id=snapshot.location_id,
+            position=position,
+            status=LocationStatus.NAVIGATING if position == 1 else LocationStatus.PENDING,
+            started_at=game.last_activity_at if position == 1 else None,
+            clue_id=snapshot.clue_id,
+            audio_asset_id=snapshot.audio_asset_id,
+            accepted_answers_snapshot=list(snapshot.accepted_answers),
+            gps_points_snapshot=[{"lat": p.lat, "lng": p.lng} for p in snapshot.gps_points],
+            radius_snapshot=snapshot.radius_meters,
+        )
+        for position, snapshot in enumerate(snapshots, start=1)
+    ]
