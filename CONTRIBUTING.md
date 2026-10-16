@@ -63,7 +63,7 @@ CI automatically checks:
 `docs/api/openapi.json` is generated from the FastAPI routes, so reviewers can see every API change in the PR diff. If your PR adds or changes a route, a request or response model, or an error response, run this from `src/backend` and commit the updated file with your change:
 
 ```
-pip install -r requirements-dev.txt   # the pinned versions, so everyone exports the same file
+pip install -r requirements-dev.txt   # pinned versions; use Python 3.11 like CI (3.13 names 422 differently)
 python ../../utils/export_openapi.py
 ```
 
