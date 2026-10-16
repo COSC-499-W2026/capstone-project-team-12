@@ -4,16 +4,17 @@ Implemented:
 - Issue #11: Class language, active enrolment, and archived-state lookups.
 - Issue #106: Access code validation and student enrolment.
 
-Planned:
+Interface stub:
 - Issue #15: Location result to engagement.
 
 Callers must check class existence and archived status before enrolment
 so archived classes produce CLASS_ARCHIVED rather than an enrolment error.
 
-The enrolment function does not commit the transaction. Callers are
+Engagement and enrolment functions do not commit transactions. Callers are
 responsible for committing or rolling back the entire operation.
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -31,11 +32,64 @@ from app.models.enums import (
 )
 
 __all__ = [
+    "EngagementResult",
+    "apply_location_result",
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
     "validate_code_and_enrol",
 ]
+
+
+@dataclass(frozen=True)
+class EngagementResult:
+    """Engagement information returned after processing a location result.
+
+    The response contract is provisional until reviewed by the consumers
+    of the finish, match, and failed-location workflows.
+
+    Attributes:
+        points: Points awarded for the current location.
+        level: Student's current level.
+        streak: Student's current streak.
+        challenges: Challenge identifiers completed or updated.
+        badges: Badge identifiers newly awarded.
+    """
+
+    points: int
+    level: int
+    streak: int
+    challenges: list[str]
+    badges: list[str]
+
+
+def apply_location_result(
+    session_location_id: UUID,
+    db: Session,
+) -> EngagementResult:
+    """Apply a location outcome to the student's engagement state.
+
+    Intended to be called inside the finish-location transaction after
+    the location outcome has been determined.
+
+    The eventual implementation will update points, level, streak,
+    challenges, and badges, then return an EngagementResult.
+
+    The caller owns the transaction. This function must not commit.
+
+    Args:
+        session_location_id: ID of the session location being processed.
+        db: SQLAlchemy session belonging to the caller's transaction.
+
+    Returns:
+        EngagementResult containing the engagement information.
+
+    Raises:
+        NotImplementedError: Engagement processing has not yet been
+            implemented. This function currently defines only the
+            public interface contract.
+    """
+    raise NotImplementedError("Issue #15: engagement processing is not implemented")
 
 
 def get_class_language(class_id: UUID, db: Session) -> Language | None:
