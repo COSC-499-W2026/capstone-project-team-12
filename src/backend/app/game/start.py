@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.engagement import interface as engagement
 from app.errors import AppError, ErrorCode
 from app.game.draw import draw_locations
+from app.game.sessions import abandon_sessions
 from app.models.accounts import User
 from app.models.enums import (
     Difficulty,
@@ -19,14 +20,12 @@ from app.models.enums import (
     LocationStatus,
     SessionEndReason,
     SessionState,
-    SkipReason,
     UserRole,
 )
 from app.models.game import OPEN_SESSION_STATES, GameSession, SessionLocation
 from app.services.audio import clue_audio_url
 
 _ONE_OPEN_GAME = "uq_game_sessions_one_open_per_student"
-_UNFINISHED = (LocationStatus.PENDING, LocationStatus.NAVIGATING, LocationStatus.VERIFYING)
 
 
 @dataclass(frozen=True)
@@ -145,13 +144,4 @@ def _check_no_open_game(student_id: UUID, db: Session) -> None:
 
 
 def _expire(game: GameSession, db: Session) -> None:
-    # last_activity_at stays: expiring isn't something the student did
-    game.state = SessionState.ABANDONED
-    game.end_reason = SessionEndReason.EXPIRED
-    game.paused_at = None
-    db.execute(
-        update(SessionLocation)
-        .where(SessionLocation.session_id == game.id, SessionLocation.status.in_(_UNFINISHED))
-        .values(status=LocationStatus.SKIPPED, skip_reason=SkipReason.SESSION_ENDED)
-    )
-    db.flush()
+    abandon_sessions([game.id], SessionEndReason.EXPIRED, db)
