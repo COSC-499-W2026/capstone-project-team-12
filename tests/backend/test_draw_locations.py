@@ -178,6 +178,23 @@ def test_quit_today_carries_unplayed_locations_over(
     assert drawn[:2] == eligible[1:3]
 
 
+def test_carry_over_can_be_turned_off(
+    db: Session,
+    make_user: Callable[..., User],
+    quit_game: Callable[..., GameSession],
+    eligible: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # what a reset passes, so the last quit game's locations don't come back
+    student = make_user()
+    quit_game(student)
+    _only_carry_over_could_pick(monkeypatch, eligible)
+
+    drawn = _ids(draw_locations(student.id, None, JA, BASIC, db, carry_over=False))
+
+    assert not set(drawn) & set(eligible[1:3])
+
+
 def test_no_carry_over_from_yesterday(
     db: Session,
     make_user: Callable[..., User],
