@@ -1,7 +1,7 @@
 """add locations and clues
 
 Revision ID: b490694173b4
-Revises: 1d35b6cae138
+Revises: e91689d8206b
 Create Date: 2026-10-13 15:38:44.721471
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "b490694173b4"
-down_revision: str | None = "1d35b6cae138"
+down_revision: str | None = "e91689d8206b"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
