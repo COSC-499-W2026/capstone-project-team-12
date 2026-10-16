@@ -63,6 +63,8 @@ def start_game(
 
     _check_no_open_game(user.id, db)
     snapshots = draw_locations(user.id, class_id, language, difficulty, db)
+    # before the game exists, so a missing recording fails like any other draw problem
+    clue_url = clue_audio_url(snapshots[0].audio_asset_id, db)
 
     game = GameSession(
         student_id=user.id,
@@ -77,7 +79,7 @@ def start_game(
             db.add(game)
             db.flush()
     except IntegrityError as error:
-        if _ONE_OPEN_GAME not in str(error.orig):
+        if _violated_constraint(error) != _ONE_OPEN_GAME:
             raise
         # another start won the race: report its game
         _check_no_open_game(user.id, db)
@@ -104,23 +106,33 @@ def start_game(
     db.flush()
     return StartedGame(
         session_id=game.id,
-        state=SessionState.ACTIVE,
-        position=1,
-        clue_audio_url=clue_audio_url(snapshots[0].audio_asset_id, db),
+        state=SessionState(game.state),
+        position=game.current_position,
+        clue_audio_url=clue_url,
     )
 
 
 def _class_language(user: User, class_id: UUID, db: Session) -> Language:
     """The class language, if the user is an active student of a class that isn't archived."""
     language = engagement.get_class_language(class_id, db)
-    # same answer for a class that doesn't exist and one the student isn't in
+    # the same answer for a class that doesn't exist and one the student isn't in, so a
+    # student can't find out which classes exist
+    not_found = AppError(ErrorCode.NOT_FOUND, "Class not found")
     if language is None:
-        raise AppError(ErrorCode.NOT_FOUND, "Class not found")
+        raise not_found
     if engagement.is_class_archived(class_id, db):
-        raise AppError(ErrorCode.CLASS_ARCHIVED)
+        # only students who were in the class when it was archived are told why
+        if engagement.enrolment_ended_by_archive(user.id, class_id, db):
+            raise AppError(ErrorCode.CLASS_ARCHIVED)
+        raise not_found
     if not engagement.is_actively_enrolled(user.id, class_id, db):
-        raise AppError(ErrorCode.NOT_FOUND, "Class not found")
+        raise not_found
     return language
+
+
+def _violated_constraint(error: IntegrityError) -> str | None:
+    diagnostics = getattr(error.orig, "diag", None)
+    return None if diagnostics is None else diagnostics.constraint_name
 
 
 def _check_no_open_game(student_id: UUID, db: Session) -> None:

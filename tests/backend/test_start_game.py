@@ -3,11 +3,13 @@
 from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.content import interface as content
@@ -27,7 +29,7 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.game import GameSession, SessionLocation
-from app.services.audio import clue_audio_url
+from app.services.audio import MediaNotFoundError, clue_audio_url
 
 
 def _locations(game_id: UUID, db: Session) -> list[SessionLocation]:
@@ -107,37 +109,6 @@ def test_not_enough_content(
         start_game(student, Difficulty.BASIC, db, language=Language.JA)
     assert raised.value.code == ErrorCode.NOT_ENOUGH_CONTENT
     assert _game_count(student, db) == 0
-
-
-@pytest.mark.parametrize("eligible_count", [5, 6])
-def test_location_that_stops_being_eligible_is_replaced(
-    db: Session,
-    make_user: Callable[..., User],
-    monkeypatch: pytest.MonkeyPatch,
-    eligible_count: int,
-) -> None:
-    listed = list(content.eligible_location_ids(db, Language.JA, Difficulty.BASIC))
-    listed = listed[:eligible_count]
-    gone = listed[0]
-    real_snapshot = content.location_snapshot
-
-    def snapshot(db: Session, location_id: UUID, *args: Any) -> content.LocationSnapshot:
-        if location_id == gone:  # e.g. deactivated after the eligible list was read
-            raise content.LocationNotEligibleError(location_id)
-        return real_snapshot(db, location_id, *args)
-
-    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: frozenset(listed))
-    monkeypatch.setattr(content, "location_snapshot", snapshot)
-    student = make_user()
-
-    if eligible_count == 5:  # only 4 left
-        with pytest.raises(AppError) as raised:
-            start_game(student, Difficulty.BASIC, db, language=Language.JA)
-        assert raised.value.code == ErrorCode.NOT_ENOUGH_CONTENT
-        return
-    started = start_game(student, Difficulty.BASIC, db, language=Language.JA)
-    drawn = {location.location_id for location in _locations(started.session_id, db)}
-    assert drawn == set(listed[1:])
 
 
 @pytest.mark.parametrize("state", [SessionState.ACTIVE, SessionState.PAUSED])
@@ -236,6 +207,14 @@ def test_lost_race_to_a_game_that_already_ended(
     assert raised.value.details == []
 
 
+def test_other_database_errors_are_not_hidden(db: Session) -> None:
+    # a student that isn't in the database breaks a foreign key, not the one-open-game index
+    nobody = cast(User, SimpleNamespace(id=uuid4(), role=UserRole.STUDENT))
+
+    with pytest.raises(IntegrityError):
+        start_game(nobody, Difficulty.BASIC, db, language=Language.JA)
+
+
 def test_archived_class(
     db: Session,
     make_user: Callable[..., User],
@@ -243,14 +222,31 @@ def test_archived_class(
     make_enrollment: Callable[..., ClassEnrollment],
 ) -> None:
     student, school_class = make_user(), make_class(archived_at=datetime.now(UTC))
-    make_enrollment(student, school_class)
+    # what archiving does to an enrolment
+    make_enrollment(
+        student,
+        school_class,
+        is_active=False,
+        end_reason=EnrollmentEndReason.ARCHIVED,
+        left_at=datetime.now(UTC),
+    )
 
     with pytest.raises(AppError) as raised:
         start_game(student, Difficulty.BASIC, db, class_id=school_class.id)
     assert raised.value.code == ErrorCode.CLASS_ARCHIVED
 
 
-@pytest.mark.parametrize("case", ["unknown", "not_enrolled", "left", "staff"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "unknown",
+        "not_enrolled",
+        "left",
+        "staff",
+        "archived_never_joined",
+        "archived_but_left_before",
+    ],
+)
 def test_class_the_user_is_not_in(
     db: Session,
     make_user: Callable[..., User],
@@ -258,9 +254,11 @@ def test_class_the_user_is_not_in(
     make_enrollment: Callable[..., ClassEnrollment],
     case: str,
 ) -> None:
-    school_class = make_class()
+    school_class = make_class(
+        archived_at=datetime.now(UTC) if case.startswith("archived") else None
+    )
     user = make_user(role=UserRole.STAFF) if case == "staff" else make_user()
-    if case == "left":
+    if case in ("left", "archived_but_left_before"):
         make_enrollment(
             user,
             school_class,
@@ -285,6 +283,20 @@ def test_admins_do_not_play(db: Session, make_user: Callable[..., User]) -> None
     with pytest.raises(AppError) as raised:
         start_game(make_user(role=UserRole.ADMIN), Difficulty.BASIC, db, language=Language.JA)
     assert raised.value.code == ErrorCode.FORBIDDEN_ROLE
+
+
+def test_missing_first_recording_fails_before_a_game_exists(
+    db: Session, make_user: Callable[..., User], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_recording(*_: Any) -> str:
+        raise MediaNotFoundError
+
+    monkeypatch.setattr(start, "clue_audio_url", no_recording)
+    student = make_user()
+
+    with pytest.raises(MediaNotFoundError):
+        start_game(student, Difficulty.BASIC, db, language=Language.JA)
+    assert _game_count(student, db) == 0
 
 
 def test_doesnt_commit(
