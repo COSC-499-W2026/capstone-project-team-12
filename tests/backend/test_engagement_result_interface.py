@@ -1,4 +1,3 @@
-
 """Tests for the Issue #15 engagement interface contract."""
 
 from dataclasses import FrozenInstanceError
