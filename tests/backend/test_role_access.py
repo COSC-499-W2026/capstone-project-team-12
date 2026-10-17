@@ -11,6 +11,7 @@ from app.accounts.interface import (
     can_manage_content,
     get_current_user,
     is_class_staff,
+    require_admin,
     require_class_role,
 )
 from app.config import get_settings
@@ -24,137 +25,142 @@ PREFIX = "/authtest"
 KEY = get_settings().access_token_secret_key
 ALGORITHM = "HS256"
 
-test_app = FastAPI(title="Role Access Test App")
-add_error_handlers(test_app)
-test_router = APIRouter(prefix=PREFIX)
-test_app.include_router(test_router)
+fake_app = FastAPI(title="Role Access Test App")
+add_error_handlers(fake_app)
+fake_router = APIRouter(prefix=PREFIX)
+fake_app.include_router(fake_router)
 
 
 @pytest.fixture
-def test_client(db: Session) -> TestClient:
-    test_app.dependency_overrides[get_db] = lambda: db
-    return TestClient(test_app)
+def fake_client(db: Session) -> TestClient:
+    fake_app.dependency_overrides[get_db] = lambda: db
+    return TestClient(fake_app)
 
 
 #  TEST ROUTES
-@test_router.post("/restricted", tags=["test"], status_code=200)
+@fake_router.post("/restricted", tags=["test"], status_code=200)
 def needs_login(user: Annotated[User, Depends(get_current_user)]) -> None:
     return
 
 
-@test_router.post("/assistant/{class_id}", tags=["test"], status_code=200)
+@fake_router.post("/assistant/{class_id}", tags=["test"], status_code=200)
 def assistant_access(
     require_assistant: Annotated[None, Depends(require_class_role(ClassStaffRole.ASSISTANT))],
 ) -> None:
     return
 
 
-@test_router.post("/teacher/{class_id}", tags=["test"], status_code=200)
+@fake_router.post("/teacher/{class_id}", tags=["test"], status_code=200)
 def teacher_access(
     require_teacher: Annotated[None, Depends(require_class_role(ClassStaffRole.OWNER))],
 ) -> None:
     return
 
 
-@test_router.post("/content", tags=["test"], status_code=200)
+@fake_router.post("/content", tags=["test"], status_code=200)
 def content_manager(
     require_content_manager: Annotated[None, Depends(can_manage_content)],
 ) -> None:
     return
 
 
-def test_expired_token(test_client: TestClient, make_user: User):
+@fake_router.post("/admin", tags=["test"], status_code=200)
+def admin(require_admin: Annotated[None, Depends(require_admin)]) -> None:
+    return
+
+
+def test_expired_token(fake_client: TestClient, make_user: User):
     user = make_user()
     jwt = encode({"sub": f"{user.id}", "exp": int(time()) - (60 * 60)}, str(KEY), ALGORITHM)
-    test_client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = test_client.post(f"{PREFIX}/restricted")
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/restricted")
     assert response.status_code == 401
 
 
-def test_different_key(test_client: TestClient, make_user: User):
+def test_different_key(fake_client: TestClient, make_user: User):
     user = make_user()
     incorrect_key = "INCORRECT"
     jwt = encode(
         {"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(incorrect_key), ALGORITHM
     )
-    test_client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = test_client.post(f"{PREFIX}/restricted")
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/restricted")
     assert response.status_code == 401
 
 
-def test_garbage_token(test_client: TestClient):
+def test_garbage_token(fake_client: TestClient):
     jwt = encode({"id": "junky token"}, str(KEY), ALGORITHM)
-    test_client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = test_client.post(f"{PREFIX}/restricted")
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/restricted")
     assert response.status_code == 401
 
 
-def test_non_uuid(test_client: TestClient):
+def test_non_uuid(fake_client: TestClient):
     jwt = encode({"sub": "NotAUUID", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
-    test_client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = test_client.post(f"{PREFIX}/restricted")
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/restricted")
     assert response.status_code == 401
 
 
-def test_inactive_user(test_client: TestClient, make_user: User):
+def test_inactive_user(fake_client: TestClient, make_user: User):
     user = make_user(is_active=False)
     jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
-    test_client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = test_client.post(f"{PREFIX}/restricted")
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/restricted")
     assert response.status_code == 403
 
 
-def test_student_cannot_access_class(test_client: TestClient, make_class: Class, make_user: User):
+def test_student_cannot_access_class(fake_client: TestClient, make_class: Class, make_user: User):
     test_class = make_class()
     user = make_user()
     class_id = test_class.id
     jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
-    test_client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = test_client.post(f"{PREFIX}/assistant/{class_id}")
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/assistant/{class_id}")
     assert response.status_code == 403
 
 
 def test_assistant_access(
-    test_client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff
+    fake_client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff
 ):
     test_class = make_class()
     user = make_user()
     make_class_staff(school_class=test_class, user=user, role=ClassStaffRole.ASSISTANT)
     class_id = test_class.id
     jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
-    test_client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = test_client.post(f"{PREFIX}/assistant/{class_id}")
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/assistant/{class_id}")
     assert response.status_code == 200
 
 
 def test_assistant_cannot_access_teacher(
-    test_client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff
+    fake_client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff
 ):
     test_class = make_class()
     user = make_user()
     make_class_staff(school_class=test_class, user=user, role=ClassStaffRole.ASSISTANT)
     class_id = test_class.id
     jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
-    test_client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = test_client.post(f"{PREFIX}/teacher/{class_id}")
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/teacher/{class_id}")
     assert response.status_code == 403
 
 
 def test_teacher_access(
-    test_client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff
+    fake_client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff
 ):
     test_class = make_class()
     user = make_user()
     make_class_staff(school_class=test_class, user=user, role=ClassStaffRole.OWNER)
     class_id = test_class.id
     jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
-    test_client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = test_client.post(f"{PREFIX}/teacher/{class_id}")
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/teacher/{class_id}")
     assert response.status_code == 200
 
 
 def test_teacher_cannot_access_another_class(
-    test_client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff
+    fake_client: TestClient, make_class: Class, make_user: User, make_class_staff: ClassStaff
 ):
     other_test_class = make_class()
     accessed_test_class = make_class()
@@ -162,25 +168,56 @@ def test_teacher_cannot_access_another_class(
     make_class_staff(school_class=other_test_class, user=user, role=ClassStaffRole.OWNER)
     accessed_class_id = accessed_test_class.id
     jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
-    test_client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = test_client.post(f"{PREFIX}/teacher/{accessed_class_id}")
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/teacher/{accessed_class_id}")
     assert response.status_code == 403
 
 
-def test_can_manage_content(test_client: TestClient, make_user: User):
+def test_can_manage_content(fake_client: TestClient, make_user: User):
     user = make_user(role=UserRole.STAFF, can_manage_content=True)
     jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
-    test_client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = test_client.post(f"{PREFIX}/content")
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/content")
     assert response.status_code == 200
 
 
-def test_cannot_manage_content(test_client: TestClient, make_user: User):
+def test_cannot_manage_content(fake_client: TestClient, make_user: User):
     user = make_user()
     jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
-    test_client.headers = {"Authorization": f"Bearer {jwt}"}
-    response = test_client.post(f"{PREFIX}/content")
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/content")
     assert response.status_code == 403
+
+
+def test_admin(fake_client: TestClient, make_user: User):
+    user = make_user(role=UserRole.ADMIN)
+    jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/admin")
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "user_role, expected",
+    [
+        (UserRole.STUDENT, "FORBIDDEN_ROLE"),
+        (UserRole.STAFF, "FORBIDDEN_ROLE"),
+    ],
+)
+def test_not_admin(fake_client: TestClient, make_user: User, user_role: UserRole, expected: str):
+    user = make_user(role=user_role)
+    jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/admin")
+    assert response.json()["error"]["code"] == expected
+
+
+def test_inactive_admin(fake_client: TestClient, make_user: User):
+    user = make_user(role=UserRole.ADMIN, is_active=False)
+    jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/admin")
+    assert response.json()["error"]["code"] == "ACCOUNT_DISABLED"
 
 
 def test_is_class_staff(
