@@ -66,6 +66,33 @@ def test_a_rejected_password_doesnt_use_the_link_up(
     assert client.post(URL, json={"token": token, "new_password": NEW}).status_code == HTTPStatus.OK
 
 
+@pytest.mark.parametrize("case", ["missing", "wrong_kind", "expired", "used"])
+def test_a_dead_link_is_refused_before_the_password_is_hashed(
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+) -> None:
+    def no_hash(_password: str) -> str:
+        raise AssertionError("bcrypt ran for a link that can't work")
+
+    monkeypatch.setattr("app.accounts.email_links.hash_password", no_hash)
+    user = make_user(email_verified_at=datetime.now(UTC))
+    kind = EmailKind.VERIFY_EMAIL if case == "wrong_kind" else EmailKind.RESET_PASSWORD
+    token = EmailService.create_token(user, kind, db)
+    link = db.scalars(select(EmailToken).where(EmailToken.user_id == user.id)).one()
+    if case == "expired":
+        link.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    if case == "used":
+        link.used_at = datetime.now(UTC)
+    db.flush()
+    sent = "no-such-token" if case == "missing" else token
+    response = client.post(URL, json={"token": sent, "new_password": NEW})
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert response.json()["error"]["code"] == "INVALID_TOKEN"
+
+
 @pytest.mark.parametrize("case", ["unverified", "inactive", "verify_link", "expired", "missing"])
 def test_a_link_that_cant_reset_is_invalid_and_stays_unused(
     client: TestClient, db: Session, make_user: Callable[..., User], case: str
