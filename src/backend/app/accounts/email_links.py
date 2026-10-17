@@ -43,8 +43,13 @@ def reset_password(token: str, new_password: str, db: Session) -> None:
 
     The password is checked first, so a weak one (422) doesn't use the link up. A bad link, or
     one for an account that is deactivated or unverified, is INVALID_TOKEN (400) and stays unused.
+    The link is looked at twice: unlocked before the hash, so unknown tokens don't pay for
+    bcrypt, and again when it is consumed, which is the check that counts.
     """
     validate_password_security(new_password)
+    # a made-up or stale token is refused before the slow hash, so it costs no CPU
+    if not EmailService.is_link_live(token, EmailKind.RESET_PASSWORD, db):
+        raise AppError(ErrorCode.INVALID_TOKEN, INVALID_LINK)
     password_hash = hash_password(new_password)  # slow (bcrypt), so before the user is locked
     with db.begin_nested():  # a refused link is rolled back, so it isn't used up
         used = EmailService.consume_token(token, EmailKind.RESET_PASSWORD, db)  # locks the user
