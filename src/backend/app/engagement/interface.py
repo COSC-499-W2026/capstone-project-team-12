@@ -45,51 +45,65 @@ __all__ = [
 class EngagementResult:
     """Engagement information returned after processing a location result.
 
-    The response contract is provisional until reviewed by the consumers
-    of the finish, match, and failed-location workflows.
+    Fields follow the technical specification's engagement response contract.
 
     Attributes:
-        points: Points awarded for the current location.
+        total_points: Student's cumulative points.
         level: Student's current level.
-        streak: Student's current streak.
-        challenges: Challenge identifiers completed or updated.
-        badges: Badge identifiers newly awarded.
+        level_up: Whether this result caused a level increase.
+        streak_days: Student's current streak in days.
+        challenges_completed: Challenge identifiers completed.
+        achievements_unlocked: Achievement identifiers newly unlocked.
     """
 
-    points: int
+    total_points: int
     level: int
-    streak: int
-    challenges: list[str]
-    badges: list[str]
+    level_up: bool
+    streak_days: int
+    challenges_completed: tuple[str, ...]
+    achievements_unlocked: tuple[str, ...]
 
 
 def apply_location_result(
     session_location_id: UUID,
     db: Session,
 ) -> EngagementResult:
-    """Apply a location outcome to the student's engagement state.
+    """Return engagement information for a processed session location.
 
-    Intended to be called inside the finish-location transaction after
-    the location outcome has been determined.
+    The caller must set the session location's status and points_awarded
+    before calling this function within the finish-location transaction.
 
-    The eventual implementation will update points, level, streak,
-    challenges, and badges, then return an EngagementResult.
+    The eventual implementation must read status and points_awarded from
+    the session location, update the student's engagement state, and
+    return the resulting engagement information.
+
+    Processing must be idempotent: calling this function more than once
+    for the same session location must not award points twice.
+
+    Failed and skipped locations must award zero points and must not
+    count as an active day for streak calculations.
 
     The caller owns the transaction. This function must not commit.
 
+    This temporary stub returns fixed placeholder values without reading
+    or modifying the database. It does not yet implement scoring,
+    persistence, streak updates, or idempotency enforcement.
+
     Args:
-        session_location_id: ID of the session location being processed.
+        session_location_id: ID of the processed session location.
         db: SQLAlchemy session belonging to the caller's transaction.
 
     Returns:
-        EngagementResult containing the engagement information.
-
-    Raises:
-        NotImplementedError: Engagement processing has not yet been
-            implemented. This function currently defines only the
-            public interface contract.
+        EngagementResult containing placeholder engagement information.
     """
-    raise NotImplementedError("Issue #15: engagement processing is not implemented")
+    return EngagementResult(
+        total_points=0,
+        level=1,
+        level_up=False,
+        streak_days=0,
+        challenges_completed=(),
+        achievements_unlocked=(),
+    )
 
 
 def get_class_language(class_id: UUID, db: Session) -> Language | None:
