@@ -135,6 +135,269 @@
         }
       }
     },
+    "/api/v1/teacher/classes": {
+      "get": {
+        "tags": [
+          "teacher-classes"
+        ],
+        "summary": "List classrooms for a teacher or TA",
+        "description": "Return classrooms owned or assisted by the authenticated user.",
+        "operationId": "listTeacherClasses",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ClassListItem"
+                  },
+                  "type": "array",
+                  "title": "Response Listteacherclasses"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "teacher-classes"
+        ],
+        "summary": "Create a classroom",
+        "description": "Create a classroom with a fixed target language, assign the creator as owner, and generate an initial access code.",
+        "operationId": "createClass",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClassRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateClassResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/teacher/classes/{class_id}": {
+      "patch": {
+        "tags": [
+          "teacher-classes"
+        ],
+        "summary": "Update classroom settings",
+        "description": "Allow the classroom owner to update the name and leaderboard setting. The target language cannot be changed.",
+        "operationId": "updateClass",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "class_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Class Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateClassRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateClassResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teacher/classes/{class_id}/access-codes": {
+      "post": {
+        "tags": [
+          "teacher-classes"
+        ],
+        "summary": "Create a classroom access code",
+        "description": "Allow a classroom owner or teaching assistant to generate an additional access code with optional expiration and usage limits.",
+        "operationId": "createAccessCode",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "class_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Class Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAccessCodeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessCodeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teacher/access-codes/{code_id}": {
+      "patch": {
+        "tags": [
+          "teacher-access-codes"
+        ],
+        "summary": "Deactivate an access code",
+        "description": "Allow a classroom owner or teaching assistant to deactivate an existing access code.",
+        "operationId": "updateAccessCode",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "code_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Code Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAccessCodeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessCodeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -164,6 +427,204 @@
   },
   "components": {
     "schemas": {
+      "AccessCodeResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "class_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Class Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "max_uses": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Uses"
+          },
+          "uses_count": {
+            "type": "integer",
+            "title": "Uses Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "class_id",
+          "code",
+          "expires_at",
+          "is_active",
+          "max_uses",
+          "uses_count"
+        ],
+        "title": "AccessCodeResponse"
+      },
+      "ClassListItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "semester": {
+            "type": "string",
+            "title": "Semester"
+          },
+          "target_language": {
+            "$ref": "#/components/schemas/Language"
+          },
+          "leaderboard_enabled": {
+            "type": "boolean",
+            "title": "Leaderboard Enabled"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "staff_role": {
+            "$ref": "#/components/schemas/ClassStaffRole"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "semester",
+          "target_language",
+          "leaderboard_enabled",
+          "archived_at",
+          "staff_role"
+        ],
+        "title": "ClassListItem"
+      },
+      "ClassStaffRole": {
+        "type": "string",
+        "enum": [
+          "owner",
+          "assistant"
+        ],
+        "title": "ClassStaffRole"
+      },
+      "CreateAccessCodeRequest": {
+        "properties": {
+          "max_uses": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Uses"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "title": "CreateAccessCodeRequest"
+      },
+      "CreateClassRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Name"
+          },
+          "semester": {
+            "type": "string",
+            "pattern": "^[0-9]{4}(W1|W2|S1|S2)$",
+            "title": "Semester"
+          },
+          "target_language": {
+            "$ref": "#/components/schemas/Language"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "semester",
+          "target_language"
+        ],
+        "title": "CreateClassRequest"
+      },
+      "CreateClassResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "semester": {
+            "type": "string",
+            "title": "Semester"
+          },
+          "target_language": {
+            "$ref": "#/components/schemas/Language"
+          },
+          "access_code": {
+            "type": "string",
+            "title": "Access Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "semester",
+          "target_language",
+          "access_code"
+        ],
+        "title": "CreateClassResponse"
+      },
       "ErrorBody": {
         "properties": {
           "code": {
@@ -244,6 +705,18 @@
         "title": "ErrorResponse",
         "description": "The body of every error response, the same shape as AppError.body() (for OpenAPI)."
       },
+      "Language": {
+        "type": "string",
+        "enum": [
+          "ja",
+          "zh",
+          "fr",
+          "de",
+          "ko",
+          "es"
+        ],
+        "title": "Language"
+      },
       "RegisterRequest": {
         "properties": {
           "email": {
@@ -277,6 +750,91 @@
           "password"
         ],
         "title": "RegisterRequest"
+      },
+      "UpdateAccessCodeRequest": {
+        "properties": {
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "UpdateAccessCodeRequest"
+      },
+      "UpdateClassRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "leaderboard_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leaderboard Enabled"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "UpdateClassRequest"
+      },
+      "UpdateClassResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "semester": {
+            "type": "string",
+            "title": "Semester"
+          },
+          "target_language": {
+            "$ref": "#/components/schemas/Language"
+          },
+          "leaderboard_enabled": {
+            "type": "boolean",
+            "title": "Leaderboard Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "semester",
+          "target_language",
+          "leaderboard_enabled"
+        ],
+        "title": "UpdateClassResponse"
+      }
+    },
+    "securitySchemes": {
+      "OAuth2PasswordBearer": {
+        "type": "oauth2",
+        "flows": {
+          "password": {
+            "scopes": {},
+            "tokenUrl": "login"
+          }
+        }
       }
     }
   }
