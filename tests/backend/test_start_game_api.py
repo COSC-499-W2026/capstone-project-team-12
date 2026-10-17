@@ -120,7 +120,7 @@ def test_not_enough_content_returns_409(
     make_user: Callable[..., User],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    four = frozenset(list(content.eligible_location_ids(db, Language.JA, Difficulty.BASIC))[:4])
+    four = frozenset(list(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))[:4])
     monkeypatch.setattr(content, "eligible_location_ids", lambda *_: four)
 
     response = start(client, make_user(), difficulty=1, language="ja")
