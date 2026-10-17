@@ -14,13 +14,14 @@ from app.config import get_settings
 from app.db import get_db
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
-from app.models.enums import ClassStaffRole
+from app.models.enums import ClassStaffRole, UserRole
 
 __all__ = [
     "get_current_user",
     "require_class_role",
     "is_class_staff",
     "can_manage_content",
+    "require_admin",
 ]
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
@@ -68,6 +69,12 @@ def require_class_role(*allowed_roles: ClassStaffRole) -> Callable[..., None]:
             raise AppError(ErrorCode.FORBIDDEN_ROLE)
 
     return role_checker
+
+
+def require_admin(user: Annotated[User, Depends(get_current_user)]) -> None:
+    """Raises a FORBIDDEN_ROLE (403) error if current user does not have the admin role"""
+    if user.role != UserRole.ADMIN:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE)
 
 
 def is_class_staff(user_id: UUID, class_id: UUID, db: Session) -> bool:
