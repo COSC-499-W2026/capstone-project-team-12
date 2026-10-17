@@ -1,12 +1,14 @@
-"""abandon_sessions ends only open games, and is_idle decides when an open game expires."""
+"""abandon_sessions ends only the open games that match, and the idle rule is the same for one
+loaded game (is_idle) and for a query (idle_condition)."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.game.sessions import abandon_sessions, is_idle
+from app.game.sessions import abandon_sessions, idle_condition, is_idle
 from app.models.enums import LocationStatus, SessionEndReason, SessionState, SkipReason
 from app.models.game import GameSession, SessionLocation
 
@@ -28,8 +30,9 @@ def test_an_open_game_is_abandoned_and_its_unfinished_locations_skipped(
     current = make_session_location(game, 2, status=LocationStatus.NAVIGATING, started_at=now)
     later = make_session_location(game, 3)
 
-    abandon_sessions([game.id], SessionEndReason.EXPIRED, db)
+    ended = abandon_sessions(SessionEndReason.EXPIRED, [GameSession.id == game.id], db)
 
+    assert ended == [game.id]
     for row in (game, done, current, later):
         db.refresh(row)
     assert (game.state, game.end_reason) == (SessionState.ABANDONED, SessionEndReason.EXPIRED)
@@ -47,14 +50,17 @@ def test_a_game_that_already_ended_is_left_alone(
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
 ) -> None:
-    # Negative: the ids may include a game that ended between choosing it and ending it.
+    # Negative: a game that has already ended matches the condition but must not change.
     now = datetime.now(UTC)
     completed = make_game_session(state=SessionState.COMPLETED, completed_at=now)
     quit_game = make_game_session(state=SessionState.ABANDONED, end_reason=SessionEndReason.QUIT)
     left_pending = make_session_location(quit_game, 1)
 
-    abandon_sessions([completed.id, quit_game.id], SessionEndReason.EXPIRED, db)
+    ended = abandon_sessions(
+        SessionEndReason.EXPIRED, [GameSession.id.in_([completed.id, quit_game.id])], db
+    )
 
+    assert ended == []
     for row in (completed, quit_game, left_pending):
         db.refresh(row)
     assert (completed.state, completed.end_reason) == (SessionState.COMPLETED, None)
@@ -65,10 +71,26 @@ def test_a_game_that_already_ended_is_left_alone(
     assert left_pending.status == LocationStatus.PENDING
 
 
-def test_no_ids_changes_nothing(db: Session, make_game_session: Callable[..., GameSession]) -> None:
+def test_only_the_games_that_match_are_ended(
+    db: Session, make_game_session: Callable[..., GameSession]
+) -> None:
+    mine, other = make_game_session(), make_game_session()
+
+    ended = abandon_sessions(SessionEndReason.EXPIRED, [GameSession.id == mine.id], db)
+
+    db.refresh(mine)
+    db.refresh(other)
+    assert ended == [mine.id]
+    assert (mine.state, other.state) == (SessionState.ABANDONED, SessionState.ACTIVE)
+
+
+def test_no_condition_is_refused_instead_of_ending_every_game(
+    db: Session, make_game_session: Callable[..., GameSession]
+) -> None:
     game = make_game_session()
 
-    abandon_sessions([], SessionEndReason.EXPIRED, db)
+    with pytest.raises(ValueError, match="at least one condition"):
+        abandon_sessions(SessionEndReason.EXPIRED, [], db)
 
     db.refresh(game)
     assert game.state == SessionState.ACTIVE
@@ -84,9 +106,17 @@ def test_no_ids_changes_nothing(db: Session, make_game_session: Callable[..., Ga
     ids=["23h59m", "24h", "24h01m"],
 )
 def test_a_game_is_idle_from_the_limit_on(
-    make_game_session: Callable[..., GameSession], idle_for: timedelta, expected: bool
+    db: Session,
+    make_game_session: Callable[..., GameSession],
+    idle_for: timedelta,
+    expected: bool,
 ) -> None:
     now = datetime.now(UTC)
     game = make_game_session(last_activity_at=now - idle_for)
 
     assert is_idle(game, now, IDLE_LIMIT) is expected
+    # the query used to find games to expire gives the same answer
+    in_query = db.scalar(
+        select(GameSession.id).where(GameSession.id == game.id, idle_condition(now, IDLE_LIMIT))
+    )
+    assert (in_query == game.id) is expected
