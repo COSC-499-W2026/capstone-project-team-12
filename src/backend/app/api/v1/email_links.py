@@ -16,6 +16,7 @@ from app.accounts.email_links import (
 )
 from app.accounts.register import email_is_valid
 from app.db import get_db
+from app.errors import error_responses
 
 email_links_router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -45,7 +46,11 @@ class StatusResponse(BaseModel):
     status: str = "ok"
 
 
-@email_links_router.post("/verify-email", operation_id="verifyEmail")
+@email_links_router.post(
+    "/verify-email",
+    operation_id="verifyEmail",
+    responses=error_responses(HTTPStatus.BAD_REQUEST),  # INVALID_TOKEN
+)
 def post_verify_email(
     request: TokenRequest, db: Annotated[Session, Depends(get_db)]
 ) -> StatusResponse:

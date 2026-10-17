@@ -31,8 +31,10 @@ TOKEN_KINDS = (
 
 MAX_EMAIL_ATTEMPTS = 5
 
-# pending rows, priority 1 first then oldest; "due" (next_attempt_at <= now()) stays in the query
-PENDING_DUE_INDEX = "ix_email_outbox_pending_priority_created"
+# pending rows by priority, then by when they are due: the send job's query (services.email_sender)
+PENDING_DUE_INDEX = "ix_email_outbox_pending_priority_next_attempt"
+# a literal, not a bound parameter, so a prepared statement can still use the partial index
+PENDING_WHERE = f"status = '{EmailStatus.PENDING}'"
 RECENT_INDEX = "ix_email_outbox_to_email_template_created"
 # a second reset request while one is still pending adds no message (spec, Email delivery)
 ONE_PENDING_RESET_INDEX = "uq_email_outbox_one_pending_reset"
@@ -115,8 +117,8 @@ class EmailOutbox(Base):
         Index(
             PENDING_DUE_INDEX,
             "priority",
-            "created_at",
-            postgresql_where=text(f"status = '{EmailStatus.PENDING}'"),
+            "next_attempt_at",
+            postgresql_where=text(PENDING_WHERE),
         ),
         # the 3-per-hour limit counts recent rows for one address and kind
         Index(RECENT_INDEX, "to_email", "template", "created_at"),
