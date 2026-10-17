@@ -12,6 +12,7 @@ dependencies = [
     "alembic>=1.13",
     "pydantic-settings>=2.4",
     "tzdata>=2024.1",
+    "pyjwt>=2.15.1",
     "easyocr>=1.7.2",
     "torch>=2.8,<2.10",  # CPU-only build, see requirements.txt; EasyOCR 1.7.2 needs torch.quantization
     "torchvision>=0.23,<0.25",
