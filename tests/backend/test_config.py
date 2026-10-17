@@ -37,6 +37,14 @@ def test_gps_radius_must_be_positive(monkeypatch: pytest.MonkeyPatch, radius: st
         Settings(_env_file=None)
 
 
+# a typo, and a directory name (ZoneInfo raises OSError for it)
+@pytest.mark.parametrize("name", ["America/Vancover", "America"])
+def test_app_timezone_must_exist(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    monkeypatch.setenv("APP_TIMEZONE", name)
+    with pytest.raises(ValidationError, match="app_timezone"):
+        Settings(_env_file=None)
+
+
 def test_get_settings_is_cached() -> None:
     assert get_settings() is get_settings()
 
