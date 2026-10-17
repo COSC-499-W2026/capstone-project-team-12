@@ -1,8 +1,10 @@
+from http import HTTPStatus
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse
 
+from app.errors import error_responses
 from app.services.storage import StorageService, get_storage_service
 
 media_router = APIRouter(prefix="/media", tags=["media"])
@@ -11,7 +13,12 @@ media_router = APIRouter(prefix="/media", tags=["media"])
 _NO_CACHE = {"Cache-Control": "private, no-store"}
 
 
-@media_router.get("/{key:path}", operation_id="getMediaFile", response_class=FileResponse)
+@media_router.get(
+    "/{key:path}",
+    operation_id="getMediaFile",
+    response_class=FileResponse,
+    responses=error_responses(HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND),
+)
 def get_media_file(
     key: str,
     expires: int,
