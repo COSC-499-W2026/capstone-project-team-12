@@ -110,7 +110,7 @@ def _check_no_open_game(student_id: UUID, db: Session) -> None:
             "Finish or quit your current game first",
             details=[{"session_id": str(game.id)}],
         )
-    abandon_sessions([game.id], SessionEndReason.EXPIRED, db)
+    abandon_sessions(SessionEndReason.EXPIRED, [GameSession.id == game.id], db)
 
 
 def _create_game(
