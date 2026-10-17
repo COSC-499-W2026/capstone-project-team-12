@@ -29,6 +29,28 @@ from app.models.enums import AudioSourceType, FeedbackCode, VerificationType
 # A room number as printed on the sign: building code, a space, then the number, e.g. "SCI 333".
 # The client confirmed 3 letters + 3 digits everywhere except one building, which uses 4 digits.
 ROOM_NUMBER_PATTERN = "^[A-Z]{3} [0-9]{3,4}$"
+# An accepted answer, normalised as OCR text is (uppercase, no space): e.g. "SCI333".
+ANSWER_PATTERN = ROOM_NUMBER_PATTERN.replace(" ", "")
+
+# jsonpath filters that find a bad item. The type test uses strict mode because lax mode would
+# unwrap a nested array and check its contents instead; the lat/lng test uses lax mode because
+# strict mode treats a missing key as unknown and lets the item through.
+_ANSWER_NOT_NORMALISED = (
+    f'strict $[*] ? (@.type() != "string" || !(@ like_regex "{ANSWER_PATTERN}"))'
+)
+_POINT_NOT_OBJECT = 'strict $[*] ? (@.type() != "object")'
+_POINT_OUT_OF_RANGE = (
+    '$[*] ? (!(@.lat.type() == "number") || !(@.lng.type() == "number")'
+    " || @.lat < -90 || @.lat > 90 || @.lng < -180 || @.lng > 180)"
+)
+
+
+def _no_json_item_matches(column: str, path: str) -> str:
+    """SQL that is true when no item of the JSONB array `column` matches the filter `path`.
+
+    Silent: a value that is not an array gives NULL instead of an error; non_empty_array rejects it.
+    """
+    return f"NOT jsonb_path_exists({column}, '{path}', '{{}}', true)"
 
 
 class Location(Base):
@@ -50,6 +72,16 @@ class Location(Base):
         # a location with no answers or no entrance points could never be completed
         non_empty_array("accepted_answers"),
         non_empty_array("gps_points"),
+        # OCR text is matched after normalisation, so an answer like "SCI 333" could never match
+        CheckConstraint(
+            _no_json_item_matches("accepted_answers", _ANSWER_NOT_NORMALISED),
+            name="accepted_answers_normalised",
+        ),
+        CheckConstraint(
+            f"{_no_json_item_matches('gps_points', _POINT_NOT_OBJECT)}"
+            f" AND {_no_json_item_matches('gps_points', _POINT_OUT_OF_RANGE)}",
+            name="gps_points_lat_lng",
+        ),
         CheckConstraint("gps_radius_meters > 0", name="gps_radius_meters"),
     )
 
@@ -64,9 +96,8 @@ class Location(Base):
     # MutableList so that changing a list in place (e.g. append) is saved, as with
     # SessionLocation.flags. It only tracks the list itself: to change an entrance's lat or lng,
     # replace the list (or the point), not a value inside the dict.
-    # normalised as OCR text is (no space), e.g. ["SCI333"]
     accepted_answers: Mapped[list[str]] = mapped_column(MutableList.as_mutable(JSONB))
-    # one {"lat": ..., "lng": ...} per building entrance
+    # one {"lat": <number>, "lng": <number>} per building entrance, within range
     gps_points: Mapped[list[dict[str, Any]]] = mapped_column(MutableList.as_mutable(JSONB))
     # no default here: the service fills in the gps_radius_meters setting
     gps_radius_meters: Mapped[int]

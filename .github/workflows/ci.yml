@@ -59,6 +59,9 @@ jobs:
       - name: Dependency rules
         run: python ../../utils/dep_graph.py --check
 
+      - name: OpenAPI spec is up to date
+        run: python ../../utils/export_openapi.py --check
+
       - name: Alembic upgrade
         run: alembic upgrade head
 

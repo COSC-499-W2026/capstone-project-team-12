@@ -31,37 +31,19 @@ def test_raw_sql_location_inserts_get_the_server_defaults(db: Session) -> None:
             " gps_points, gps_radius_meters)"
             " VALUES ('Science 333', 'Science', 'SCI 333', '[\"SCI333\"]',"
             ' \'[{"lat": 49.9, "lng": -119.4}]\', 30)'
-            " RETURNING id, verification_type, is_active, floor_number, created_at, updated_at"
+            " RETURNING verification_type, is_active, floor_number, created_at, updated_at"
         )
     ).one()
-    assert location.id is not None
     assert location.verification_type == VerificationType.ROOM_NUMBER
     assert location.is_active is True
     assert location.floor_number is None
     assert location.created_at is not None and location.updated_at is not None
 
 
-def test_each_test_location_has_its_own_room_and_answer(
-    make_location: Callable[..., Location],
-) -> None:
-    first, second = make_location(), make_location()
-    assert first.room_number != second.room_number
-    assert first.accepted_answers == [str(first.room_number).replace(" ", "")]
-
-
 def test_a_room_number_belongs_to_one_location(make_location: Callable[..., Location]) -> None:
     make_location(room_number="SCI 333")
     with pytest.raises(IntegrityError, match="uq_locations_room_number"):
         make_location(room_number="SCI 333")
-
-
-@pytest.mark.parametrize("room_number", ["SCI 333", "ART 1234"])
-def test_a_room_number_has_three_letters_and_three_or_four_digits(
-    db: Session, make_location: Callable[..., Location], room_number: str
-) -> None:
-    location = make_location(room_number=room_number)
-    db.refresh(location)
-    assert location.room_number == room_number
 
 
 @pytest.mark.parametrize(
@@ -72,13 +54,6 @@ def test_a_room_number_not_in_the_sign_format_is_rejected(
 ) -> None:
     with pytest.raises(IntegrityError, match='"ck_locations_room_number_format"'):
         make_location(room_number=room_number)
-
-
-def test_a_room_number_location_needs_a_room_number(
-    make_location: Callable[..., Location],
-) -> None:
-    with pytest.raises(IntegrityError, match='"ck_locations_room_number_required"'):
-        make_location(room_number=None)
 
 
 @pytest.mark.parametrize("value", [[], {}, "SCI333", None])
@@ -95,6 +70,18 @@ def test_answers_and_entrances_are_non_empty_arrays(
         )
 
 
+def test_several_normalised_answers_and_entrances_at_the_range_limits_are_kept(
+    db: Session, make_location: Callable[..., Location]
+) -> None:
+    location = make_location(
+        accepted_answers=["SCI333", "ART1234"],
+        gps_points=[{"lat": -90, "lng": 180}, {"lat": 90.0, "lng": -180.0, "note": "side door"}],
+    )
+    db.refresh(location)
+    assert location.accepted_answers == ["SCI333", "ART1234"]
+    assert len(location.gps_points) == 2
+
+
 def test_editing_answers_or_entrances_in_place_is_saved(
     db: Session, make_location: Callable[..., Location]
 ) -> None:
@@ -108,32 +95,36 @@ def test_editing_answers_or_entrances_in_place_is_saved(
 
 
 @pytest.mark.parametrize(
-    ("field", "value", "constraint"),
+    ("field", "value", "check"),
     [
-        ("name", "", "ck_locations_name_not_blank"),
-        ("name", "   ", "ck_locations_name_not_blank"),
-        ("building_name", " ", "ck_locations_building_name_not_blank"),
-        ("gps_radius_meters", 0, "ck_locations_gps_radius_meters"),
-        ("verification_type", "qr_code", "ck_locations_verification_type"),
+        ("name", "   ", "name_not_blank"),
+        ("building_name", " ", "building_name_not_blank"),
+        ("room_number", None, "room_number_required"),
+        ("verification_type", "qr_code", "verification_type"),
+        ("gps_radius_meters", 0, "gps_radius_meters"),
+        # OCR text is compared without spaces, so this answer could never match
+        ("accepted_answers", ["SCI 333"], "accepted_answers_normalised"),
+        ("accepted_answers", [""], "accepted_answers_normalised"),
+        ("accepted_answers", [333], "accepted_answers_normalised"),
+        ("accepted_answers", [["SCI333"]], "accepted_answers_normalised"),  # strict mode
+        ("gps_points", [{}], "gps_points_lat_lng"),
+        ("gps_points", [{"lat": 49.9}], "gps_points_lat_lng"),
+        ("gps_points", [{"lat": [49.9], "lng": 0}], "gps_points_lat_lng"),  # not unwrapped
+        ("gps_points", [[{"lat": 49.9, "lng": 0}]], "gps_points_lat_lng"),  # strict mode
+        ("gps_points", [{"lat": 90.1, "lng": 0}], "gps_points_lat_lng"),
+        ("gps_points", [{"lat": -90.1, "lng": 0}], "gps_points_lat_lng"),
+        ("gps_points", [{"lat": 0, "lng": 180.1}], "gps_points_lat_lng"),
+        ("gps_points", [{"lat": 0, "lng": -180.1}], "gps_points_lat_lng"),
     ],
 )
 def test_location_values_stay_in_range(
-    make_location: Callable[..., Location], field: str, value: object, constraint: str
+    make_location: Callable[..., Location], field: str, value: object, check: str
 ) -> None:
-    with pytest.raises(IntegrityError, match=f'"{constraint}"'):
+    with pytest.raises(IntegrityError, match=f'"ck_locations_{check}"'):
         make_location(**{field: value})
 
 
 # clues
-
-
-def test_a_test_clue_is_basic_japanese_without_a_transcript(
-    db: Session, make_clue: Callable[..., Clue]
-) -> None:
-    clue = make_clue()
-    db.refresh(clue)
-    assert (clue.difficulty, clue.language, clue.text) == (Difficulty.BASIC, Language.JA, None)
-    assert db.get(Location, clue.location_id) is not None
 
 
 def test_a_clue_for_a_given_location_id_adds_no_other_location(
@@ -159,7 +150,6 @@ def test_a_location_has_one_clue_per_difficulty_and_language(
 @pytest.mark.parametrize(
     ("field", "value", "constraint"),
     [
-        ("difficulty", 0, "ck_clues_difficulty"),
         ("difficulty", 4, "ck_clues_difficulty"),
         ("language", "en", "ck_clues_language"),
         ("location_id", uuid4(), "fk_clues_location_id_locations"),

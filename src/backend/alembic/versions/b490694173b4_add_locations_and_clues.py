@@ -1,7 +1,7 @@
 """add locations and clues
 
 Revision ID: b490694173b4
-Revises: 1d35b6cae138
+Revises: 4c7e2a9b1f30
 Create Date: 2026-10-13 15:38:44.721471
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "b490694173b4"
-down_revision: str | None = "1d35b6cae138"
+down_revision: str | None = "4c7e2a9b1f30"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -63,6 +63,19 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "verification_type IN ('room_number')", name=op.f("ck_locations_verification_type")
+        ),
+        sa.CheckConstraint(
+            'NOT jsonb_path_exists(accepted_answers, \'strict $[*] ? (@.type() != "string"'
+            " || !(@ like_regex \"^[A-Z]{3}[0-9]{3,4}$\"))', '{}', true)",
+            name=op.f("ck_locations_accepted_answers_normalised"),
+        ),
+        sa.CheckConstraint(
+            "NOT jsonb_path_exists(gps_points, 'strict $[*] ? (@.type() != \"object\")',"
+            " '{}', true) AND NOT jsonb_path_exists(gps_points,"
+            ' \'$[*] ? (!(@.lat.type() == "number")'
+            ' || !(@.lng.type() == "number") || @.lat < -90 || @.lat > 90 || @.lng < -180'
+            " || @.lng > 180)', '{}', true)",
+            name=op.f("ck_locations_gps_points_lat_lng"),
         ),
         sa.CheckConstraint("gps_radius_meters > 0", name=op.f("ck_locations_gps_radius_meters")),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_locations")),
