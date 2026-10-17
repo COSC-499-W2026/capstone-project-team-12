@@ -122,7 +122,7 @@ Functions in a component's `interface.py` and in the shared services (`app/servi
 
 ```python
 location_snapshot(location_id, language, difficulty, db)
-require_class_role(user, class_id, required_role, db)
+is_class_staff(user_id, class_id, db)
 end_open_sessions(class_id, db, student_id=None)
 ```
 
