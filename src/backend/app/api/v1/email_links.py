@@ -88,7 +88,11 @@ def post_forgot_password(
     return StatusResponse()
 
 
-@email_links_router.post("/reset-password", operation_id="resetPassword")
+@email_links_router.post(
+    "/reset-password",
+    operation_id="resetPassword",
+    responses=error_responses(HTTPStatus.BAD_REQUEST),  # INVALID_TOKEN
+)
 def post_reset_password(
     request: ResetPasswordRequest, db: Annotated[Session, Depends(get_db)]
 ) -> StatusResponse:
