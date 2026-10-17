@@ -4,16 +4,17 @@ Implemented:
 - Issue #11: Class language, active enrolment, and archived-state lookups.
 - Issue #106: Access code validation and student enrolment.
 
-Planned:
+Interface stub:
 - Issue #15: Location result to engagement.
 
 Callers must check class existence and archived status before enrolment
 so archived classes produce CLASS_ARCHIVED rather than an enrolment error.
 
-The enrolment function does not commit the transaction. Callers are
+Engagement and enrolment functions do not commit transactions. Callers are
 responsible for committing or rolling back the entire operation.
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -31,11 +32,78 @@ from app.models.enums import (
 )
 
 __all__ = [
+    "EngagementResult",
+    "apply_location_result",
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
     "validate_code_and_enrol",
 ]
+
+
+@dataclass(frozen=True)
+class EngagementResult:
+    """Engagement information returned after processing a location result.
+
+    Fields follow the technical specification's engagement response contract.
+
+    Attributes:
+        total_points: Student's cumulative points.
+        level: Student's current level.
+        level_up: Whether this result caused a level increase.
+        streak_days: Student's current streak in days.
+        challenges_completed: Challenge identifiers completed.
+        achievements_unlocked: Achievement identifiers newly unlocked.
+    """
+
+    total_points: int
+    level: int
+    level_up: bool
+    streak_days: int
+    challenges_completed: tuple[str, ...]
+    achievements_unlocked: tuple[str, ...]
+
+
+def apply_location_result(
+    session_location_id: UUID,
+    db: Session,
+) -> EngagementResult:
+    """Return engagement information for a processed session location.
+
+    The caller must set the session location's status and points_awarded
+    before calling this function within the finish-location transaction.
+
+    The eventual implementation must read status and points_awarded from
+    the session location, update the student's engagement state, and
+    return the resulting engagement information.
+
+    Processing must be idempotent: calling this function more than once
+    for the same session location must not award points twice.
+
+    Failed and skipped locations must award zero points and must not
+    count as an active day for streak calculations.
+
+    The caller owns the transaction. This function must not commit.
+
+    This temporary stub returns fixed placeholder values without reading
+    or modifying the database. It does not yet implement scoring,
+    persistence, streak updates, or idempotency enforcement.
+
+    Args:
+        session_location_id: ID of the processed session location.
+        db: SQLAlchemy session belonging to the caller's transaction.
+
+    Returns:
+        EngagementResult containing placeholder engagement information.
+    """
+    return EngagementResult(
+        total_points=0,
+        level=1,
+        level_up=False,
+        streak_days=0,
+        challenges_completed=(),
+        achievements_unlocked=(),
+    )
 
 
 def get_class_language(class_id: UUID, db: Session) -> Language | None:
