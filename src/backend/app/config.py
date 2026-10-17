@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     database_url: str = "postgresql+psycopg://hunt:hunt@localhost:5432/hunt"
     secret_key: str = "change-me"
+    access_token_secret_key: str = "change-me"
     smtp_host: str = "localhost"
     smtp_port: int = 1025
     # Mailpit needs neither; a real provider needs STARTTLS and a login
@@ -42,6 +43,18 @@ class Settings(BaseSettings):
             raise ValueError("set APP_BASE_URL and MAIL_FROM outside development")
         if self.smtp_username and not self.smtp_starttls:  # the password would go in the clear
             raise ValueError("set SMTP_STARTTLS when SMTP_USERNAME is set outside development")
+        return self
+
+    @model_validator(mode="after")
+    def _check_token_settings(self) -> "Settings":
+        if self.app_env == "development":
+            return self
+        if not self.access_token_secret_key:
+            raise ValueError("ACCESS_TOKEN_SECRET_KEY not set")
+        if self.access_token_secret_key == "change-me":
+            raise ValueError("ACCESS_TOKEN_SECRET_KEY must be changed from default value")
+        if len(self.access_token_secret_key) < 16:
+            raise ValueError("ACCESS_TOKEN_SECRET_KEY must be at least 16 characters.")
         return self
 
 

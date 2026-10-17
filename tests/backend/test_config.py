@@ -56,6 +56,36 @@ def test_unsafe_email_settings(
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("APP_BASE_URL", "https://hunt.example.ca")
     monkeypatch.setenv("MAIL_FROM", "Hunt <no-reply@hunt.example.ca>")
+    monkeypatch.setenv("ACCESS_TOKEN_SECRET_KEY", "a-valid-secret-key-123")
+    assert Settings(_env_file=None).app_env == "production"  # fine until one value is unsafe
+    monkeypatch.setenv(variable, value)
+    with pytest.raises(ValidationError, match=message):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize(
+    ("variable", "value", "message"),
+    [
+        (
+            "ACCESS_TOKEN_SECRET_KEY",
+            "change-me",
+            "ACCESS_TOKEN_SECRET_KEY must be changed from default value",
+        ),
+        ("ACCESS_TOKEN_SECRET_KEY", "", "ACCESS_TOKEN_SECRET_KEY not set"),
+        (
+            "ACCESS_TOKEN_SECRET_KEY",
+            "abcd",
+            "ACCESS_TOKEN_SECRET_KEY must be at least 16 characters.",
+        ),
+    ],
+)
+def test_unsafe_token_settings(
+    monkeypatch: pytest.MonkeyPatch, variable: str, value: str, message: str
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("ACCESS_TOKEN_SECRET_KEY", "a-valid-secret-key-123")
+    monkeypatch.setenv("APP_BASE_URL", "https://hunt.example.ca")
+    monkeypatch.setenv("MAIL_FROM", "Hunt <no-reply@hunt.example.ca>")
     assert Settings(_env_file=None).app_env == "production"  # fine until one value is unsafe
     monkeypatch.setenv(variable, value)
     with pytest.raises(ValidationError, match=message):
