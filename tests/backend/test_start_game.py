@@ -69,7 +69,7 @@ def test_practice_game_starts_with_five_locations(
     assert all(loc.status == LocationStatus.PENDING and loc.started_at is None for loc in rest)
     assert started.clue_audio_url == clue_audio_url(first.audio_asset_id, db)
 
-    snapshot = content.location_snapshot(db, first.location_id, Language.KO, Difficulty.ADVANCING)
+    snapshot = content.location_snapshot(first.location_id, Language.KO, Difficulty.ADVANCING, db)
     assert first.clue_id == snapshot.clue_id
     assert first.accepted_answers_snapshot == list(snapshot.accepted_answers)
     assert first.gps_points_snapshot == [{"lat": p.lat, "lng": p.lng} for p in snapshot.gps_points]
@@ -99,7 +99,7 @@ def test_staff_can_play_practice(db: Session, make_user: Callable[..., User]) ->
 def test_not_enough_content(
     db: Session, make_user: Callable[..., User], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    four = frozenset(list(content.eligible_location_ids(db, Language.JA, Difficulty.BASIC))[:4])
+    four = frozenset(list(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))[:4])
     monkeypatch.setattr(content, "eligible_location_ids", lambda *_: four)
 
     student = make_user()

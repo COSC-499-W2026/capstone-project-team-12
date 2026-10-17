@@ -40,7 +40,7 @@ def draw_locations(
     Only reads.
     """
     count = get_settings().locations_per_game
-    eligible = content.eligible_location_ids(db, language, difficulty)
+    eligible = content.eligible_location_ids(language, difficulty, db)
     if len(eligible) < count:
         raise _not_enough_content()
 
@@ -56,7 +56,7 @@ def draw_locations(
     drawn: list[content.LocationSnapshot] = []
     for location_id in carried + fresh + played:
         try:
-            drawn.append(content.location_snapshot(db, location_id, language, difficulty))
+            drawn.append(content.location_snapshot(location_id, language, difficulty, db))
         except content.LocationNotEligibleError:
             # e.g. deactivated since the eligible list was read
             continue

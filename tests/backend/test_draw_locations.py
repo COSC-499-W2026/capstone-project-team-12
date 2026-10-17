@@ -30,7 +30,7 @@ JA, BASIC = Language.JA, Difficulty.BASIC
 
 @pytest.fixture
 def eligible(db: Session) -> list[UUID]:
-    return sorted(content.eligible_location_ids(db, JA, BASIC))
+    return sorted(content.eligible_location_ids(JA, BASIC, db))
 
 
 @pytest.fixture
@@ -139,11 +139,11 @@ def test_snapshot_failures_are_skipped(
     real_snapshot = content.location_snapshot
 
     def snapshot(
-        db: Session, location_id: UUID, language: Language, difficulty: Difficulty
+        location_id: UUID, language: Language, difficulty: Difficulty, db: Session
     ) -> content.LocationSnapshot:
         if location_id in gone:
             raise content.LocationNotEligibleError(location_id)
-        return real_snapshot(db, location_id, language, difficulty)
+        return real_snapshot(location_id, language, difficulty, db)
 
     monkeypatch.setattr(content, "eligible_location_ids", lambda *_: frozenset(six))
     monkeypatch.setattr(content, "location_snapshot", snapshot)
