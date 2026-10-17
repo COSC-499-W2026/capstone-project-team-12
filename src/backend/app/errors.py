@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,25 @@ class AppError(Exception):
 
     def body(self) -> dict[str, Any]:
         return {"error": {"code": self.code, "message": self.message, "details": self.details}}
+
+
+class ErrorBody(BaseModel):
+    code: ErrorCode
+    message: str
+    details: list[Any]
+
+
+class ErrorResponse(BaseModel):
+    """The body of every error response, the same shape as AppError.body() (for OpenAPI)."""
+
+    error: ErrorBody
+
+
+def error_responses(*statuses: HTTPStatus) -> dict[int | str, dict[str, Any]]:
+    """`responses=` for a route's error statuses, e.g. error_responses(HTTPStatus.CONFLICT)."""
+    return {
+        status.value: {"model": ErrorResponse, "description": status.phrase} for status in statuses
+    }
 
 
 # HTTPExceptions raised by FastAPI itself (unknown route, wrong method, missing bearer token)

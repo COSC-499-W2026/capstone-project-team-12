@@ -2,7 +2,8 @@
 ## Base Path and Authentication
 - All endpoints are under the base path `/api/v1`, except `GET /health`.
 - Request and response bodies are JSON, except file uploads, which use `multipart/form-data`.
-- Endpoints require an `Authorization: Bearer <access_token>` header, except register, login, refresh, verify-email, resend-verification, forgot-password, reset-password, set-password and `GET /health`.
+- Endpoints require an `Authorization: Bearer <access_token>` header, except register, login, refresh, verify-email, resend-verification, forgot-password, reset-password, set-password, `GET /health` and `GET /api/v1/media/{key}`.
+- `GET /api/v1/media/{key}` serves media files through short-lived signed links made by StorageService. Audio players and image tags cannot send an access token, so the link's signature is the permission: a tampered or expired link returns 403 `FORBIDDEN`.
 - A missing, invalid or expired access token returns 401.
 
 ## General Naming
