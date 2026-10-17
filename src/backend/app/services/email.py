@@ -146,6 +146,26 @@ class EmailService:
         return raw
 
     @staticmethod
+    def is_link_live(raw: str, kind: EmailKind, db: Session) -> bool:
+        """Whether the token exists, is of this kind, is unused and hasn't expired.
+
+        A read with no lock, so another request can use the link right after. It is only a
+        quick refusal for callers about to do slow work (bcrypt); consume_token is the check
+        that counts.
+        """
+        return (
+            db.scalar(
+                select(EmailToken.id).where(
+                    EmailToken.token_hash == EmailService.hash_token(raw),
+                    EmailToken.purpose == EmailKind(kind),
+                    EmailToken.used_at.is_(None),
+                    EmailToken.expires_at > func.now(),
+                )
+            )
+            is not None
+        )
+
+    @staticmethod
     def consume_token(raw: str, kind: EmailKind, db: Session) -> EmailToken:
         """Mark the token used and return its row.
 
