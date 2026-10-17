@@ -1,4 +1,4 @@
-"""Tests for the POST /api/v1/classes/join endpoint."""
+"""Tests for the POST /api/v1/me/classes/join endpoint."""
 
 from collections.abc import Callable
 from datetime import timedelta
@@ -27,7 +27,7 @@ def join_as(client: TestClient, user: User, code: str) -> Any:
     client.app.dependency_overrides[get_current_user] = lambda: user
 
     return client.post(
-        "/api/v1/classes/join",
+        "/api/v1/me/classes/join",
         json={"access_code": code},
     )
 
@@ -38,29 +38,36 @@ def assert_error(response: Any, status: int, code: ErrorCode) -> None:
     assert response.json()["error"]["code"] == code.value
 
 
-def test_student_joins_class_and_language_updates(
+def test_student_joins_class_without_changing_practice_language(
     client: TestClient,
     db: Session,
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
     make_access_code: Callable[..., AccessCode],
 ) -> None:
-    """Joining a class creates enrolment and selects its language."""
+    """Joining a class selects it without changing Practice language."""
     student = make_user()
-    school_class = make_class(target_language=Language.FR)
+    original_practice_language = student.preferred_language
+
+    # Use a different classroom language to detect unwanted changes.
+    class_language = next(
+        language for language in Language if language.value != original_practice_language
+    )
+
+    school_class = make_class(target_language=class_language)
     access_code = make_access_code(school_class)
 
     response = join_as(client, student, access_code.code)
 
     assert response.status_code == 200
     assert response.json()["class_id"] == str(school_class.id)
-    assert response.json()["language"] == school_class.target_language
+    assert response.json()["language"] == class_language.value
 
     db.refresh(student)
     db.refresh(access_code)
 
     assert student.current_class_id == school_class.id
-    assert student.preferred_language == school_class.target_language
+    assert student.preferred_language == original_practice_language
     assert access_code.uses_count == 1
 
     enrollment = (

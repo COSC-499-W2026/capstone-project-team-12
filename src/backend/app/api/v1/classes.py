@@ -3,7 +3,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -11,8 +11,9 @@ from app.accounts.interface import get_current_user
 from app.db import get_db
 from app.engagement.interface import get_class_language, validate_code_and_enrol
 from app.models.accounts import User
+from app.models.enums import Language
 
-classes_router = APIRouter(prefix="/classes", tags=["classes"])
+classes_router = APIRouter(prefix="/me/classes", tags=["classes"])
 
 
 class JoinClassRequest(BaseModel):
@@ -29,12 +30,13 @@ class JoinClassResponse(BaseModel):
     """Classroom selected after successful enrolment."""
 
     class_id: UUID
-    language: str
+    language: Language
 
 
 @classes_router.post(
     "/join",
     response_model=JoinClassResponse,
+    operation_id="joinClass",
     summary="Join a classroom",
     description=(
         "Enrol the authenticated student using a classroom access code. "
@@ -62,15 +64,18 @@ def join_class(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> JoinClassResponse:
-    """Join a classroom and select its language in one transaction."""
+    """Join a classroom and select it in one transaction."""
     class_id = validate_code_and_enrol(user.id, request.access_code, db)
     language = get_class_language(class_id, db)
 
-    assert language is not None
+    if language is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Class language could not be determined.",
+        )
 
     user.current_class_id = class_id
-    user.preferred_language = language.value
 
     db.commit()
 
-    return JoinClassResponse(class_id=class_id, language=language.value)
+    return JoinClassResponse(class_id=class_id, language=language)
