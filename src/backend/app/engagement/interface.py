@@ -46,28 +46,26 @@ __all__ = [
 class EngagementResult:
     """Engagement information returned after processing a location result.
 
-    This structure follows the engagement response contract in the
-    technical specification. It represents the expected result of the
-    engagement operation; the current Issue #15 implementation is a stub.
+    Defines the engagement response contract for Issue #15.
+    The current implementation is a placeholder.
 
     Attributes:
-        location_points_awarded: Points awarded for this specific location.
-            A completed location awards 100 points; a failed or skipped
-            location awards zero points.
-        total_points: Cumulative points for the student in the relevant
-            language, including eligible engagement bonuses.
-        level: Current level derived from cumulative points for the relevant
-            language.
-        level_up: Whether processing this location caused a level increase.
-        streak_days: Current global streak in days across all languages.
-        challenges_completed: Identifiers of daily challenges newly
-            completed by processing this location.
-        achievements_unlocked: Identifiers of achievements newly unlocked
-            by processing this location or its resulting streak change.
+        location_points_awarded: New location points awarded by this call.
+            A newly processed COMPLETED location awards 100 points.
+            FAILED, SKIPPED, and repeated calls award zero new points.
+        total_points: Current cumulative points in the target language,
+            including eligible engagement bonuses.
+        level: Current level derived from cumulative language points.
+        level_up: Whether this call newly increased the student's level.
+        streak_days: Current global streak across all languages.
+        challenges_completed: Daily challenge identifiers newly completed
+            during this call.
+        achievements_unlocked: Achievement identifiers newly unlocked
+            during this call.
 
     Notes:
         Achievements award badges but no points. Location, daily challenge,
-        and streak milestone points are tracked through the points ledger.
+        and streak milestone points use separate points ledger entries.
     """
 
     location_points_awarded: int
@@ -86,102 +84,163 @@ def apply_location_result(
 ) -> EngagementResult:
     """Process a finished session location and return engagement information.
 
-    Interface contract for Issue #15. The scoring and persistence
-    implementation has not yet been implemented by this stub.
+    Interface contract for Issue #15. Scoring and persistence are not yet
+    implemented by this stub.
 
-    The caller must set the session location's final status before invoking
-    this function within the finish-location transaction.
+    Ownership:
+        student_id identifies the authenticated student making the request.
+        The implementation must resolve the student through the location's
+        game session and verify that it matches student_id.
+
+        A mismatch raises FORBIDDEN before any engagement changes.
+        The signature and ownership check require agreement from the
+        finish-location and match/failed-location callers.
+
+    Preconditions:
+        The caller must set the session location's final status before
+        invoking this function within the finish-location transaction.
 
     Location scoring:
-        - A completed MATCH location awards 100 points.
-        - A failed or skipped location awards zero points.
-        - Failed and skipped locations do not count as active days for
-          streaks.
-        - A location's points are attributed to its session's target
-          language and class. The class is null for Practice sessions.
+        - A location with status COMPLETED awards 100 points when first
+          processed.
+        - A location with status FAILED or SKIPPED awards zero points.
+        - FAILED and SKIPPED return existing cumulative language points,
+          derived level, and global streak unchanged, with level_up=False
+          and no newly completed challenges or unlocked achievements.
+        - FAILED and SKIPPED do not count as active days for streaks.
+        - Location points are attributed to the session's target language
+          and class. The class is null for Practice sessions.
 
     Points and levels:
-        Points are tracked separately for each language. The points ledger
-        is the source of truth for awards. Each award and the corresponding
-        user_language_stats.total_points update must occur in the same
-        transaction.
+        Engagement determines eligible point awards and writes the
+        corresponding points ledger entries.
 
-        Levels are derived from cumulative points per language:
+        The points ledger is the source of truth. Each award and the
+        corresponding user_language_stats.total_points update must occur
+        within the same transaction.
+
+        Levels are derived from cumulative language points, not stored:
         - Level 1: 0-499 points.
         - Level 2: 500-1,499 points.
         - Level 3: 1,500-2,999 points.
         - Level 4: 3,000-4,999 points.
         - Level 5: 5,000 or more points.
 
-        The caller must use location_points_awarded to update
-        session_locations.points_awarded and game_sessions.total_score
-        within the same transaction, without independently calculating
-        the location award.
+    Session score ownership:
+        Engagement returns location_points_awarded as the number of new
+        location points awarded during this invocation.
+
+        The game caller owns updates to session_locations.points_awarded
+        and game_sessions.total_score.
+
+        On first processing, the caller stores the location award.
+        On repeat processing, location_points_awarded is zero, but the
+        caller must preserve any previously stored location points.
+
+        The caller must recalculate game_sessions.total_score from
+        persisted session location scores within the same transaction.
+        It must not blindly add the returned award to an existing score.
+
+        Daily challenge and streak milestone bonuses affect engagement
+        totals, not the location-only game session score.
 
     Idempotency:
-        Processing must be safe to repeat. A unique ledger entry for each
-        user, award source, and source reference must prevent duplicate
-        awards. Repeated calls must not award the same location, daily
-        challenge, or streak milestone points more than once.
+        Processing must be safe to repeat. Each ledger award must have
+        a unique combination of student, award source, and source reference.
 
-        A repeated call must not report a new level-up, newly completed
-        challenges, or newly unlocked achievements from the same processing
-        event. It must return the current cumulative engagement state.
+        A repeated call must:
+        - Award zero additional location points.
+        - Preserve previously stored location points.
+        - Return current cumulative language points and derived level.
+        - Return the current global streak.
+        - Set level_up=False.
+        - Return challenges_completed=().
+        - Return achievements_unlocked=().
+        - Avoid duplicate location, challenge, and milestone awards.
 
     Streaks:
         Streaks are global across languages and use the America/Vancouver
-        calendar day. Completing a location on the same day does not
-        increment the streak again. Completing a location on the day
-        immediately after the previous active day increments the streak.
-        Otherwise, the current streak starts at one. The best streak is
-        the maximum current streak reached.
+        calendar day.
+
+        Multiple completed locations on the same day count as one active
+        day. Completing a location on the day immediately after the
+        previous active day increments the streak.
+
+        Otherwise, the current streak starts at one. The best streak
+        is the maximum current streak reached.
 
     Daily challenges:
-        Three challenges are generated per user per local day when first
-        requested. Challenge progress is updated when a location finishes.
-        Challenges are global across languages and expire at local midnight.
-        Completion and difficulty challenges award 50 or 100 points.
+        Three challenges are generated per student per local day.
+
+        Before recording progress for a completed location, the
+        implementation must ensure that the student's daily challenges
+        exist, even if the student has not opened the challenges screen.
+
+        Challenge initialization must be idempotent so simultaneous
+        requests cannot generate duplicate challenges.
+
+        Challenges are global across languages and expire at local
+        midnight. Eligible completion and difficulty challenges award
+        50 or 100 points according to their definitions.
+
+        Every challenge award must have its own uniquely identifiable
+        points ledger entry. Repeated calls must not award it twice.
 
     Streak milestones:
-        The 7-day milestone awards 100 points, and the 30-day milestone
-        awards 300 points. Each milestone is awarded once per user.
-        Streak milestone and daily challenge awards must use separate,
-        uniquely identifiable ledger entries.
+        The 7-day milestone awards 100 points.
+        The 30-day milestone awards 300 points.
+
+        Each milestone is awarded once per student using a separate,
+        uniquely identifiable points ledger entry.
 
     Achievements:
-        Achievements award zero points. They are checked when a location
-        finishes and when the streak changes.
+        Achievements award zero points. Eligibility is checked after
+        processing a completed location and any resulting streak change.
 
     Validation:
-        The implementation must verify that the session location exists,
-        belongs to student_id, and has reached a final status before
-        processing it. Appropriate application errors must be used for
-        invalid states, based on the project's established error contract.
+        The implementation must verify that:
+        - The session location exists.
+        - Its associated game session belongs to student_id.
+        - The location has reached a valid final status.
+
+        Validation failures must not modify engagement state.
 
     Transactions:
-        The caller owns the transaction. Engagement may add records and
-        flush pending database changes, but must not commit or roll back.
-        All related location, session, ledger, and engagement-stat changes
-        must be consistent within the finish-location transaction.
+        The caller owns the database transaction.
 
-    This stub returns placeholder values without reading or modifying
-    the database. It does not yet implement validation, scoring, persistence,
-    ledger entries, level calculation, streak updates, challenge progress,
-    achievement checks, or idempotency enforcement.
+        Engagement may add records and flush pending database changes
+        to enforce constraints or obtain generated identifiers.
+
+        Engagement must not commit or roll back the transaction.
+
+        Location, session, ledger, and engagement-stat changes must
+        remain consistent within the caller's transaction.
+
+    Placeholder limitations:
+        This stub returns fixed values without accessing the database.
+        It does not implement validation, scoring, persistence, ledger
+        entries, level calculation, streak updates, daily challenges,
+        achievement checks, or idempotency enforcement.
 
     Args:
-        session_location_id: ID of the session location to process.
-        student_id: ID of the student who owns the session location.
+        session_location_id: UUID of the finished session location.
+        student_id: UUID of the authenticated student owning the session.
         db: SQLAlchemy session belonging to the caller's transaction.
 
     Returns:
-        EngagementResult containing location-specific points and cumulative
-        engagement information. Values are placeholders until implemented.
+        EngagementResult containing newly awarded location points and
+        cumulative engagement information. Values are placeholders
+        until the implementation is completed.
 
     Raises:
-        AppError: The eventual implementation will raise an appropriate
-            application error if the location does not exist, belongs to
-            another student, or has not reached a final status.
+        AppError(ErrorCode.NOT_FOUND): Session location does not exist.
+        AppError(ErrorCode.FORBIDDEN): Session location belongs to
+            another student.
+        AppError(ErrorCode.INVALID_STAGE): Session location has not
+            reached a final status.
+
+        These errors define the future implementation contract.
+        The current stub does not raise them.
     """
     return EngagementResult(
         location_points_awarded=0,
@@ -202,14 +261,9 @@ def get_class_language(class_id: UUID, db: Session) -> Language | None:
     return Language(school_class.target_language)
 
 
-def is_actively_enrolled(
-    student_id: UUID,
-    class_id: UUID,
-    db: Session,
-) -> bool:
+def is_actively_enrolled(student_id: UUID, class_id: UUID, db: Session) -> bool:
     """Return whether a student has an active enrolment in the class.
 
-    Only active enrolments for the specified student and class count.
     Callers must check class existence and archived status first.
     """
     statement = select(ClassEnrollment.id).where(
@@ -236,8 +290,7 @@ def enrolment_ended_by_archive(student_id: UUID, class_id: UUID, db: Session) ->
 def is_class_archived(class_id: UUID, db: Session) -> bool:
     """Return whether a class is archived.
 
-    Returns False if the class does not exist. Check existence separately
-    when the caller needs to distinguish a missing class from an active one.
+    Returns False if the class does not exist. Check existence separately.
     """
     school_class = db.get(Class, class_id)
     return school_class is not None and school_class.archived_at is not None
@@ -252,35 +305,20 @@ def validate_code_and_enrol(
 
     Return the class ID on success.
 
-    The access code must exist, be active, not be expired, and have
-    remaining uses. The user must exist, be active, and have the student
-    role. The target class must not be archived, the student must not be
-    its teaching assistant, and the student must not already have an active
-    enrolment in another class for the same language.
+    Raises:
+        INVALID_ACCESS_CODE: Code is unknown, inactive, expired, or used up.
+        ACCOUNT_DISABLED: User account is deactivated.
+        FORBIDDEN_ROLE: User is missing or is not a student.
+        CLASS_ARCHIVED: Class is archived.
+        TA_SAME_CLASS_CONFLICT: Student assists the target class.
+        ALREADY_IN_CLASS_FOR_LANGUAGE: Student already has an active class
+            in the same language.
+        REMOVED_FROM_CLASS: Student was removed from this class.
 
-    Input is normalized by removing whitespace and hyphens and converting
+    Input is normalized by removing spaces and hyphens and converting
     to uppercase.
 
-    An existing enrolment row is reused when possible. Its original joining
-    date is preserved. A student previously removed from the target class
-    cannot rejoin through this function.
-
-    The access-code use count is incremented atomically. The function flushes
-    pending changes but does not commit; the caller owns the transaction.
-
-    Raises:
-        AppError: With INVALID_ACCESS_CODE if the code is unknown, inactive,
-            expired, exhausted, or references a missing class.
-        AppError: With ACCOUNT_DISABLED if the user account is deactivated.
-        AppError: With FORBIDDEN_ROLE if the user does not exist or is not
-            a student.
-        AppError: With CLASS_ARCHIVED if the target class is archived.
-        AppError: With TA_SAME_CLASS_CONFLICT if the student assists the
-            target class.
-        AppError: With ALREADY_IN_CLASS_FOR_LANGUAGE if the student already
-            has an active enrolment for the same language.
-        AppError: With REMOVED_FROM_CLASS if the student was removed from
-            the target class.
+    The function does not commit. The caller owns the transaction.
     """
     normalized_code = "".join(code.upper().split()).replace("-", "")
     now = datetime.now(UTC)

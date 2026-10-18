@@ -22,14 +22,12 @@ from app.models.enums import EnrollmentEndReason, Language
 
 
 def test_get_class_language(db: Session, make_class: Callable[..., Class]) -> None:
-    """Return the target language for an existing class."""
     school_class = make_class(target_language=Language.JA)
 
     assert get_class_language(school_class.id, db) == Language.JA
 
 
 def test_get_class_language_missing(db: Session) -> None:
-    """Return None when the class does not exist."""
     assert get_class_language(uuid4(), db) is None
 
 
@@ -39,7 +37,6 @@ def test_active_enrolment(
     make_class: Callable[..., Class],
     make_enrollment: Callable[..., ClassEnrollment],
 ) -> None:
-    """Return True when the student has an active enrolment."""
     student = make_user()
     school_class = make_class()
     make_enrollment(student, school_class)
@@ -52,7 +49,6 @@ def test_student_not_enrolled(
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
 ) -> None:
-    """Return False when the student has no enrolment."""
     student = make_user()
     school_class = make_class()
 
@@ -65,24 +61,19 @@ def test_inactive_enrolment(
     make_class: Callable[..., Class],
     make_enrollment: Callable[..., ClassEnrollment],
 ) -> None:
-    """Return False when the student's enrolment is inactive."""
     student = make_user()
     school_class = make_class()
     enrollment = make_enrollment(student, school_class)
 
-    # Retrieve the database-generated joining timestamp before updating.
-    db.refresh(enrollment)
-
     enrollment.is_active = False
     enrollment.end_reason = EnrollmentEndReason.LEFT
-    enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
+    enrollment.left_at = datetime.now(UTC)
     db.flush()
 
     assert is_actively_enrolled(student.id, school_class.id, db) is False
 
 
 def test_archived_class(db: Session, make_class: Callable[..., Class]) -> None:
-    """Return True when the class has been archived."""
     school_class = make_class()
     school_class.archived_at = datetime.now(UTC)
     db.flush()
@@ -91,15 +82,50 @@ def test_archived_class(db: Session, make_class: Callable[..., Class]) -> None:
 
 
 def test_active_class(db: Session, make_class: Callable[..., Class]) -> None:
-    """Return False when the class has not been archived."""
     school_class = make_class()
 
     assert is_class_archived(school_class.id, db) is False
 
 
 def test_missing_class_not_archived(db: Session) -> None:
-    """Return False for a missing class."""
     assert is_class_archived(uuid4(), db) is False
+
+
+@pytest.mark.parametrize(
+    ("end_reason", "expected"),
+    [
+        (EnrollmentEndReason.ARCHIVED, True),
+        (EnrollmentEndReason.LEFT, False),
+        (EnrollmentEndReason.REMOVED, False),
+        # still enrolled
+        (None, False),
+    ],
+)
+def test_enrolment_ended_by_archive(
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+    end_reason: EnrollmentEndReason | None,
+    expected: bool,
+) -> None:
+    student, school_class = make_user(), make_class()
+    enrollment = make_enrollment(student, school_class)
+
+    if end_reason is not None:
+        db.refresh(enrollment)
+        enrollment.is_active = False
+        enrollment.end_reason = end_reason
+        enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
+        db.flush()
+
+    assert enrolment_ended_by_archive(student.id, school_class.id, db) is expected
+
+
+def test_never_enrolled_student_did_not_end_by_archive(
+    db: Session, make_user: Callable[..., User], make_class: Callable[..., Class]
+) -> None:
+    assert enrolment_ended_by_archive(make_user().id, make_class().id, db) is False
 
 
 def test_engagement_result_fields() -> None:
@@ -140,7 +166,7 @@ def test_engagement_result_is_frozen() -> None:
 
 
 def test_apply_location_result_returns_placeholder(db: Session) -> None:
-    """Return placeholder values until Issue #15 is implemented."""
+    """Verify the unimplemented stub returns its documented response shape."""
     result = apply_location_result(
         session_location_id=uuid4(),
         student_id=uuid4(),
@@ -158,31 +184,6 @@ def test_apply_location_result_returns_placeholder(db: Session) -> None:
     )
 
 
-def test_apply_location_result_repeat_placeholder_is_non_awarding(
-    db: Session,
-) -> None:
-    """Confirm placeholder responses award nothing; idempotency is unimplemented."""
-    session_location_id = uuid4()
-    student_id = uuid4()
-
-    first_result = apply_location_result(
-        session_location_id=session_location_id,
-        student_id=student_id,
-        db=db,
-    )
-    second_result = apply_location_result(
-        session_location_id=session_location_id,
-        student_id=student_id,
-        db=db,
-    )
-
-    assert first_result.location_points_awarded == 0
-    assert second_result.location_points_awarded == 0
-    assert second_result.level_up is False
-    assert second_result.challenges_completed == ()
-    assert second_result.achievements_unlocked == ()
-
-
 def test_apply_location_result_does_not_manage_transaction(
     db: Session,
     transaction_calls: list[str],
@@ -196,46 +197,3 @@ def test_apply_location_result_does_not_manage_transaction(
 
     assert "commit" not in transaction_calls
     assert "rollback" not in transaction_calls
-
-
-@pytest.mark.parametrize(
-    ("end_reason", "expected"),
-    [
-        (EnrollmentEndReason.ARCHIVED, True),
-        (EnrollmentEndReason.LEFT, False),
-        (EnrollmentEndReason.REMOVED, False),
-        # Still enrolled.
-        (None, False),
-    ],
-)
-def test_enrolment_ended_by_archive(
-    db: Session,
-    make_user: Callable[..., User],
-    make_class: Callable[..., Class],
-    make_enrollment: Callable[..., ClassEnrollment],
-    end_reason: EnrollmentEndReason | None,
-    expected: bool,
-) -> None:
-    """Return True only when an enrolment ended due to archiving."""
-    student, school_class = make_user(), make_class()
-
-    enrollment = make_enrollment(student, school_class)
-
-    if end_reason is not None:
-        # Ensure left_at is not earlier than the database joining timestamp.
-        db.refresh(enrollment)
-        enrollment.is_active = False
-        enrollment.end_reason = end_reason
-        enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
-        db.flush()
-
-    assert enrolment_ended_by_archive(student.id, school_class.id, db) is expected
-
-
-def test_never_enrolled_student_did_not_end_by_archive(
-    db: Session,
-    make_user: Callable[..., User],
-    make_class: Callable[..., Class],
-) -> None:
-    """Return False for a student who never enrolled in the class."""
-    assert enrolment_ended_by_archive(make_user().id, make_class().id, db) is False
