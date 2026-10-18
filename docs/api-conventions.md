@@ -68,6 +68,7 @@ operationId -> `pauseGame`
 |---|---|---|
 |200|GET, PUT, PATCH, and action endpoints (e.g. `POST /games/{id}/pause`)|The resource or its updated state|
 |201|POST that creates a resource|The created resource|
+|202|Request accepted and the email queued (`POST /auth/forgot-password`, `POST /auth/resend-verification`)|`{"status": "ok"}`|
 |204|DELETE|No body|
 
 ## Error Handling

@@ -2,8 +2,9 @@
 
 from email.utils import parseaddr
 from functools import lru_cache
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import NonNegativeInt, PositiveInt, model_validator
+from pydantic import NonNegativeInt, PositiveInt, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +32,20 @@ class Settings(BaseSettings):
     locations_per_game: PositiveInt = 5
     max_shuffles_per_session: NonNegativeInt = 2
     max_photo_attempts: PositiveInt = 6
+    session_idle_expiry_hours: PositiveInt = 24
+    # "today" for day-based rules, e.g. carry-over
+    app_timezone: str = "America/Vancouver"
+
+    @field_validator("app_timezone")
+    @classmethod
+    def _known_timezone(cls, value: str) -> str:
+        # fail at startup, not with a 500 when the first game starts
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError, OSError) as error:
+            # OSError: a directory name such as "America", not a zone
+            raise ValueError(f"unknown time zone {value!r}") from error
+        return value
 
     @model_validator(mode="after")
     def _check_email_settings(self) -> "Settings":
