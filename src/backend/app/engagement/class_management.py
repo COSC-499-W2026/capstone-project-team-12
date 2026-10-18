@@ -34,6 +34,37 @@ def semester_expiration(semester: str) -> datetime:
     return datetime(*boundaries[term], tzinfo=UTC)
 
 
+def require_class_owner(
+    *,
+    class_id: UUID,
+    user_id: UUID,
+    db: Session,
+) -> None:
+    """Require an existing classroom owned by the specified user.
+
+    Raises:
+        NOT_FOUND: The classroom does not exist.
+        FORBIDDEN_ROLE: The user is not the classroom owner.
+
+    Classroom existence is checked before ownership to preserve the
+    API's expected 404 response for nonexistent classrooms.
+    """
+    school_class = db.get(Class, class_id)
+
+    if school_class is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    owner_role = db.scalar(
+        select(ClassStaff.role).where(
+            ClassStaff.class_id == class_id,
+            ClassStaff.user_id == user_id,
+        )
+    )
+
+    if owner_role != ClassStaffRole.OWNER:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE)
+
+
 def create_class_record(
     *,
     name: str,
@@ -86,3 +117,32 @@ def list_staff_classes(
     ).all()
 
     return [(school_class, ClassStaffRole(role)) for school_class, role in rows]
+
+
+def update_class_record(
+    *,
+    class_id: UUID,
+    name: str | None,
+    leaderboard_enabled: bool | None,
+    db: Session,
+) -> Class:
+    """Update permitted classroom settings.
+
+    The API layer must authorize the classroom owner first.
+    """
+    school_class = db.get(Class, class_id)
+
+    if school_class is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    if school_class.archived_at is not None:
+        raise AppError(ErrorCode.CLASS_ARCHIVED)
+
+    if name is not None:
+        school_class.name = name
+
+    if leaderboard_enabled is not None:
+        school_class.leaderboard_enabled = leaderboard_enabled
+
+    db.flush()
+    return school_class

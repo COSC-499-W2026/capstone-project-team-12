@@ -25,7 +25,9 @@ from app.engagement.access_code_management import save_access_code_with_retry
 from app.engagement.class_management import (
     create_class_record,
     list_staff_classes,
+    require_class_owner,
     semester_expiration,
+    update_class_record,
 )
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
@@ -44,6 +46,8 @@ __all__ = [
     "validate_code_and_enrol",
     "create_class_record",
     "list_staff_classes",
+    "require_class_owner",
+    "update_class_record",
     "semester_expiration",
     "save_access_code_with_retry",
 ]

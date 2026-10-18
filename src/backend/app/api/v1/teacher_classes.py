@@ -6,7 +6,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
@@ -14,8 +14,10 @@ from app.db import get_db
 from app.engagement.interface import (
     create_class_record,
     list_staff_classes,
+    require_class_owner,
     save_access_code_with_retry,
     semester_expiration,
+    update_class_record,
 )
 from app.errors import error_responses
 from app.models.accounts import User
@@ -49,6 +51,21 @@ class ClassListItem(BaseModel):
     leaderboard_enabled: bool
     archived_at: datetime | None
     staff_role: ClassStaffRole
+
+
+class UpdateClassRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1)
+    leaderboard_enabled: bool | None = None
+
+
+class UpdateClassResponse(BaseModel):
+    id: UUID
+    name: str
+    semester: str
+    target_language: Language
+    leaderboard_enabled: bool
 
 
 @teacher_classes_router.post(
@@ -131,3 +148,52 @@ def list_teacher_classes(
         )
         for school_class, role in rows
     ]
+
+
+@teacher_classes_router.patch(
+    "/{class_id}",
+    response_model=UpdateClassResponse,
+    operation_id="updateClass",
+    summary="Update classroom settings",
+    description=(
+        "Allow the classroom owner to update the name and leaderboard setting. "
+        "The target language cannot be changed."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.CONFLICT,
+        HTTPStatus.UNPROCESSABLE_ENTITY,
+    ),
+)
+def update_class(
+    class_id: UUID,
+    body: UpdateClassRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> UpdateClassResponse:
+    """Update mutable classroom settings without changing the language."""
+    require_class_owner(
+        class_id=class_id,
+        user_id=user.id,
+        db=db,
+    )
+
+    school_class = update_class_record(
+        class_id=class_id,
+        name=body.name,
+        leaderboard_enabled=body.leaderboard_enabled,
+        db=db,
+    )
+
+    db.commit()
+    db.refresh(school_class)
+
+    return UpdateClassResponse(
+        id=school_class.id,
+        name=school_class.name,
+        semester=school_class.semester,
+        target_language=Language(school_class.target_language),
+        leaderboard_enabled=school_class.leaderboard_enabled,
+    )
