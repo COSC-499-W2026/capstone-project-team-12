@@ -38,6 +38,7 @@ from app.models.enums import (
 )
 
 __all__ = [
+    "enrolment_ended_by_archive",
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
@@ -66,6 +67,19 @@ def is_actively_enrolled(student_id: UUID, class_id: UUID, db: Session) -> bool:
         ClassEnrollment.student_id == student_id,
         ClassEnrollment.class_id == class_id,
         ClassEnrollment.is_active.is_(True),
+    )
+    return db.scalar(statement) is not None
+
+
+def enrolment_ended_by_archive(student_id: UUID, class_id: UUID, db: Session) -> bool:
+    """Return whether the student's enrolment in the class ended because it was archived.
+
+    False for a student who never joined, left, was removed or is still enrolled.
+    """
+    statement = select(ClassEnrollment.id).where(
+        ClassEnrollment.student_id == student_id,
+        ClassEnrollment.class_id == class_id,
+        ClassEnrollment.end_reason == EnrollmentEndReason.ARCHIVED,
     )
     return db.scalar(statement) is not None
 
