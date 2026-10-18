@@ -61,194 +61,6 @@
         }
       }
     },
-    "/api/v1/auth/verify-email": {
-      "post": {
-        "tags": [
-          "auth"
-        ],
-        "summary": "Post Verify Email",
-        "description": "Confirm the address with the token from the verification email (400 INVALID_TOKEN).",
-        "operationId": "verifyEmail",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TokenRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StatusResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/auth/resend-verification": {
-      "post": {
-        "tags": [
-          "auth"
-        ],
-        "summary": "Post Resend Verification",
-        "description": "Send the link again. Same answer whether or not the address has an account.",
-        "operationId": "resendVerificationEmail",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EmailRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StatusResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/auth/forgot-password": {
-      "post": {
-        "tags": [
-          "auth"
-        ],
-        "summary": "Post Forgot Password",
-        "description": "Queue a reset email. Same answer whether or not the address has an account.",
-        "operationId": "requestPasswordReset",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EmailRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StatusResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/auth/reset-password": {
-      "post": {
-        "tags": [
-          "auth"
-        ],
-        "summary": "Post Reset Password",
-        "description": "Set a new password with the token from the reset email (400 INVALID_TOKEN, 422).",
-        "operationId": "resetPassword",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ResetPasswordRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StatusResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/media/{key}": {
       "get": {
         "tags": [
@@ -323,6 +135,132 @@
         }
       }
     },
+    "/api/v1/teacher/classes": {
+      "get": {
+        "tags": [
+          "teacher-classes"
+        ],
+        "summary": "List classrooms for a teacher or TA",
+        "description": "Return classrooms owned or assisted by the authenticated user.",
+        "operationId": "listTeacherClasses",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ClassListItem"
+                  },
+                  "type": "array",
+                  "title": "Response Listteacherclasses"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "teacher-classes"
+        ],
+        "summary": "Create a classroom",
+        "description": "Create a classroom with a fixed target language, assign the creator as owner, and generate an initial access code.",
+        "operationId": "createClass",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClassRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateClassResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -352,20 +290,120 @@
   },
   "components": {
     "schemas": {
-      "EmailRequest": {
+      "ClassListItem": {
         "properties": {
-          "email": {
+          "id": {
             "type": "string",
-            "maxLength": 254,
-            "minLength": 1,
-            "title": "Email"
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "semester": {
+            "type": "string",
+            "title": "Semester"
+          },
+          "target_language": {
+            "$ref": "#/components/schemas/Language"
+          },
+          "leaderboard_enabled": {
+            "type": "boolean",
+            "title": "Leaderboard Enabled"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "staff_role": {
+            "$ref": "#/components/schemas/ClassStaffRole"
           }
         },
         "type": "object",
         "required": [
-          "email"
+          "id",
+          "name",
+          "semester",
+          "target_language",
+          "leaderboard_enabled",
+          "archived_at",
+          "staff_role"
         ],
-        "title": "EmailRequest"
+        "title": "ClassListItem"
+      },
+      "ClassStaffRole": {
+        "type": "string",
+        "enum": [
+          "owner",
+          "assistant"
+        ],
+        "title": "ClassStaffRole"
+      },
+      "CreateClassRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Name"
+          },
+          "semester": {
+            "type": "string",
+            "pattern": "^[0-9]{4}(W1|W2|S1|S2)$",
+            "title": "Semester"
+          },
+          "target_language": {
+            "$ref": "#/components/schemas/Language"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "semester",
+          "target_language"
+        ],
+        "title": "CreateClassRequest"
+      },
+      "CreateClassResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "semester": {
+            "type": "string",
+            "title": "Semester"
+          },
+          "target_language": {
+            "$ref": "#/components/schemas/Language"
+          },
+          "access_code": {
+            "type": "string",
+            "title": "Access Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "semester",
+          "target_language",
+          "access_code"
+        ],
+        "title": "CreateClassResponse"
       },
       "ErrorBody": {
         "properties": {
@@ -447,6 +485,18 @@
         "title": "ErrorResponse",
         "description": "The body of every error response, the same shape as AppError.body() (for OpenAPI)."
       },
+      "Language": {
+        "type": "string",
+        "enum": [
+          "ja",
+          "zh",
+          "fr",
+          "de",
+          "ko",
+          "es"
+        ],
+        "title": "Language"
+      },
       "RegisterRequest": {
         "properties": {
           "email": {
@@ -480,53 +530,17 @@
           "password"
         ],
         "title": "RegisterRequest"
-      },
-      "ResetPasswordRequest": {
-        "properties": {
-          "token": {
-            "type": "string",
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Token"
-          },
-          "new_password": {
-            "type": "string",
-            "maxLength": 200,
-            "title": "New Password"
+      }
+    },
+    "securitySchemes": {
+      "OAuth2PasswordBearer": {
+        "type": "oauth2",
+        "flows": {
+          "password": {
+            "scopes": {},
+            "tokenUrl": "login"
           }
-        },
-        "type": "object",
-        "required": [
-          "token",
-          "new_password"
-        ],
-        "title": "ResetPasswordRequest"
-      },
-      "StatusResponse": {
-        "properties": {
-          "status": {
-            "type": "string",
-            "title": "Status",
-            "default": "ok"
-          }
-        },
-        "type": "object",
-        "title": "StatusResponse"
-      },
-      "TokenRequest": {
-        "properties": {
-          "token": {
-            "type": "string",
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Token"
-          }
-        },
-        "type": "object",
-        "required": [
-          "token"
-        ],
-        "title": "TokenRequest"
+        }
       }
     }
   }

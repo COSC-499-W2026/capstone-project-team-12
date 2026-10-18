@@ -5,12 +5,16 @@ from http import HTTPStatus
 from fastapi import APIRouter
 
 from app.api.v1.auth import auth_router
-from app.api.v1.email_links import email_links_router
 from app.api.v1.media import media_router
+from app.api.v1.teacher_classes import teacher_classes_router
 from app.errors import error_responses
 
-# every route can fail validation; this replaces FastAPI's default 422 schema with ours
-api_router = APIRouter(prefix="/api/v1", responses=error_responses(HTTPStatus.UNPROCESSABLE_ENTITY))
+# Every route can fail validation; use our error schema instead of FastAPI's default.
+api_router = APIRouter(
+    prefix="/api/v1",
+    responses=error_responses(HTTPStatus.UNPROCESSABLE_ENTITY),
+)
+
 api_router.include_router(auth_router)
-api_router.include_router(email_links_router)
 api_router.include_router(media_router)
+api_router.include_router(teacher_classes_router)

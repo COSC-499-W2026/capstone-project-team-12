@@ -3,6 +3,7 @@
 Implemented:
 - Issue #11: Class language, active enrolment, and archived-state lookups.
 - Issue #106: Access code validation and student enrolment.
+- Issue #84: Classroom and access code management.
 
 Planned:
 - Issue #15: Location result to engagement.
@@ -10,8 +11,8 @@ Planned:
 Callers must check class existence and archived status before enrolment
 so archived classes produce CLASS_ARCHIVED rather than an enrolment error.
 
-The enrolment function does not commit the transaction. Callers are
-responsible for committing or rolling back the entire operation.
+Engagement functions do not commit transactions. Callers are responsible
+for committing or rolling back the entire operation.
 """
 
 from datetime import UTC, datetime
@@ -20,6 +21,12 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.engagement.access_code_management import save_access_code_with_retry
+from app.engagement.class_management import (
+    create_class_record,
+    list_staff_classes,
+    semester_expiration,
+)
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import AccessCode, Class, ClassEnrollment
@@ -35,6 +42,10 @@ __all__ = [
     "is_actively_enrolled",
     "is_class_archived",
     "validate_code_and_enrol",
+    "create_class_record",
+    "list_staff_classes",
+    "semester_expiration",
+    "save_access_code_with_retry",
 ]
 
 
