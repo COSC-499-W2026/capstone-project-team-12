@@ -21,7 +21,10 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.engagement.access_code_management import save_access_code_with_retry
+from app.engagement.access_code_management import (
+    create_access_code_record,
+    save_access_code_with_retry,
+)
 from app.engagement.class_management import (
     create_class_record,
     list_staff_classes,
@@ -50,6 +53,7 @@ __all__ = [
     "update_class_record",
     "semester_expiration",
     "save_access_code_with_retry",
+    "create_access_code_record",
 ]
 
 

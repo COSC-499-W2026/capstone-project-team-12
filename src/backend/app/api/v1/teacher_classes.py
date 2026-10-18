@@ -9,9 +9,10 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import get_current_user
+from app.accounts.interface import get_current_user, require_class_role
 from app.db import get_db
 from app.engagement.interface import (
+    create_access_code_record,
     create_class_record,
     list_staff_classes,
     require_class_owner,
@@ -196,4 +197,70 @@ def update_class(
         semester=school_class.semester,
         target_language=Language(school_class.target_language),
         leaderboard_enabled=school_class.leaderboard_enabled,
+    )
+
+
+class CreateAccessCodeRequest(BaseModel):
+    max_uses: int | None = Field(default=None, gt=0)
+    expires_at: datetime | None = None
+
+
+class AccessCodeResponse(BaseModel):
+    id: UUID
+    class_id: UUID
+    code: str
+    expires_at: datetime
+    is_active: bool
+    max_uses: int | None
+    uses_count: int
+
+
+@teacher_classes_router.post(
+    "/{class_id}/access-codes",
+    response_model=AccessCodeResponse,
+    status_code=201,
+    operation_id="createAccessCode",
+    summary="Create a classroom access code",
+    description=(
+        "Allow a classroom owner or teaching assistant to generate "
+        "an additional access code with optional expiration and usage limits."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.CONFLICT,
+        HTTPStatus.UNPROCESSABLE_ENTITY,
+    ),
+)
+def create_access_code(
+    class_id: UUID,
+    body: CreateAccessCodeRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    _authorized: Annotated[
+        object,
+        Depends(
+            require_class_role(
+                ClassStaffRole.OWNER,
+                ClassStaffRole.ASSISTANT,
+            )
+        ),
+    ],
+) -> AccessCodeResponse:
+    """Generate an additional classroom access code."""
+    access_code = create_access_code_record(
+        class_id=class_id,
+        created_by=user.id,
+        expires_at=body.expires_at,
+        max_uses=body.max_uses,
+        db=db,
+    )
+
+    db.commit()
+    db.refresh(access_code)
+
+    return AccessCodeResponse.model_validate(
+        access_code,
+        from_attributes=True,
     )
