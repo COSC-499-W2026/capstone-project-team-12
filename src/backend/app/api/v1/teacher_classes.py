@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from http import HTTPStatus
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -14,18 +14,25 @@ from app.db import get_db
 from app.engagement.interface import (
     create_access_code_record,
     create_class_record,
+    deactivate_access_code_record,
     list_staff_classes,
     require_class_owner,
     save_access_code_with_retry,
     semester_expiration,
     update_class_record,
 )
-from app.errors import error_responses
+from app.errors import AppError, ErrorCode, error_responses
 from app.models.accounts import User
+from app.models.engagement import AccessCode
 from app.models.enums import ClassStaffRole, Language, UserRole
 
 teacher_classes_router = APIRouter(
     prefix="/teacher/classes",
+    tags=["teacher-classes"],
+)
+
+access_code_router = APIRouter(
+    prefix="/teacher/access-codes",
     tags=["teacher-classes"],
 )
 
@@ -262,5 +269,59 @@ def create_access_code(
 
     return AccessCodeResponse.model_validate(
         access_code,
+        from_attributes=True,
+    )
+
+
+class UpdateAccessCodeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    is_active: Literal[False]
+
+
+@access_code_router.patch(
+    "/{code_id}",
+    response_model=AccessCodeResponse,
+    operation_id="deactivateAccessCode",
+    summary="Deactivate a classroom access code",
+    description=(
+        "Allow the classroom owner to deactivate an access code "
+        "without deleting its usage history. Repeated deactivation is allowed."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.UNPROCESSABLE_ENTITY,
+    ),
+)
+def deactivate_access_code(
+    code_id: UUID,
+    body: UpdateAccessCodeRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AccessCodeResponse:
+    """Deactivate an access code belonging to a classroom owned by the user."""
+    access_code = db.get(AccessCode, code_id)
+
+    if access_code is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    require_class_owner(
+        class_id=access_code.class_id,
+        user_id=user.id,
+        db=db,
+    )
+
+    updated_code = deactivate_access_code_record(
+        code_id=code_id,
+        db=db,
+    )
+
+    db.commit()
+    db.refresh(updated_code)
+
+    return AccessCodeResponse.model_validate(
+        updated_code,
         from_attributes=True,
     )

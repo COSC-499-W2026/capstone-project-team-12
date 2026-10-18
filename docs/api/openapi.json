@@ -647,6 +647,95 @@
         }
       }
     },
+    "/api/v1/teacher/access-codes/{code_id}": {
+      "patch": {
+        "tags": [
+          "teacher-classes"
+        ],
+        "summary": "Deactivate a classroom access code",
+        "description": "Allow the classroom owner to deactivate an access code without deleting its usage history. Repeated deactivation is allowed.",
+        "operationId": "deactivateAccessCode",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "code_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Code Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAccessCodeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessCodeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -1061,6 +1150,21 @@
           "token"
         ],
         "title": "TokenRequest"
+      },
+      "UpdateAccessCodeRequest": {
+        "properties": {
+          "is_active": {
+            "type": "boolean",
+            "const": false,
+            "title": "Is Active"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "is_active"
+        ],
+        "title": "UpdateAccessCodeRequest"
       },
       "UpdateClassRequest": {
         "properties": {

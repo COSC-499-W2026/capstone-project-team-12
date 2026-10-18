@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.engagement.access_code_management import (
     create_access_code_record,
+    deactivate_access_code_record,
     save_access_code_with_retry,
 )
 from app.engagement.class_management import (
@@ -54,6 +55,7 @@ __all__ = [
     "semester_expiration",
     "save_access_code_with_retry",
     "create_access_code_record",
+    "deactivate_access_code_record",
 ]
 
 

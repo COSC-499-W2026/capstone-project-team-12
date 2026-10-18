@@ -113,3 +113,25 @@ def create_access_code_record(
         expires_at=expiration,
         max_uses=max_uses,
     )
+
+
+def deactivate_access_code_record(
+    *,
+    code_id: UUID,
+    db: Session,
+) -> AccessCode:
+    """Deactivate an access code without deleting its history.
+
+    Repeated deactivation is allowed. The API layer is responsible
+    for checking the requesting user's classroom permissions
+    and committing the transaction.
+    """
+    access_code = db.get(AccessCode, code_id)
+
+    if access_code is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    access_code.is_active = False
+    db.flush()
+
+    return access_code
