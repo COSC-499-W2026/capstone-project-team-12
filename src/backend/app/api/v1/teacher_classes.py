@@ -9,12 +9,11 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import get_current_user
+from app.accounts.interface import get_current_user, require_class_role
 from app.db import get_db
 from app.engagement.interface import (
     create_class_record,
     list_staff_classes,
-    require_class_owner,
     save_access_code_with_retry,
     semester_expiration,
     update_class_record,
@@ -70,17 +69,14 @@ class UpdateClassRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_update(self) -> "UpdateClassRequest":
-        """Require at least one non-null setting to update."""
+        """Require at least one non-null classroom setting."""
         if not self.model_fields_set:
             raise ValueError("At least one classroom setting must be provided.")
 
         if "name" in self.model_fields_set and self.name is None:
             raise ValueError("Classroom name cannot be null.")
 
-        if (
-            "leaderboard_enabled" in self.model_fields_set
-            and self.leaderboard_enabled is None
-        ):
+        if "leaderboard_enabled" in self.model_fields_set and self.leaderboard_enabled is None:
             raise ValueError("Leaderboard setting cannot be null.")
 
         return self
@@ -188,7 +184,6 @@ def list_teacher_classes(
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
         HTTPStatus.FORBIDDEN,
-        HTTPStatus.NOT_FOUND,
         HTTPStatus.CONFLICT,
         HTTPStatus.UNPROCESSABLE_ENTITY,
     ),
@@ -196,16 +191,13 @@ def list_teacher_classes(
 def update_class(
     class_id: UUID,
     body: UpdateClassRequest,
-    user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
+    _owner_check: Annotated[
+        None,
+        Depends(require_class_role(ClassStaffRole.OWNER)),
+    ],
 ) -> UpdateClassResponse:
     """Update mutable classroom settings without changing the language."""
-    require_class_owner(
-        class_id=class_id,
-        user_id=user.id,
-        db=db,
-    )
-
     school_class = update_class_record(
         class_id=class_id,
         name=body.name,

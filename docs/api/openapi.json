@@ -525,16 +525,6 @@
               }
             }
           },
-          "404": {
-            "description": "Not Found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "409": {
             "description": "Conflict",
             "content": {
@@ -887,6 +877,7 @@
             "anyOf": [
               {
                 "type": "string",
+                "maxLength": 100,
                 "minLength": 1
               },
               {
