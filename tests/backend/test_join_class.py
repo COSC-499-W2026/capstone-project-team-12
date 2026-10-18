@@ -426,3 +426,65 @@ def test_oversized_access_code_is_rejected(
     response = join_as(client, student, "A" * 33)
 
     assert_error(response, 422, ErrorCode.VALIDATION_ERROR)
+
+
+@pytest.mark.parametrize(
+    ("code_state", "expected_status"),
+    [
+        ("expired", 200),
+        ("exhausted", 200),
+        ("deactivated", 400),
+    ],
+)
+def test_retry_after_code_status_changes(
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_access_code: Callable[..., AccessCode],
+    code_state: str,
+    expected_status: int,
+) -> None:
+    """Allow legitimate retries without consuming another code use."""
+    student = make_user()
+    school_class = make_class()
+    access_code = make_access_code(school_class)
+
+    first_response = join_as(client, student, access_code.code)
+    assert first_response.status_code == 200, first_response.text
+
+    db.refresh(access_code)
+    original_uses = access_code.uses_count
+
+    if code_state == "expired":
+        access_code.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    elif code_state == "exhausted":
+        access_code.max_uses = original_uses
+    else:
+        access_code.is_active = False
+
+    db.flush()
+
+    retry_response = join_as(client, student, access_code.code)
+
+    assert retry_response.status_code == expected_status, retry_response.text
+
+    if expected_status == 200:
+        assert retry_response.json()["class_id"] == str(school_class.id)
+        assert retry_response.json()["language"] == Language(school_class.target_language).value
+    else:
+        assert_error(retry_response, 400, ErrorCode.INVALID_ACCESS_CODE)
+
+    db.refresh(access_code)
+    assert access_code.uses_count == original_uses
+
+    enrollment = (
+        db.query(ClassEnrollment)
+        .filter(
+            ClassEnrollment.student_id == student.id,
+            ClassEnrollment.class_id == school_class.id,
+        )
+        .one()
+    )
+    assert enrollment.is_active is True
+    assert enrollment.access_code_id == access_code.id
