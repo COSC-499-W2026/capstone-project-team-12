@@ -55,6 +55,7 @@ def auth_headers(user):
     )
     return {"Authorization": f"Bearer {token}"}
 
+
 def deactivate(client: TestClient, code_id, user, body=None):
     """Send an access-code deactivation request."""
     if body is None:
@@ -204,4 +205,3 @@ def test_unauthenticated_request_is_rejected(
     )
 
     assert response.status_code == 401
-
