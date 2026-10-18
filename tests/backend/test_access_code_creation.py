@@ -4,6 +4,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from time import time
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +12,7 @@ from jwt import encode
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.engagement.class_management import semester_expiration
 from app.models.accounts import User
 from app.models.engagement import ACCESS_CODE_ALPHABET, AccessCode, Class
 from app.models.enums import ClassStaffRole, UserRole
@@ -32,11 +34,6 @@ def authenticate(client: TestClient, user: User) -> None:
 def future_semester() -> str:
     """Return a semester that has not ended."""
     return f"{datetime.now(UTC).year + 1}W1"
-
-
-def semester_expiry(semester: str) -> datetime:
-    """Return the expected UTC expiration for a W1 semester."""
-    return datetime(int(semester[:4]) + 1, 1, 1, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
@@ -68,6 +65,7 @@ def test_owner_and_ta_can_create_codes(
 
     assert response.status_code == 201, response.text
     data = response.json()
+
     assert len(data["code"]) == 8
     assert all(character in ACCESS_CODE_ALPHABET for character in data["code"])
     assert data["max_uses"] == 3
@@ -76,9 +74,107 @@ def test_owner_and_ta_can_create_codes(
     assert data["class_id"] == str(school_class.id)
 
     stored = db.get(AccessCode, data["id"])
+
     assert stored is not None
     assert stored.created_by == user.id
-    assert stored.expires_at == semester_expiry(semester)
+    assert stored.expires_at == semester_expiration(semester)
+
+
+def test_valid_custom_expiration_is_saved(
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., object],
+) -> None:
+    """A valid custom expiration is persisted instead of the default."""
+    teacher = make_user(role=UserRole.STAFF)
+    school_class = make_class(semester=future_semester())
+    make_class_staff(school_class, teacher, role=ClassStaffRole.OWNER)
+    authenticate(client, teacher)
+
+    custom_expiration = datetime.now(UTC) + timedelta(days=7)
+
+    response = client.post(
+        f"/api/v1/teacher/classes/{school_class.id}/access-codes",
+        json={
+            "expires_at": custom_expiration.isoformat(),
+            "max_uses": 5,
+        },
+    )
+
+    assert response.status_code == 201, response.text
+
+    data = response.json()
+    assert data["max_uses"] == 5
+
+    stored = db.get(AccessCode, data["id"])
+
+    assert stored is not None
+    assert stored.expires_at == custom_expiration
+
+
+def test_expiration_after_semester_end_is_rejected(
+    client: TestClient,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., object],
+) -> None:
+    """Access codes cannot outlive the classroom semester."""
+    teacher = make_user(role=UserRole.STAFF)
+    semester = future_semester()
+    school_class = make_class(semester=semester)
+    make_class_staff(school_class, teacher, role=ClassStaffRole.OWNER)
+    authenticate(client, teacher)
+
+    invalid_expiration = semester_expiration(semester) + timedelta(days=1)
+
+    response = client.post(
+        f"/api/v1/teacher/classes/{school_class.id}/access-codes",
+        json={"expires_at": invalid_expiration.isoformat()},
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_ended_semester_cannot_create_default_code(
+    client: TestClient,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., object],
+) -> None:
+    """An ended semester should produce a clear validation error."""
+    teacher = make_user(role=UserRole.STAFF)
+    school_class = make_class(semester="2020W1")
+    make_class_staff(school_class, teacher, role=ClassStaffRole.OWNER)
+    authenticate(client, teacher)
+
+    response = client.post(
+        f"/api/v1/teacher/classes/{school_class.id}/access-codes",
+        json={},
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "semester has ended" in response.json()["error"]["message"].lower()
+
+
+def test_unknown_class_returns_403(
+    client: TestClient,
+    make_user: Callable[..., User],
+) -> None:
+    """Unknown classrooms are rejected by the shared role dependency."""
+    teacher = make_user(role=UserRole.STAFF)
+    authenticate(client, teacher)
+
+    response = client.post(
+        f"/api/v1/teacher/classes/{uuid4()}/access-codes",
+        json={},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN_ROLE"
 
 
 def test_unassigned_student_cannot_create_code(
@@ -220,6 +316,7 @@ def test_duplicate_access_code_is_retried(
     assert mocked_generator.call_count == 2
 
     stored = db.get(AccessCode, response.json()["id"])
+
     assert stored is not None
     assert stored.code == replacement_code
 

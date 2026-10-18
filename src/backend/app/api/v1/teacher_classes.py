@@ -246,7 +246,6 @@ class AccessCodeResponse(BaseModel):
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
         HTTPStatus.FORBIDDEN,
-        HTTPStatus.NOT_FOUND,
         HTTPStatus.CONFLICT,
         HTTPStatus.UNPROCESSABLE_ENTITY,
     ),
@@ -257,7 +256,7 @@ def create_access_code(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     _authorized: Annotated[
-        object,
+        None,
         Depends(
             require_class_role(
                 ClassStaffRole.OWNER,
