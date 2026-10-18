@@ -249,6 +249,93 @@
         }
       }
     },
+    "/api/v1/games": {
+      "post": {
+        "tags": [
+          "games"
+        ],
+        "summary": "Start New Game",
+        "description": "Start a class game (`class_id`) or a Practice game (`language`).\n\nSend exactly one of them. The game gets 5 different locations in the language. Locations the\nstudent has not completed yet come first. After a quit the same day, the locations that were\nnot played carry over to the new game, but not after a reset. Names, rooms and coordinates\nare never sent, only the first clue's audio link.\n\n409 SESSION_ALREADY_OPEN if the student has an active or paused game (its id is in `details`),\nunless it has been idle for 24 hours, then it is expired and the new game starts.\n409 NOT_ENOUGH_CONTENT if the language has fewer than 5 locations to draw.\n409 CLASS_ARCHIVED for a student whose enrolment ended when the class was archived.\n404 NOT_FOUND for a class the student is not in. 403 FORBIDDEN_ROLE for an admin.",
+        "operationId": "startGame",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartGameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartGameResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/media/{key}": {
       "get": {
         "tags": [
@@ -352,6 +439,15 @@
   },
   "components": {
     "schemas": {
+      "Difficulty": {
+        "type": "integer",
+        "enum": [
+          1,
+          2,
+          3
+        ],
+        "title": "Difficulty"
+      },
       "EmailRequest": {
         "properties": {
           "email": {
@@ -447,6 +543,18 @@
         "title": "ErrorResponse",
         "description": "The body of every error response, the same shape as AppError.body() (for OpenAPI)."
       },
+      "Language": {
+        "type": "string",
+        "enum": [
+          "ja",
+          "zh",
+          "fr",
+          "de",
+          "ko",
+          "es"
+        ],
+        "title": "Language"
+      },
       "RegisterRequest": {
         "properties": {
           "email": {
@@ -502,6 +610,78 @@
         ],
         "title": "ResetPasswordRequest"
       },
+      "SessionState": {
+        "type": "string",
+        "enum": [
+          "active",
+          "paused",
+          "completed",
+          "abandoned"
+        ],
+        "title": "SessionState"
+      },
+      "StartGameRequest": {
+        "properties": {
+          "difficulty": {
+            "$ref": "#/components/schemas/Difficulty"
+          },
+          "class_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Id"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Language"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "difficulty"
+        ],
+        "title": "StartGameRequest"
+      },
+      "StartGameResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SessionState"
+          },
+          "position": {
+            "type": "integer",
+            "title": "Position"
+          },
+          "clue_audio_url": {
+            "type": "string",
+            "title": "Clue Audio Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "state",
+          "position",
+          "clue_audio_url"
+        ],
+        "title": "StartGameResponse"
+      },
       "StatusResponse": {
         "properties": {
           "status": {
@@ -527,6 +707,17 @@
           "token"
         ],
         "title": "TokenRequest"
+      }
+    },
+    "securitySchemes": {
+      "OAuth2PasswordBearer": {
+        "type": "oauth2",
+        "flows": {
+          "password": {
+            "scopes": {},
+            "tokenUrl": "login"
+          }
+        }
       }
     }
   }
