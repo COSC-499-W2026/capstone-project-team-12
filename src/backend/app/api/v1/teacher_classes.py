@@ -6,7 +6,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user, require_class_role
@@ -15,7 +15,6 @@ from app.engagement.interface import (
     create_access_code_record,
     create_class_record,
     list_staff_classes,
-    require_class_owner,
     save_access_code_with_retry,
     semester_expiration,
     update_class_record,
@@ -29,9 +28,18 @@ teacher_classes_router = APIRouter(
     tags=["teacher-classes"],
 )
 
+ClassName = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=100,
+    ),
+]
+
 
 class CreateClassRequest(BaseModel):
-    name: str = Field(min_length=1)
+    name: ClassName
     semester: str = Field(pattern=r"^[0-9]{4}(W1|W2|S1|S2)$")
     target_language: Language
 
@@ -57,8 +65,22 @@ class ClassListItem(BaseModel):
 class UpdateClassRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str | None = Field(default=None, min_length=1)
+    name: ClassName | None = None
     leaderboard_enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_update(self) -> "UpdateClassRequest":
+        """Require at least one non-null classroom setting."""
+        if not self.model_fields_set:
+            raise ValueError("At least one classroom setting must be provided.")
+
+        if "name" in self.model_fields_set and self.name is None:
+            raise ValueError("Classroom name cannot be null.")
+
+        if "leaderboard_enabled" in self.model_fields_set and self.leaderboard_enabled is None:
+            raise ValueError("Leaderboard setting cannot be null.")
+
+        return self
 
 
 class UpdateClassResponse(BaseModel):
@@ -163,7 +185,6 @@ def list_teacher_classes(
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
         HTTPStatus.FORBIDDEN,
-        HTTPStatus.NOT_FOUND,
         HTTPStatus.CONFLICT,
         HTTPStatus.UNPROCESSABLE_ENTITY,
     ),
@@ -171,16 +192,13 @@ def list_teacher_classes(
 def update_class(
     class_id: UUID,
     body: UpdateClassRequest,
-    user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
+    _owner_check: Annotated[
+        None,
+        Depends(require_class_role(ClassStaffRole.OWNER)),
+    ],
 ) -> UpdateClassResponse:
     """Update mutable classroom settings without changing the language."""
-    require_class_owner(
-        class_id=class_id,
-        user_id=user.id,
-        db=db,
-    )
-
     school_class = update_class_record(
         class_id=class_id,
         name=body.name,

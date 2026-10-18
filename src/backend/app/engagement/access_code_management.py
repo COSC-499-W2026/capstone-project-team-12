@@ -11,6 +11,7 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.db import violated_constraint
 from app.engagement.class_management import semester_expiration
 from app.errors import AppError, ErrorCode
 from app.models.engagement import (
@@ -29,26 +30,21 @@ def generate_access_code() -> str:
     return "".join(secrets.choice(ACCESS_CODE_ALPHABET) for _ in range(ACCESS_CODE_LENGTH))
 
 
-def _is_code_collision(exc: IntegrityError) -> bool:
-    """Identify an access-code uniqueness violation."""
-    original = exc.orig
-    diagnostics = getattr(original, "diag", None)
-
-    return (
-        getattr(original, "sqlstate", None) == "23505"
-        and getattr(diagnostics, "constraint_name", None) == CODE_UNIQUE_CONSTRAINT
-    )
-
-
 def save_access_code_with_retry(
-    *,
-    db: Session,
     class_id: UUID,
     created_by: UUID,
     expires_at: datetime,
+    db: Session,
+    *,
     max_uses: int | None = None,
 ) -> AccessCode:
-    """Insert an access code, retrying only code collisions."""
+    """Insert an access code, retrying only code collisions.
+
+    Uses a nested transaction to roll back a failed insertion without
+    rolling back the caller's entire transaction.
+
+    The API layer remains responsible for committing the transaction.
+    """
     for _ in range(MAX_CODE_ATTEMPTS):
         code = generate_access_code()
 
@@ -67,7 +63,7 @@ def save_access_code_with_retry(
             return access_code
 
         except IntegrityError as exc:
-            if not _is_code_collision(exc):
+            if violated_constraint(exc) != CODE_UNIQUE_CONSTRAINT:
                 raise
 
     raise RuntimeError("Unable to generate a unique access code")
@@ -81,7 +77,7 @@ def create_access_code_record(
     max_uses: int | None,
     db: Session,
 ) -> AccessCode:
-    """Create an additional code for an existing, active classroom."""
+    """Create an additional access code for an active classroom."""
     school_class = db.get(Class, class_id)
 
     if school_class is None:
@@ -90,9 +86,16 @@ def create_access_code_record(
     if school_class.archived_at is not None:
         raise AppError(ErrorCode.CLASS_ARCHIVED)
 
-    expiration = (
-        expires_at if expires_at is not None else semester_expiration(school_class.semester)
-    )
+    semester_end = semester_expiration(school_class.semester)
+    now = datetime.now(UTC)
+
+    if semester_end <= now:
+        raise AppError(
+            ErrorCode.VALIDATION_ERROR,
+            "Cannot create an access code after the classroom semester has ended.",
+        )
+
+    expiration = expires_at if expires_at is not None else semester_end
 
     if expiration.tzinfo is None or expiration.utcoffset() is None:
         raise AppError(
@@ -100,10 +103,16 @@ def create_access_code_record(
             "Expiration must include a timezone.",
         )
 
-    if expiration <= datetime.now(UTC):
+    if expiration <= now:
         raise AppError(
             ErrorCode.VALIDATION_ERROR,
             "Expiration must be in the future.",
+        )
+
+    if expiration > semester_end:
+        raise AppError(
+            ErrorCode.VALIDATION_ERROR,
+            "Expiration cannot be later than the end of the classroom semester.",
         )
 
     return save_access_code_with_retry(
