@@ -21,12 +21,14 @@ from app.models.enums import EnrollmentEndReason, Language
 
 
 def test_get_class_language(db: Session, make_class: Callable[..., Class]) -> None:
+    """Return the target language for an existing class."""
     school_class = make_class(target_language=Language.JA)
 
     assert get_class_language(school_class.id, db) == Language.JA
 
 
 def test_get_class_language_missing(db: Session) -> None:
+    """Return None when the class does not exist."""
     assert get_class_language(uuid4(), db) is None
 
 
@@ -36,6 +38,7 @@ def test_active_enrolment(
     make_class: Callable[..., Class],
     make_enrollment: Callable[..., ClassEnrollment],
 ) -> None:
+    """Return True when the student has an active enrolment."""
     student = make_user()
     school_class = make_class()
     make_enrollment(student, school_class)
@@ -48,6 +51,7 @@ def test_student_not_enrolled(
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
 ) -> None:
+    """Return False when the student has no enrolment."""
     student = make_user()
     school_class = make_class()
 
@@ -60,6 +64,7 @@ def test_inactive_enrolment(
     make_class: Callable[..., Class],
     make_enrollment: Callable[..., ClassEnrollment],
 ) -> None:
+    """Return False when the student's enrolment is inactive."""
     student = make_user()
     school_class = make_class()
     enrollment = make_enrollment(student, school_class)
@@ -76,6 +81,7 @@ def test_inactive_enrolment(
 
 
 def test_archived_class(db: Session, make_class: Callable[..., Class]) -> None:
+    """Return True when the class has been archived."""
     school_class = make_class()
     school_class.archived_at = datetime.now(UTC)
     db.flush()
@@ -84,19 +90,22 @@ def test_archived_class(db: Session, make_class: Callable[..., Class]) -> None:
 
 
 def test_active_class(db: Session, make_class: Callable[..., Class]) -> None:
+    """Return False when the class has not been archived."""
     school_class = make_class()
 
     assert is_class_archived(school_class.id, db) is False
 
 
 def test_missing_class_not_archived(db: Session) -> None:
+    """Return False for a missing class."""
     assert is_class_archived(uuid4(), db) is False
 
 
 def test_engagement_result_fields() -> None:
-    """The response exposes the fields required by the specification."""
+    """Expose the fields required by the engagement response contract."""
     result = EngagementResult(
-        total_points=100,
+        location_points_awarded=100,
+        total_points=200,
         level=2,
         level_up=True,
         streak_days=3,
@@ -104,7 +113,8 @@ def test_engagement_result_fields() -> None:
         achievements_unlocked=("first_success",),
     )
 
-    assert result.total_points == 100
+    assert result.location_points_awarded == 100
+    assert result.total_points == 200
     assert result.level == 2
     assert result.level_up is True
     assert result.streak_days == 3
@@ -113,8 +123,9 @@ def test_engagement_result_fields() -> None:
 
 
 def test_engagement_result_is_frozen() -> None:
-    """Response fields cannot be reassigned."""
+    """Prevent reassignment of response fields."""
     result = EngagementResult(
+        location_points_awarded=0,
         total_points=0,
         level=1,
         level_up=False,
@@ -128,10 +139,15 @@ def test_engagement_result_is_frozen() -> None:
 
 
 def test_apply_location_result_returns_placeholder(db: Session) -> None:
-    """The stub returns the documented placeholder response."""
-    result = apply_location_result(uuid4(), db)
+    """Return placeholder values until Issue #15 is implemented."""
+    result = apply_location_result(
+        session_location_id=uuid4(),
+        student_id=uuid4(),
+        db=db,
+    )
 
     assert result == EngagementResult(
+        location_points_awarded=0,
         total_points=0,
         level=1,
         level_up=False,
@@ -141,12 +157,41 @@ def test_apply_location_result_returns_placeholder(db: Session) -> None:
     )
 
 
+def test_apply_location_result_repeat_placeholder_is_non_awarding(
+    db: Session,
+) -> None:
+    """Confirm placeholder responses award nothing; idempotency is unimplemented."""
+    session_location_id = uuid4()
+    student_id = uuid4()
+
+    first_result = apply_location_result(
+        session_location_id=session_location_id,
+        student_id=student_id,
+        db=db,
+    )
+    second_result = apply_location_result(
+        session_location_id=session_location_id,
+        student_id=student_id,
+        db=db,
+    )
+
+    assert first_result.location_points_awarded == 0
+    assert second_result.location_points_awarded == 0
+    assert second_result.level_up is False
+    assert second_result.challenges_completed == ()
+    assert second_result.achievements_unlocked == ()
+
+
 def test_apply_location_result_does_not_manage_transaction(
     db: Session,
     transaction_calls: list[str],
 ) -> None:
-    """The interface stub must not commit or roll back the transaction."""
-    apply_location_result(uuid4(), db)
+    """Ensure the interface stub does not commit or roll back."""
+    apply_location_result(
+        session_location_id=uuid4(),
+        student_id=uuid4(),
+        db=db,
+    )
 
     assert "commit" not in transaction_calls
     assert "rollback" not in transaction_calls
