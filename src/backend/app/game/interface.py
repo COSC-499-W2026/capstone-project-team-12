@@ -10,15 +10,13 @@ this function, in the same transaction (spec, Architecture and Session Lifecycle
 
 from uuid import UUID
 
-from sqlalchemy import update
 from sqlalchemy.orm import Session
 
-from app.models.enums import LocationStatus, SessionEndReason, SessionState, SkipReason
-from app.models.game import OPEN_SESSION_STATES, GameSession, SessionLocation
+from app.game.sessions import abandon_sessions
+from app.models.enums import SessionEndReason
+from app.models.game import GameSession
 
 __all__ = ["end_open_sessions"]
-
-_UNFINISHED = (LocationStatus.PENDING, LocationStatus.NAVIGATING, LocationStatus.VERIFYING)
 
 
 def end_open_sessions(class_id: UUID, db: Session, student_id: UUID | None = None) -> int:
@@ -29,23 +27,7 @@ def end_open_sessions(class_id: UUID, db: Session, student_id: UUID | None = Non
     locations are skipped (session_ended). Points already earned stay, and so does
     last_activity_at, since closing a class isn't something the student did. Doesn't commit.
     """
-    conditions = [GameSession.class_id == class_id, GameSession.state.in_(OPEN_SESSION_STATES)]
+    conditions = [GameSession.class_id == class_id]
     if student_id is not None:
         conditions.append(GameSession.student_id == student_id)
-    ended = db.scalars(
-        update(GameSession)
-        .where(*conditions)
-        .values(
-            state=SessionState.ABANDONED,
-            end_reason=SessionEndReason.CLASS_CLOSED,
-            paused_at=None,  # set only while paused, so it has to be cleared
-        )
-        .returning(GameSession.id)
-    ).all()
-    if ended:
-        db.execute(
-            update(SessionLocation)
-            .where(SessionLocation.session_id.in_(ended), SessionLocation.status.in_(_UNFINISHED))
-            .values(status=LocationStatus.SKIPPED, skip_reason=SkipReason.SESSION_ENDED)
-        )
-    return len(ended)
+    return len(abandon_sessions(SessionEndReason.CLASS_CLOSED, conditions, db))

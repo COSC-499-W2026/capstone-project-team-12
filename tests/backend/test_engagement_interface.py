@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.engagement.interface import (
     EngagementResult,
     apply_location_result,
+    enrolment_ended_by_archive,
     get_class_language,
     is_actively_enrolled,
     is_class_archived,
@@ -195,3 +196,46 @@ def test_apply_location_result_does_not_manage_transaction(
 
     assert "commit" not in transaction_calls
     assert "rollback" not in transaction_calls
+
+
+@pytest.mark.parametrize(
+    ("end_reason", "expected"),
+    [
+        (EnrollmentEndReason.ARCHIVED, True),
+        (EnrollmentEndReason.LEFT, False),
+        (EnrollmentEndReason.REMOVED, False),
+        # Still enrolled.
+        (None, False),
+    ],
+)
+def test_enrolment_ended_by_archive(
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+    end_reason: EnrollmentEndReason | None,
+    expected: bool,
+) -> None:
+    """Return True only when an enrolment ended due to archiving."""
+    student, school_class = make_user(), make_class()
+
+    enrollment = make_enrollment(student, school_class)
+
+    if end_reason is not None:
+        # Ensure left_at is not earlier than the database joining timestamp.
+        db.refresh(enrollment)
+        enrollment.is_active = False
+        enrollment.end_reason = end_reason
+        enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
+        db.flush()
+
+    assert enrolment_ended_by_archive(student.id, school_class.id, db) is expected
+
+
+def test_never_enrolled_student_did_not_end_by_archive(
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+) -> None:
+    """Return False for a student who never enrolled in the class."""
+    assert enrolment_ended_by_archive(make_user().id, make_class().id, db) is False

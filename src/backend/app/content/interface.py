@@ -90,19 +90,19 @@ _STUB_LOCATION_NUMBERS = {
 
 
 def eligible_location_ids(
-    db: Session, language: Language, difficulty: Difficulty
+    language: Language, difficulty: Difficulty, db: Session
 ) -> frozenset[UUID]:
     """IDs of every location that can be drawn for `language` and `difficulty`."""
     return frozenset(_STUB_LOCATION_NUMBERS)
 
 
-def is_location_active(db: Session, location_id: UUID) -> bool:
+def is_location_active(location_id: UUID, db: Session) -> bool:
     """False once a content manager has deactivated the location (the stub: any unknown ID)."""
     return location_id in _STUB_LOCATION_NUMBERS
 
 
 def location_snapshot(
-    db: Session, location_id: UUID, language: Language, difficulty: Difficulty
+    location_id: UUID, language: Language, difficulty: Difficulty, db: Session
 ) -> LocationSnapshot:
     """The content snapshot of an eligible location; raises `LocationNotEligibleError` if not."""
     number = _STUB_LOCATION_NUMBERS.get(location_id)

@@ -68,6 +68,7 @@ operationId -> `pauseGame`
 |---|---|---|
 |200|GET, PUT, PATCH, and action endpoints (e.g. `POST /games/{id}/pause`)|The resource or its updated state|
 |201|POST that creates a resource|The created resource|
+|202|Request accepted and the email queued (`POST /auth/forgot-password`, `POST /auth/resend-verification`)|`{"status": "ok"}`|
 |204|DELETE|No body|
 
 ## Error Handling
@@ -116,6 +117,15 @@ API error responses must not expose stack traces, database errors, internal host
 - Each `ErrorCode` has one HTTP status (`STATUS` in `app/errors.py`), taken from the Error Codes table in the Technical Specification. A new code is added to `ErrorCode` and `STATUS` together.
 - The handlers in `app/main.py` turn `AppError`, request validation errors (422 `VALIDATION_ERROR`), unknown routes (404 `NOT_FOUND`), wrong methods (405 `METHOD_NOT_ALLOWED`) and unexpected errors (500 `INTERNAL_ERROR`, logged but never shown to the client) into the format above.
 - Headers that a code needs, such as `Retry-After` for `UPLOAD_IN_PROGRESS` and `OCR_BUSY`, are passed with `headers=`.
+
+## Interface and Service Functions
+Functions in a component's `interface.py` and in the shared services (`app/services`) that use the database take the session as `db: Session`, placed **after all required arguments**. Arguments with a default value come after `db`. The same rule applies to the other functions inside a component, such as `register_account(request, db)` and `username_exists(username, db)` in `app/accounts/register.py`.
+
+```python
+location_snapshot(location_id, language, difficulty, db)
+is_class_staff(user_id, class_id, db)
+end_open_sessions(class_id, db, student_id=None)
+```
 
 ## Pagination
 Collection endpoints that may return a large number of resources must use pagination.
