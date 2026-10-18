@@ -1,14 +1,17 @@
 from collections.abc import Callable
 from http import HTTPStatus
 from itertools import product
+from typing import get_args
 from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from app.config import Settings
+from app.config import AudioServiceType, Settings, get_settings
+from app.main import create_app
 from app.models.enums import FeedbackCode, Language
+from app.services import audio as audio_module
 from app.services.audio import (
     AudioService,
     MediaNotFoundError,
@@ -53,6 +56,25 @@ def test_an_audio_service_type_that_does_not_exist_is_rejected(
     monkeypatch.setenv("AUDIO_SERVICE_TYPE", service_type)
     with pytest.raises(ValidationError, match="audio_service_type"):
         Settings(_env_file=None)
+
+
+def test_every_audio_service_type_has_an_implementation() -> None:
+    """A new AUDIO_SERVICE_TYPE value without one would only fail when the factory runs."""
+    assert set(get_args(AudioServiceType)) == set(audio_module._IMPLEMENTATIONS)
+
+
+def test_a_bad_audio_service_type_stops_the_app_at_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUDIO_SERVICE_TYPE", "hybrid")
+    get_settings.cache_clear()
+    get_audio_service.cache_clear()
+    try:
+        with pytest.raises(ValidationError, match="audio_service_type"):
+            create_app()
+    finally:
+        get_settings.cache_clear()
+        get_audio_service.cache_clear()
 
 
 def test_get_audio_service_is_cached() -> None:

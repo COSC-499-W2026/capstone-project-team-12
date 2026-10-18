@@ -96,7 +96,7 @@ def eligible_location_ids(
 ) -> frozenset[UUID]:
     """IDs of every location that can be drawn for `language` and `difficulty`.
 
-    None while the language is missing a feedback phrase.
+    Empty while the language is missing a feedback phrase.
     """
     if not get_audio_service().has_all_feedback_phrases(language, db):
         return frozenset()

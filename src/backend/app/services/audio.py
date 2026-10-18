@@ -7,12 +7,13 @@ code and language), so replacing a recording never changes a game in progress. T
 short-lived and signed by StorageService (app.services.storage).
 
 The implementation is chosen by the AUDIO_SERVICE_TYPE setting: `get_audio_service` is the
-spec's AudioServiceFactory and builds it once. Only `uploaded` exists; `hybrid` and
-`ai_generated` are Future Work.
+spec's AudioServiceFactory, which `create_app` calls at startup and which builds it once. Only
+`uploaded` exists; `hybrid` and `ai_generated` are Future Work.
 
 A language is playable only when all its feedback phrases exist (`has_all_feedback_phrases`).
-Content counts a language without them as having no eligible locations, so `feedback_audio_url`
-cannot fail during a game.
+Content counts a language without them as having no eligible locations, and checks again when
+it draws each location, so every game starts with all its phrases in place. `feedback_audio_url`
+can then only fail if a phrase is removed while a game is in progress.
 
 UploadedAudioService is a stub: the audio tables do not exist yet, so it ignores `db`. Every clue
 has a recording, with a fixed ID per clue, and every feedback phrase exists. The stub stores
@@ -76,8 +77,12 @@ def _stub_key(*parts: object) -> str:
     return f"{UUID(bytes=_stub_digest('key', *parts)[:16], version=4)}.mp3"
 
 
-class UploadedAudioService(AudioService):
-    """`uploaded`: a clue uses its primary uploaded recording (a stub, see the module docstring)."""
+class UploadedAudioService:
+    """`uploaded`: a clue uses its primary uploaded recording (a stub, see the module docstring).
+
+    Not a subclass of `AudioService`, so a missing method fails instead of inheriting the
+    Protocol's empty body; mypy checks the match through `_IMPLEMENTATIONS`.
+    """
 
     def clue_audio_asset_id(self, clue_id: UUID, db: Session) -> UUID:
         # The first half identifies the recording; the second half shows the stub handed it out.
