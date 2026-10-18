@@ -6,7 +6,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
@@ -26,9 +26,18 @@ teacher_classes_router = APIRouter(
     tags=["teacher-classes"],
 )
 
+ClassName = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=100,
+    ),
+]
+
 
 class CreateClassRequest(BaseModel):
-    name: str = Field(min_length=1)
+    name: ClassName
     semester: str = Field(pattern=r"^[0-9]{4}(W1|W2|S1|S2)$")
     target_language: Language
 
