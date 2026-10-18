@@ -47,15 +47,15 @@ def db(test_engine: Engine) -> Iterator[Session]:
 
 
 @pytest.fixture
-def transaction_calls(db: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
-    """Every explicit commit, flush and rollback made on the test session while the test runs.
+def transaction_calls(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[list[str]]:
+    """Record explicit commits, flushes and rollbacks on the test session.
 
-    Autoflush is turned off: the automatic flush before a query is normal and only writes what
-    the caller already added, so a real lookup that queries must not fail this check. Flush is
-    spied on directly because SQLAlchemy only fires its flush events when something is pending,
-    so listening for them would miss an explicit flush of a clean session. The transaction is
-    opened first because rolling back a session without one does nothing, which would hide a
-    rollback inside a lookup.
+    Autoflush is disabled because automatic flushing before queries is normal.
+    Explicit flushes are tracked directly so even clean-session flushes are
+    recorded. The transaction is opened before monitoring begins.
     """
     db.connection()
     calls: list[str] = []
@@ -77,8 +77,7 @@ def transaction_calls(db: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[
 
 @pytest.fixture
 def split_media_url() -> Callable[[str], tuple[str, int, str]]:
-    """Split a signed media URL into its (key, expires, signature) parts, decoding the key as the
-    router does."""
+    """Split a signed media URL into its key, expiration and signature."""
 
     def split(url: str) -> tuple[str, int, str]:
         parts = urlsplit(url)
@@ -91,15 +90,19 @@ def split_media_url() -> Callable[[str], tuple[str, int, str]]:
 
 @pytest.fixture
 def client(db: Session) -> TestClient:
-    """API client whose requests use the test session: endpoints see the rows a test made with
-    the factories below, and everything they write is rolled back after the test."""
+    """Create an API client using the test database session.
+
+    Endpoint writes and factory-created rows share the same session.
+    Changes are rolled back after each test.
+    """
     app = create_app()
     app.dependency_overrides[get_db] = lambda: db
     return TestClient(app)
 
 
-# Factories for the core tables (#8). Each one adds a valid row with unique values and flushes,
-# so the row has an id. Pass any column to override a default, e.g. make_user(role=UserRole.STAFF).
+# Factories for the core tables (#8).
+# Each factory inserts a valid row with unique values and flushes.
+# Pass model fields as keyword arguments to override defaults.
 
 
 T = TypeVar("T")
@@ -113,7 +116,7 @@ def _add(db: Session, row: T) -> T:
 
 @pytest.fixture
 def make_user(db: Session) -> Callable[..., User]:
-    """A student by default."""
+    """Create a student by default."""
 
     def make(**fields: Any) -> User:
         values: dict[str, Any] = {
@@ -128,7 +131,7 @@ def make_user(db: Session) -> Callable[..., User]:
 
 @pytest.fixture
 def make_class(db: Session) -> Callable[..., Class]:
-    """A Japanese class in 2026W1 by default, with no staff."""
+    """Create a Japanese class in 2026W1 with no staff by default."""
 
     def make(**fields: Any) -> Class:
         values: dict[str, Any] = {
@@ -143,17 +146,31 @@ def make_class(db: Session) -> Callable[..., Class]:
 
 @pytest.fixture
 def make_class_staff(db: Session) -> Callable[..., ClassStaff]:
-    """Makes the user the class owner by default; pass role=ClassStaffRole.ASSISTANT for a TA."""
+    """Assign a user as class owner, or as a TA when requested."""
 
-    def make(school_class: Class, user: User, role: str = ClassStaffRole.OWNER) -> ClassStaff:
-        return _add(db, ClassStaff(class_id=school_class.id, user_id=user.id, role=role))
+    def make(
+        school_class: Class,
+        user: User,
+        role: str = ClassStaffRole.OWNER,
+    ) -> ClassStaff:
+        return _add(
+            db,
+            ClassStaff(
+                class_id=school_class.id,
+                user_id=user.id,
+                role=role,
+            ),
+        )
 
     return make
 
 
 @pytest.fixture
-def make_access_code(db: Session, make_user: Callable[..., User]) -> Callable[..., AccessCode]:
-    """An active code for the class, unlimited uses, valid for 90 days, made by a new staff user."""
+def make_access_code(
+    db: Session,
+    make_user: Callable[..., User],
+) -> Callable[..., AccessCode]:
+    """Create an active access code valid for 90 days by default."""
 
     def make(school_class: Class, **fields: Any) -> AccessCode:
         values: dict[str, Any] = {
@@ -161,8 +178,10 @@ def make_access_code(db: Session, make_user: Callable[..., User]) -> Callable[..
             "code": "".join(random.choices(ACCESS_CODE_ALPHABET, k=8)),
             "expires_at": datetime.now(UTC) + timedelta(days=90),
         }
+
         if "created_by" not in fields:
             values["created_by"] = make_user(role=UserRole.STAFF).id
+
         return _add(db, AccessCode(**(values | fields)))
 
     return make
@@ -170,43 +189,80 @@ def make_access_code(db: Session, make_user: Callable[..., User]) -> Callable[..
 
 @pytest.fixture
 def make_enrollment(
-    db: Session, make_access_code: Callable[..., AccessCode]
+    db: Session,
+    make_access_code: Callable[..., AccessCode],
 ) -> Callable[..., ClassEnrollment]:
-    """An active enrolment through a new code for the class, in the class language."""
+    """Create an enrollment with valid joining and leaving timestamps.
 
-    def make(student: User, school_class: Class, **fields: Any) -> ClassEnrollment:
+    Active enrollments use the database-generated joining timestamp.
+
+    For already-ended enrollments, set joined_at before left_at
+    to satisfy the database's chronological constraint.
+
+    Explicitly supplied joined_at values are preserved.
+    """
+
+    def make(
+        student: User,
+        school_class: Class,
+        **fields: Any,
+    ) -> ClassEnrollment:
         values: dict[str, Any] = {
             "student_id": student.id,
             "class_id": school_class.id,
             "language": school_class.target_language,
         }
+
         if "access_code_id" not in fields:
             values["access_code_id"] = make_access_code(school_class).id
-        return _add(db, ClassEnrollment(**(values | fields)))
+
+        if fields.get("left_at") is not None and "joined_at" not in fields:
+            values["joined_at"] = fields["left_at"] - timedelta(seconds=1)
+
+        return _add(
+            db,
+            ClassEnrollment(**(values | fields)),
+        )
 
     return make
 
 
 @pytest.fixture
-def make_game_session(db: Session, make_user: Callable[..., User]) -> Callable[..., GameSession]:
-    """An active Practice game in Japanese at difficulty 1, for a new student unless given one."""
+def make_game_session(
+    db: Session,
+    make_user: Callable[..., User],
+) -> Callable[..., GameSession]:
+    """Create an active Practice game in Japanese at basic difficulty."""
 
-    def make(student: User | None = None, **fields: Any) -> GameSession:
+    def make(
+        student: User | None = None,
+        **fields: Any,
+    ) -> GameSession:
         values: dict[str, Any] = {
             "student_id": (student or make_user()).id,
             "target_language": Language.JA,
             "difficulty": Difficulty.BASIC,
         }
-        return _add(db, GameSession(**(values | fields)))
+
+        return _add(
+            db,
+            GameSession(**(values | fields)),
+        )
 
     return make
 
 
 @pytest.fixture
-def make_session_location(db: Session) -> Callable[..., SessionLocation]:
-    """A pending location in the game with a valid content snapshot (a random location id)."""
+def make_session_location(
+    db: Session,
+) -> Callable[..., SessionLocation]:
+    """Create a pending game location with a valid content snapshot."""
 
-    def make(game: GameSession, position: int, **fields: Any) -> SessionLocation:
+    def make(
+        game: GameSession,
+        position: int,
+        **fields: Any,
+    ) -> SessionLocation:
         values: dict[str, Any] = {
             "session_id": game.id,
             "location_id": uuid4(),
@@ -214,9 +270,18 @@ def make_session_location(db: Session) -> Callable[..., SessionLocation]:
             "clue_id": uuid4(),
             "audio_asset_id": uuid4(),
             "accepted_answers_snapshot": ["SCI333"],
-            "gps_points_snapshot": [{"lat": 49.9394, "lng": -119.3948}],
+            "gps_points_snapshot": [
+                {
+                    "lat": 49.9394,
+                    "lng": -119.3948,
+                }
+            ],
             "radius_snapshot": 30,
         }
-        return _add(db, SessionLocation(**(values | fields)))
+
+        return _add(
+            db,
+            SessionLocation(**(values | fields)),
+        )
 
     return make

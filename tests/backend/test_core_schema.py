@@ -272,7 +272,7 @@ def test_one_active_class_per_language(
 ) -> None:
     student = make_user()
     make_enrollment(student, make_class())
-    make_enrollment(student, make_class(target_language=Language.FR))  # other language is fine
+    make_enrollment(student, make_class(target_language=Language.FR))
     with pytest.raises(IntegrityError, match="uq_class_enrollments_one_active_per_language"):
         make_enrollment(student, make_class())
 
@@ -287,7 +287,7 @@ def test_a_student_can_join_again_after_leaving(
     old = make_enrollment(student, make_class())
     old.is_active = False
     old.end_reason = EnrollmentEndReason.LEFT
-    old.left_at = datetime.now(UTC)
+    old.left_at = old.joined_at + timedelta(seconds=1)
     db.flush()
     make_enrollment(student, make_class())
 
@@ -317,7 +317,6 @@ def test_unknown_end_reason_is_rejected(
     make_class: Callable[..., Class],
     make_enrollment: Callable[..., ClassEnrollment],
 ) -> None:
-    # the quotes stop it from also matching ck_class_enrollments_end_reason_matches_status
     with pytest.raises(IntegrityError, match='"ck_class_enrollments_end_reason"'):
         make_enrollment(
             make_user(),
@@ -329,9 +328,10 @@ def test_unknown_end_reason_is_rejected(
 
 
 def leave(enrollment: ClassEnrollment) -> None:
+    """Mark an enrollment as ended with a valid chronological leave time."""
     enrollment.is_active = False
     enrollment.end_reason = EnrollmentEndReason.LEFT
-    enrollment.left_at = datetime.now(UTC)
+    enrollment.left_at = enrollment.joined_at + timedelta(seconds=1)
 
 
 def test_a_student_can_rejoin_the_same_class(
@@ -361,7 +361,7 @@ def test_rejoining_without_clearing_the_leave_time_is_rejected(
     leave(enrollment)
     db.flush()
     enrollment.is_active = True
-    enrollment.end_reason = None  # left_at forgotten
+    enrollment.end_reason = None
     with pytest.raises(IntegrityError, match="ck_class_enrollments_left_at_matches_status"):
         db.flush()
 

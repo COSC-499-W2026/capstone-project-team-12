@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user, require_class_role
@@ -16,14 +16,12 @@ from app.engagement.interface import (
     create_class_record,
     deactivate_access_code_record,
     list_staff_classes,
-    require_class_owner,
     save_access_code_with_retry,
     semester_expiration,
     update_class_record,
 )
-from app.errors import AppError, ErrorCode, error_responses
+from app.errors import error_responses
 from app.models.accounts import User
-from app.models.engagement import AccessCode
 from app.models.enums import ClassStaffRole, Language, UserRole
 
 teacher_classes_router = APIRouter(
@@ -36,9 +34,18 @@ access_code_router = APIRouter(
     tags=["teacher-classes"],
 )
 
+ClassName = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=100,
+    ),
+]
+
 
 class CreateClassRequest(BaseModel):
-    name: str = Field(min_length=1)
+    name: ClassName
     semester: str = Field(pattern=r"^[0-9]{4}(W1|W2|S1|S2)$")
     target_language: Language
 
@@ -64,8 +71,22 @@ class ClassListItem(BaseModel):
 class UpdateClassRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str | None = Field(default=None, min_length=1)
+    name: ClassName | None = None
     leaderboard_enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_update(self) -> "UpdateClassRequest":
+        """Require at least one non-null classroom setting."""
+        if not self.model_fields_set:
+            raise ValueError("At least one classroom setting must be provided.")
+
+        if "name" in self.model_fields_set and self.name is None:
+            raise ValueError("Classroom name cannot be null.")
+
+        if "leaderboard_enabled" in self.model_fields_set and self.leaderboard_enabled is None:
+            raise ValueError("Leaderboard setting cannot be null.")
+
+        return self
 
 
 class UpdateClassResponse(BaseModel):
@@ -170,7 +191,6 @@ def list_teacher_classes(
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
         HTTPStatus.FORBIDDEN,
-        HTTPStatus.NOT_FOUND,
         HTTPStatus.CONFLICT,
         HTTPStatus.UNPROCESSABLE_ENTITY,
     ),
@@ -178,16 +198,13 @@ def list_teacher_classes(
 def update_class(
     class_id: UUID,
     body: UpdateClassRequest,
-    user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
+    _owner_check: Annotated[
+        None,
+        Depends(require_class_role(ClassStaffRole.OWNER)),
+    ],
 ) -> UpdateClassResponse:
     """Update mutable classroom settings without changing the language."""
-    require_class_owner(
-        class_id=class_id,
-        user_id=user.id,
-        db=db,
-    )
-
     school_class = update_class_record(
         class_id=class_id,
         name=body.name,
@@ -235,7 +252,6 @@ class AccessCodeResponse(BaseModel):
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
         HTTPStatus.FORBIDDEN,
-        HTTPStatus.NOT_FOUND,
         HTTPStatus.CONFLICT,
         HTTPStatus.UNPROCESSABLE_ENTITY,
     ),
@@ -246,7 +262,7 @@ def create_access_code(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     _authorized: Annotated[
-        object,
+        None,
         Depends(
             require_class_role(
                 ClassStaffRole.OWNER,
@@ -282,16 +298,19 @@ class UpdateAccessCodeRequest(BaseModel):
 @access_code_router.patch(
     "/{code_id}",
     response_model=AccessCodeResponse,
-    operation_id="deactivateAccessCode",
+    operation_id="updateAccessCode",
     summary="Deactivate a classroom access code",
     description=(
-        "Allow the classroom owner to deactivate an access code "
-        "without deleting its usage history. Repeated deactivation is allowed."
+        "Allow a classroom owner or teaching assistant to deactivate "
+        "an access code without deleting its usage history. "
+        "Repeated deactivation is allowed. "
+        "Archived classrooms cannot be modified."
     ),
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
         HTTPStatus.FORBIDDEN,
         HTTPStatus.NOT_FOUND,
+        HTTPStatus.CONFLICT,
         HTTPStatus.UNPROCESSABLE_ENTITY,
     ),
 )
@@ -301,20 +320,10 @@ def deactivate_access_code(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AccessCodeResponse:
-    """Deactivate an access code belonging to a classroom owned by the user."""
-    access_code = db.get(AccessCode, code_id)
-
-    if access_code is None:
-        raise AppError(ErrorCode.NOT_FOUND)
-
-    require_class_owner(
-        class_id=access_code.class_id,
-        user_id=user.id,
-        db=db,
-    )
-
+    """Deactivate an access code through the engagement service."""
     updated_code = deactivate_access_code_record(
         code_id=code_id,
+        user_id=user.id,
         db=db,
     )
 

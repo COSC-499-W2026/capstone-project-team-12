@@ -525,16 +525,6 @@
               }
             }
           },
-          "404": {
-            "description": "Not Found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "409": {
             "description": "Conflict",
             "content": {
@@ -624,16 +614,6 @@
               }
             }
           },
-          "404": {
-            "description": "Not Found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "409": {
             "description": "Conflict",
             "content": {
@@ -653,8 +633,8 @@
           "teacher-classes"
         ],
         "summary": "Deactivate a classroom access code",
-        "description": "Allow the classroom owner to deactivate an access code without deleting its usage history. Repeated deactivation is allowed.",
-        "operationId": "deactivateAccessCode",
+        "description": "Allow a classroom owner or teaching assistant to deactivate an access code without deleting its usage history. Repeated deactivation is allowed. Archived classrooms cannot be modified.",
+        "operationId": "updateAccessCode",
         "security": [
           {
             "OAuth2PasswordBearer": []
@@ -725,6 +705,16 @@
           },
           "404": {
             "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -910,6 +900,7 @@
         "properties": {
           "name": {
             "type": "string",
+            "maxLength": 100,
             "minLength": 1,
             "title": "Name"
           },
@@ -1172,6 +1163,7 @@
             "anyOf": [
               {
                 "type": "string",
+                "maxLength": 100,
                 "minLength": 1
               },
               {

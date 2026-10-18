@@ -10,25 +10,31 @@ from jwt import encode
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models.accounts import ClassStaff
 from app.models.engagement import AccessCode
 from app.models.enums import ClassStaffRole, Language, UserRole
 
 
 @pytest.fixture
 def owner(make_user):
+    """Create a classroom owner."""
     return make_user(role=UserRole.STAFF)
 
 
 @pytest.fixture
 def school_class(make_class, make_class_staff, owner):
+    """Create a classroom assigned to its owner."""
     school_class = make_class(target_language=Language.JA)
-    make_class_staff(school_class, owner, role=ClassStaffRole.OWNER)
+    make_class_staff(
+        school_class,
+        owner,
+        role=ClassStaffRole.OWNER,
+    )
     return school_class
 
 
 @pytest.fixture
 def access_code(db: Session, school_class, owner):
+    """Create an active access code with existing usage history."""
     code = AccessCode(
         class_id=school_class.id,
         code="ABC234XY",
@@ -74,6 +80,7 @@ def test_owner_can_deactivate_code(
     owner,
     access_code,
 ):
+    """Classroom owners can deactivate their access codes."""
     response = deactivate(client, access_code.id, owner)
 
     assert response.status_code == 200
@@ -89,6 +96,7 @@ def test_repeated_deactivation_is_allowed(
     owner,
     access_code,
 ):
+    """Deactivating an already inactive code remains successful."""
     first = deactivate(client, access_code.id, owner)
     second = deactivate(client, access_code.id, owner)
 
@@ -103,18 +111,22 @@ def test_deactivation_preserves_usage_history(
     owner,
     access_code,
 ):
+    """Deactivation must not delete or reset access-code history."""
     original_code = access_code.code
     original_uses = access_code.uses_count
     original_class_id = access_code.class_id
+    original_max_uses = access_code.max_uses
 
     response = deactivate(client, access_code.id, owner)
 
     assert response.status_code == 200
 
     db.refresh(access_code)
+
     assert access_code.code == original_code
     assert access_code.uses_count == original_uses
     assert access_code.class_id == original_class_id
+    assert access_code.max_uses == original_max_uses
     assert access_code.is_active is False
 
 
@@ -123,6 +135,7 @@ def test_other_teacher_cannot_deactivate_code(
     make_user,
     access_code,
 ):
+    """Teachers without classroom membership cannot deactivate codes."""
     other_teacher = make_user(role=UserRole.STAFF)
 
     response = deactivate(client, access_code.id, other_teacher)
@@ -135,6 +148,7 @@ def test_student_cannot_deactivate_code(
     make_user,
     access_code,
 ):
+    """Students without classroom staff permissions cannot deactivate codes."""
     student = make_user(role=UserRole.STUDENT)
 
     response = deactivate(client, access_code.id, student)
@@ -142,33 +156,102 @@ def test_student_cannot_deactivate_code(
     assert response.status_code == 403
 
 
-def test_ta_cannot_deactivate_code(
+def test_ta_can_deactivate_code(
     client: TestClient,
     db: Session,
     make_user,
+    make_class_staff,
     school_class,
     access_code,
 ):
+    """A teaching assistant can deactivate an access code."""
     ta = make_user(role=UserRole.STAFF)
 
-    db.add(
-        ClassStaff(
-            class_id=school_class.id,
-            user_id=ta.id,
-            role=ClassStaffRole.ASSISTANT,
-        )
+    make_class_staff(
+        school_class,
+        ta,
+        role=ClassStaffRole.ASSISTANT,
     )
-    db.flush()
 
     response = deactivate(client, access_code.id, ta)
 
+    assert response.status_code == 200
+    assert response.json()["is_active"] is False
+
+    db.refresh(access_code)
+    assert access_code.is_active is False
+
+
+def test_student_role_ta_can_deactivate_code(
+    client: TestClient,
+    db: Session,
+    make_user,
+    make_class_staff,
+    school_class,
+    access_code,
+):
+    """A student assigned as a TA has classroom staff permissions."""
+    ta = make_user(role=UserRole.STUDENT)
+
+    make_class_staff(
+        school_class,
+        ta,
+        role=ClassStaffRole.ASSISTANT,
+    )
+
+    response = deactivate(client, access_code.id, ta)
+
+    assert response.status_code == 200
+    assert response.json()["is_active"] is False
+
+    db.refresh(access_code)
+    assert access_code.is_active is False
+
+
+def test_archived_class_code_cannot_be_deactivated(
+    client: TestClient,
+    db: Session,
+    owner,
+    school_class,
+    access_code,
+):
+    """Archived classrooms must remain read-only."""
+    school_class.archived_at = datetime.now(UTC)
+    db.flush()
+
+    response = deactivate(client, access_code.id, owner)
+
+    assert response.status_code == 409
+
+    db.refresh(access_code)
+    assert access_code.is_active is True
+
+
+def test_unauthorized_attempt_preserves_code(
+    client: TestClient,
+    db: Session,
+    make_user,
+    access_code,
+):
+    """Failed authorization must not modify the access code."""
+    other_user = make_user(role=UserRole.STUDENT)
+
+    original_uses = access_code.uses_count
+
+    response = deactivate(client, access_code.id, other_user)
+
     assert response.status_code == 403
+
+    db.refresh(access_code)
+    assert access_code.is_active is True
+    assert access_code.uses_count == original_uses
 
 
 def test_nonexistent_code_returns_404(
     client: TestClient,
     owner,
 ):
+    """A nonexistent access code returns HTTP 404."""
     response = deactivate(client, uuid4(), owner)
 
     assert response.status_code == 404
@@ -190,6 +273,7 @@ def test_invalid_request_body_is_rejected(
     access_code,
     body,
 ):
+    """Invalid update requests must return HTTP 422."""
     response = deactivate(client, access_code.id, owner, body)
 
     assert response.status_code == 422
@@ -199,6 +283,7 @@ def test_unauthenticated_request_is_rejected(
     client: TestClient,
     access_code,
 ):
+    """Unauthenticated requests must return HTTP 401."""
     response = client.patch(
         f"/api/v1/teacher/access-codes/{access_code.id}",
         json={"is_active": False},
