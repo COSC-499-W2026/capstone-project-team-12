@@ -12,7 +12,7 @@
         ],
         "summary": "Register",
         "description": "Student sign-up: email, username, password, optional access code.",
-        "operationId": "register_api_v1_auth_register_post",
+        "operationId": "registerUser",
         "requestBody": {
           "content": {
             "application/json": {
@@ -33,17 +33,27 @@
                     "type": "string"
                   },
                   "type": "object",
-                  "title": "Response Register Api V1 Auth Register Post"
+                  "title": "Response Registeruser"
                 }
               }
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "Unprocessable Entity",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -80,6 +90,9 @@
               }
             }
           },
+          "422": {
+            "description": "VALIDATION_ERROR: Invalid request body."
+          },
           "400": {
             "description": "INVALID_ACCESS_CODE: Invalid, expired, inactive or exhausted code."
           },
@@ -91,9 +104,6 @@
           },
           "409": {
             "description": "ALREADY_IN_CLASS_FOR_LANGUAGE, REMOVED_FROM_CLASS, TA_SAME_CLASS_CONFLICT or CLASS_ARCHIVED."
-          },
-          "422": {
-            "description": "VALIDATION_ERROR: Invalid request body."
           }
         },
         "security": [
@@ -145,11 +155,31 @@
             "description": "Successful Response"
           },
           "422": {
-            "description": "Validation Error",
+            "description": "Unprocessable Entity",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -164,7 +194,7 @@
         ],
         "summary": "Health",
         "description": "Liveness check used by Docker and CI. Does not touch the database.",
-        "operationId": "health_health_get",
+        "operationId": "getHealth",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -175,7 +205,7 @@
                     "type": "string"
                   },
                   "type": "object",
-                  "title": "Response Health Health Get"
+                  "title": "Response Gethealth"
                 }
               }
             }
@@ -186,18 +216,85 @@
   },
   "components": {
     "schemas": {
-      "HTTPValidationError": {
+      "ErrorBody": {
         "properties": {
-          "detail": {
-            "items": {
-              "$ref": "#/components/schemas/ValidationError"
-            },
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "details": {
+            "items": {},
             "type": "array",
-            "title": "Detail"
+            "title": "Details"
           }
         },
         "type": "object",
-        "title": "HTTPValidationError"
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "title": "ErrorBody"
+      },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "INVALID_CREDENTIALS",
+          "INVALID_ACCESS_CODE",
+          "USERNAME_TAKEN",
+          "EMAIL_TAKEN",
+          "ALREADY_IN_CLASS_FOR_LANGUAGE",
+          "TA_SAME_CLASS_CONFLICT",
+          "SESSION_ALREADY_OPEN",
+          "NOT_ENOUGH_CONTENT",
+          "SESSION_NOT_ACTIVE",
+          "INVALID_STAGE",
+          "NOT_WITHIN_RADIUS",
+          "STALE_POSITION",
+          "ATTEMPTS_EXHAUSTED",
+          "SHUFFLE_LIMIT_REACHED",
+          "RESET_LIMIT_REACHED",
+          "GPS_OVERRIDE_NOT_ALLOWED",
+          "STATE_CHANGED",
+          "ACCOUNT_DISABLED",
+          "REMOVED_FROM_CLASS",
+          "CLASS_ARCHIVED",
+          "FORBIDDEN_ROLE",
+          "UPLOAD_IN_PROGRESS",
+          "ALREADY_REPORTED",
+          "IDEMPOTENCY_KEY_REUSED",
+          "INVALID_TOKEN",
+          "FILE_TOO_LARGE",
+          "AUDIO_TOO_LONG",
+          "USER_NOT_FOUND",
+          "LEADERBOARD_DISABLED",
+          "UNSUPPORTED_MEDIA_TYPE",
+          "RATE_LIMITED",
+          "OCR_BUSY",
+          "VALIDATION_ERROR",
+          "NOT_AUTHENTICATED",
+          "FORBIDDEN",
+          "NOT_FOUND",
+          "METHOD_NOT_ALLOWED",
+          "INTERNAL_ERROR"
+        ],
+        "title": "ErrorCode"
+      },
+      "ErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ErrorResponse",
+        "description": "The body of every error response, the same shape as AppError.body() (for OpenAPI)."
       },
       "JoinClassRequest": {
         "properties": {
@@ -282,46 +379,6 @@
           "password"
         ],
         "title": "RegisterRequest"
-      },
-      "ValidationError": {
-        "properties": {
-          "loc": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                }
-              ]
-            },
-            "type": "array",
-            "title": "Location"
-          },
-          "msg": {
-            "type": "string",
-            "title": "Message"
-          },
-          "type": {
-            "type": "string",
-            "title": "Error Type"
-          },
-          "input": {
-            "title": "Input"
-          },
-          "ctx": {
-            "type": "object",
-            "title": "Context"
-          }
-        },
-        "type": "object",
-        "required": [
-          "loc",
-          "msg",
-          "type"
-        ],
-        "title": "ValidationError"
       }
     },
     "securitySchemes": {
