@@ -48,11 +48,11 @@ class EngagementResult:
     Fields follow the technical specification's engagement response contract.
 
     Attributes:
-        total_points: Student's cumulative points.
-        level: Student's current level.
+        total_points: Student's cumulative points for the relevant language.
+        level: Student's current level for the relevant language.
         level_up: Whether this result caused a level increase.
-        streak_days: Student's current streak in days.
-        challenges_completed: Challenge identifiers completed.
+        streak_days: Student's current global streak in days.
+        challenges_completed: Challenge identifiers completed by this result.
         achievements_unlocked: Achievement identifiers newly unlocked.
     """
 
@@ -68,33 +68,65 @@ def apply_location_result(
     session_location_id: UUID,
     db: Session,
 ) -> EngagementResult:
-    """Return engagement information for a processed session location.
+    """Process a finished session location and return engagement information.
 
-    The caller must set the session location's status and points_awarded
-    before calling this function within the finish-location transaction.
+    Contract for the eventual implementation:
 
-    The eventual implementation must read status and points_awarded from
-    the session location, update the student's engagement state, and
-    return the resulting engagement information.
+    The caller must set the session location's final status before invoking
+    this function within the finish-location transaction.
 
-    Processing must be idempotent: calling this function more than once
-    for the same session location must not award points twice.
+    Engagement determines the points awarded from the final status:
+    - Completed MATCH locations award 100 points.
+    - Failed and skipped locations award zero points.
 
-    Failed and skipped locations must award zero points and must not
-    count as an active day for streak calculations.
+    Engagement records awarded points in the points ledger and updates the
+    student's engagement state, including levels, streaks, challenges,
+    and achievements.
 
-    The caller owns the transaction. This function must not commit.
+    Points and levels are tracked separately for each language.
+    Streaks are tracked globally across languages.
+
+    The points ledger is the source of truth. The caller is responsible for
+    copying the awarded location points into session_locations.points_awarded
+    and updating game_sessions.total_score within the same transaction.
+
+    The exact mechanism for communicating the awarded point amount to the
+    caller must be agreed upon before implementing the integration.
+
+    Processing must be idempotent. A unique ledger entry associated with
+    each awarded session location must prevent duplicate point awards.
+
+    Repeated calls for the same processed location must return the current
+    cumulative totals without awarding points again. On a repeated call,
+    level_up must be False and achievements_unlocked must be empty.
+
+    Failed and skipped locations must award zero points and preserve the
+    student's existing cumulative points and level. They must return
+    level_up=False and must not count as an active day for streaks.
+
+    The eventual implementation must reject unknown session locations,
+    locations belonging to another student, and unfinished locations.
+
+    The caller owns the transaction. Engagement may add records and flush
+    pending database changes, but must not commit or roll back.
 
     This temporary stub returns fixed placeholder values without reading
     or modifying the database. It does not yet implement scoring,
-    persistence, streak updates, or idempotency enforcement.
+    validation, persistence, streak updates, or idempotency enforcement.
 
     Args:
-        session_location_id: ID of the processed session location.
+        session_location_id: ID of the finished session location.
         db: SQLAlchemy session belonging to the caller's transaction.
 
     Returns:
-        EngagementResult containing placeholder engagement information.
+        EngagementResult containing cumulative points and level for the
+        relevant language, global streak days, and completed challenges
+        and newly unlocked achievements. The stub returns placeholders.
+
+    Raises:
+        AppError: In the eventual implementation, when the session location
+            does not exist, belongs to another student, or is unfinished.
+            These checks are not implemented by this stub.
     """
     return EngagementResult(
         total_points=0,
