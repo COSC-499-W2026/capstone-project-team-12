@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.accounts.interface import get_current_user
 from app.db import get_db
 from app.engagement.interface import get_class_language, validate_code_and_enrol
-from app.errors import AppError, ErrorCode
+from app.errors import AppError, ErrorCode, ErrorResponse
 from app.models.accounts import User
 from app.models.enums import Language
 
@@ -48,16 +48,29 @@ class JoinClassResponse(BaseModel):
         "Successful enrolment also makes it the student's current class."
     ),
     responses={
-        400: {"description": "INVALID_ACCESS_CODE: Invalid, expired, inactive or exhausted code."},
-        401: {"description": "NOT_AUTHENTICATED: Authentication required."},
-        403: {"description": "FORBIDDEN_ROLE or ACCOUNT_DISABLED."},
+        400: {
+            "model": ErrorResponse,
+            "description": ("INVALID_ACCESS_CODE: Invalid, expired, inactive or exhausted code."),
+        },
+        401: {
+            "model": ErrorResponse,
+            "description": "NOT_AUTHENTICATED: Authentication required.",
+        },
+        403: {
+            "model": ErrorResponse,
+            "description": "FORBIDDEN_ROLE or ACCOUNT_DISABLED.",
+        },
         409: {
+            "model": ErrorResponse,
             "description": (
                 "ALREADY_IN_CLASS_FOR_LANGUAGE, REMOVED_FROM_CLASS, "
                 "TA_SAME_CLASS_CONFLICT or CLASS_ARCHIVED."
-            )
+            ),
         },
-        422: {"description": "VALIDATION_ERROR: Invalid request body."},
+        422: {
+            "model": ErrorResponse,
+            "description": "VALIDATION_ERROR: Invalid request body.",
+        },
     },
 )
 def join_class(

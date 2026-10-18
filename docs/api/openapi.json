@@ -91,19 +91,54 @@
             }
           },
           "422": {
-            "description": "VALIDATION_ERROR: Invalid request body."
+            "description": "VALIDATION_ERROR: Invalid request body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "400": {
-            "description": "INVALID_ACCESS_CODE: Invalid, expired, inactive or exhausted code."
+            "description": "INVALID_ACCESS_CODE: Invalid, expired, inactive or exhausted code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "401": {
-            "description": "NOT_AUTHENTICATED: Authentication required."
+            "description": "NOT_AUTHENTICATED: Authentication required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "403": {
-            "description": "FORBIDDEN_ROLE or ACCOUNT_DISABLED."
+            "description": "FORBIDDEN_ROLE or ACCOUNT_DISABLED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "409": {
-            "description": "ALREADY_IN_CLASS_FOR_LANGUAGE, REMOVED_FROM_CLASS, TA_SAME_CLASS_CONFLICT or CLASS_ARCHIVED."
+            "description": "ALREADY_IN_CLASS_FOR_LANGUAGE, REMOVED_FROM_CLASS, TA_SAME_CLASS_CONFLICT or CLASS_ARCHIVED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
