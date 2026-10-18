@@ -3,13 +3,14 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
 from app.db import get_db
 from app.engagement.interface import get_class_language, validate_code_and_enrol
+from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.enums import Language
 
@@ -44,7 +45,7 @@ class JoinClassResponse(BaseModel):
         "Students who voluntarily left may rejoin, but students removed "
         "by a teacher cannot. Teachers cannot join as students, and "
         "teaching assistants cannot join classes they assist. "
-        "Successful enrolment also selects the classroom and its language."
+        "Successful enrolment also makes it the student's current class."
     ),
     responses={
         400: {"description": "INVALID_ACCESS_CODE: Invalid, expired, inactive or exhausted code."},
@@ -69,9 +70,9 @@ def join_class(
     language = get_class_language(class_id, db)
 
     if language is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Class language could not be determined.",
+        raise AppError(
+            ErrorCode.INTERNAL_ERROR,
+            "Class language could not be determined.",
         )
 
     user.current_class_id = class_id

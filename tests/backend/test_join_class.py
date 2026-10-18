@@ -243,15 +243,23 @@ def test_student_can_rejoin_after_voluntarily_leaving(
     assert enrollment.left_at is None
 
 
-@pytest.mark.parametrize("access_code", ["", "   "])
+@pytest.mark.parametrize(
+    ("access_code", "expected_status", "expected_code"),
+    [
+        ("", 422, ErrorCode.VALIDATION_ERROR),
+        ("   ", 400, ErrorCode.INVALID_ACCESS_CODE),
+    ],
+)
 def test_blank_access_code_rejected(
     client: TestClient,
     make_user: Callable[..., User],
     access_code: str,
+    expected_status: int,
+    expected_code: ErrorCode,
 ) -> None:
-    """Empty and whitespace-only access codes are rejected."""
+    """Reject empty and whitespace-only codes with their specific errors."""
     student = make_user()
 
     response = join_as(client, student, access_code)
 
-    assert response.status_code in (400, 422)
+    assert_error(response, expected_status, expected_code)
