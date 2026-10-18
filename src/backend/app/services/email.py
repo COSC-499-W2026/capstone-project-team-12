@@ -28,7 +28,7 @@ TOKEN_TTL = {
     EmailKind.CHANGE_EMAIL: timedelta(hours=24),
 }
 
-_INVALID_LINK = "Verification or reset link is invalid, used or expired"
+INVALID_LINK = "Verification or reset link is invalid, used or expired"
 
 _PENDING_RESET = text(ONE_PENDING_RESET_WHERE)  # see models/email.py
 
@@ -146,6 +146,26 @@ class EmailService:
         return raw
 
     @staticmethod
+    def is_link_live(raw: str, kind: EmailKind, db: Session) -> bool:
+        """Whether the token exists, is of this kind, is unused and hasn't expired.
+
+        A read with no lock, so another request can use the link right after. It is only a
+        quick refusal for callers about to do slow work (bcrypt); consume_token is the check
+        that counts.
+        """
+        return (
+            db.scalar(
+                select(EmailToken.id).where(
+                    EmailToken.token_hash == EmailService.hash_token(raw),
+                    EmailToken.purpose == EmailKind(kind),
+                    EmailToken.used_at.is_(None),
+                    EmailToken.expires_at > func.now(),
+                )
+            )
+            is not None
+        )
+
+    @staticmethod
     def consume_token(raw: str, kind: EmailKind, db: Session) -> EmailToken:
         """Mark the token used and return its row.
 
@@ -168,7 +188,7 @@ class EmailService:
             .returning(EmailToken)
         ).one_or_none()
         if token is None:
-            raise AppError(ErrorCode.INVALID_TOKEN, _INVALID_LINK)
+            raise AppError(ErrorCode.INVALID_TOKEN, INVALID_LINK)
         return token
 
     @staticmethod
