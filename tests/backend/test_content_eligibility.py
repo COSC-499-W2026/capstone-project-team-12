@@ -16,7 +16,7 @@ from app.content.interface import (
     is_location_active,
     location_snapshot,
 )
-from app.services.audio import MediaNotFoundError, clue_audio_asset_id, clue_audio_url
+from app.services.audio import MediaNotFoundError, UploadedAudioService, get_audio_service
 
 ALL_MODES = list(product(Language, Difficulty))
 ANSWER_FORMAT = re.compile(r"[A-Z]{3}\d{3,4}")
@@ -31,6 +31,25 @@ def distance_meters(a: GpsPoint, b: GpsPoint) -> float:
         (a.lat - b.lat) * METERS_PER_DEGREE_OF_LATITUDE,
         (a.lng - b.lng) * meters_per_degree_of_longitude,
     )
+
+
+class WithoutRecordings(UploadedAudioService):
+    def clue_audio_asset_id(self, clue_id: UUID, db: Session) -> UUID:
+        raise MediaNotFoundError
+
+
+class MissingAPhraseIn(UploadedAudioService):
+    """Every feedback phrase exists, except that `language` lacks at least one."""
+
+    def __init__(self, language: Language) -> None:
+        self.language = language
+
+    def has_all_feedback_phrases(self, language: Language, db: Session) -> bool:
+        return language != self.language
+
+
+def use_audio_service(monkeypatch: pytest.MonkeyPatch, service: UploadedAudioService) -> None:
+    monkeypatch.setattr("app.content.interface.get_audio_service", lambda: service)
 
 
 @pytest.mark.parametrize(("language", "difficulty"), ALL_MODES)
@@ -83,8 +102,9 @@ def test_snapshot_is_repeatable_with_its_own_clue_per_language_and_difficulty(
 def test_snapshot_recording_is_one_audio_service_can_play(db: Session) -> None:
     location_id = next(iter(eligible_location_ids(Language.FR, Difficulty.BASIC, db)))
     snapshot = location_snapshot(location_id, Language.FR, Difficulty.BASIC, db)
-    assert clue_audio_url(snapshot.audio_asset_id, db)
-    assert snapshot.audio_asset_id == clue_audio_asset_id(snapshot.clue_id, db)
+    audio = get_audio_service()
+    assert audio.clue_audio_url(snapshot.audio_asset_id, db)
+    assert snapshot.audio_asset_id == audio.clue_audio_asset_id(snapshot.clue_id, db)
 
 
 def test_stub_arrival_circles_never_overlap(db: Session) -> None:
@@ -103,13 +123,21 @@ def test_snapshot_of_an_ineligible_location_is_refused(db: Session) -> None:
 def test_snapshot_of_a_location_without_a_recording_is_refused(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def no_recording(clue_id: UUID, db: Session) -> UUID:
-        raise MediaNotFoundError
-
-    monkeypatch.setattr("app.content.interface.clue_audio_asset_id", no_recording)
+    use_audio_service(monkeypatch, WithoutRecordings())
     location_id = next(iter(eligible_location_ids(Language.DE, Difficulty.BASIC, db)))
     with pytest.raises(LocationNotEligibleError):
         location_snapshot(location_id, Language.DE, Difficulty.BASIC, db)
+
+
+@pytest.mark.parametrize("difficulty", Difficulty)
+def test_a_language_missing_a_feedback_phrase_has_no_eligible_locations(
+    db: Session, monkeypatch: pytest.MonkeyPatch, difficulty: Difficulty
+) -> None:
+    use_audio_service(monkeypatch, MissingAPhraseIn(Language.KO))
+    assert eligible_location_ids(Language.KO, difficulty, db) == frozenset()
+    assert len(eligible_location_ids(Language.JA, difficulty, db)) == (
+        LOCATIONS_PER_LANGUAGE_AND_DIFFICULTY
+    )
 
 
 def test_content_lookups_never_commit_flush_or_roll_back_the_callers_session(
