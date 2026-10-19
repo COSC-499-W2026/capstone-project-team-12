@@ -1,6 +1,6 @@
 # Week 6 Team Log (Oct. 12 - Oct. 18)
 
-Author: Kaedyn Hindley
+Author: Kaedyn Hindley / Mia Kuang
 
 This week, we decided to focus on expanding on the shared interfaces and individual components and authorization system, with the goal of beginning work on the core systems that will allow the game to function, while minimizing waiting on each other's work.
 
