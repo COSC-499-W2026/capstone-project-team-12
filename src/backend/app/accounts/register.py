@@ -1,11 +1,13 @@
 import re
 
+from uuid import UUID
 from pydantic import BaseModel
 from sqlalchemy import func, insert, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.accounts.password import hash_password, validate_password_security
+from app.engagement.interface import validate_code_and_enrol
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.enums import EmailKind, UserRole
@@ -18,12 +20,18 @@ class RegisterRequest(BaseModel):
     password: str
     access_code: str | None = None
 
+class RegisterResponse(BaseModel):
+    id: UUID
+    username: str
+    email: str
+    role: UserRole
 
-def register_account(request: RegisterRequest, db: Session) -> None:
+def register_account(request: RegisterRequest, db: Session) -> User:
     try:
         email = request.email.lower()
         username = request.username
         password = request.password
+        access_code = request.access_code
 
         validate_password_security(password)
 
@@ -57,7 +65,10 @@ def register_account(request: RegisterRequest, db: Session) -> None:
         user = db.scalars(stmt.returning(User)).one()
         EmailService.queue_email(user, EmailKind.VERIFY_EMAIL, db)  # spec: sign-up sends it
 
-        #  TODO: Validate access code here
+        if access_code is not None:
+            validate_code_and_enrol(user.id, access_code, db)
+            # no verification needed, function raises unless successful
+        return user
 
     except IntegrityError as err:
         diag = getattr(err.orig, "diag", None)
