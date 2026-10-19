@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from jwt import encode
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session
 
@@ -75,6 +76,19 @@ def transaction_calls(db: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     event.listen(db, "after_commit", record("commit"))
     event.listen(db, "after_soft_rollback", record("rollback"))
     yield calls
+
+
+@pytest.fixture
+def auth_headers() -> Callable[[User], dict[str, str]]:
+    """The Authorization header for a user, with an access token that is valid for an hour."""
+
+    def headers(user: User) -> dict[str, str]:
+        expires = int((datetime.now(UTC) + timedelta(hours=1)).timestamp())
+        key = str(get_settings().access_token_secret_key)
+        token = encode({"sub": str(user.id), "exp": expires}, key, "HS256")
+        return {"Authorization": f"Bearer {token}"}
+
+    return headers
 
 
 @pytest.fixture
