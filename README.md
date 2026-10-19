@@ -119,11 +119,11 @@ use another component only through its `interface.py`; when two components need 
 other, the router or CLI command calls both.
 
 ```bash
-python utils/dep_graph.py --check   # fail if a dependency rule is broken
+python utils/dep_graph.py --check   # fail if a dependency rule is broken or the graph is stale
 python utils/dep_graph.py --graph   # redraw docs/architecture/dependency-graph.md
 ```
 
-The current graph is in [docs/architecture/dependency-graph.md](docs/architecture/dependency-graph.md).
+The current graph is in [docs/architecture/dependency-graph.md](docs/architecture/dependency-graph.md). It is generated from the imports, so if your PR adds, removes or moves a module or an import, run `--graph` and commit the file with your change. CI fails with "out of date" if you forget.
 
 ## Team Contract
 
