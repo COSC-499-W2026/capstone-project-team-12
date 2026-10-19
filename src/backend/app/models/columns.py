@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import CheckConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.enums import Language
+from app.models.enums import Difficulty, Language
 
 
 def uuid_pk() -> Mapped[UUID]:
@@ -37,3 +37,17 @@ def in_check(column: str, values: Iterable[str] | type[StrEnum], name: str) -> C
 def language_check(column: str = "language", name: str = "language") -> CheckConstraint:
     """The language codes appear in many tables; adding a language only changes Language."""
     return in_check(column, Language, name)
+
+
+def difficulty_check() -> CheckConstraint:
+    """CHECK (difficulty IN (1, 2, 3)) on a column named difficulty, built from Difficulty."""
+    allowed = ", ".join(str(difficulty.value) for difficulty in Difficulty)
+    return CheckConstraint(f"difficulty IN ({allowed})", name="difficulty")
+
+
+def non_empty_array(column: str) -> CheckConstraint:
+    """CHECK that a JSONB column holds an array with at least one element."""
+    # also rejects JSON null; comparing with '[]' avoids jsonb_array_length on a non-array
+    return CheckConstraint(
+        f"jsonb_typeof({column}) = 'array' AND {column} <> '[]'::jsonb", name=column
+    )
