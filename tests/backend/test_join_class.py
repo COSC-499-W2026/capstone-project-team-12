@@ -204,3 +204,70 @@ def test_retry_does_not_consume_code(
         assert_error(retry, 400, ErrorCode.INVALID_ACCESS_CODE)
     db.refresh(access_code)
     assert access_code.uses_count == original_uses
+
+
+def test_same_class_different_valid_code_conflict(
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_access_code: Callable[..., AccessCode],
+) -> None:
+    """A different valid code cannot be used to rejoin the same class."""
+    student = make_user()
+    school_class = make_class()
+    original_code = make_access_code(school_class)
+    other_code = make_access_code(school_class)
+
+    first = join_as(client, student, original_code.code)
+    assert first.status_code == 200, first.text
+
+    response = join_as(client, student, other_code.code)
+    assert_error(response, 409, ErrorCode.ALREADY_IN_CLASS_FOR_LANGUAGE)
+
+    db.refresh(original_code)
+    db.refresh(other_code)
+    assert original_code.uses_count == 1
+    assert other_code.uses_count == 0
+
+    enrollment = (
+        db.query(ClassEnrollment).filter_by(student_id=student.id, class_id=school_class.id).one()
+    )
+    assert enrollment.access_code_id == original_code.id
+
+
+@pytest.mark.parametrize("code_state", ["expired", "exhausted"])
+@pytest.mark.parametrize("class_state", ["archived", "same_language_conflict"])
+def test_unavailable_code_rejected_before_class_state(
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_access_code: Callable[..., AccessCode],
+    make_enrollment: Callable[..., ClassEnrollment],
+    code_state: str,
+    class_state: str,
+) -> None:
+    """An unavailable code must not expose class or enrolment state."""
+    student = make_user()
+    school_class = make_class(target_language=Language.JA)
+    access_code = make_access_code(school_class)
+
+    if class_state == "archived":
+        school_class.archived_at = datetime.now(UTC)
+    else:
+        make_enrollment(student, make_class(target_language=Language.JA))
+
+    if code_state == "expired":
+        access_code.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    else:
+        access_code.max_uses = 1
+        access_code.uses_count = 1
+
+    db.flush()
+
+    assert_error(
+        join_as(client, student, access_code.code),
+        400,
+        ErrorCode.INVALID_ACCESS_CODE,
+    )

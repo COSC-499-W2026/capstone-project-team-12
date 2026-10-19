@@ -99,13 +99,13 @@ def validate_code_and_enrol(
 
     Raises:
         INVALID_ACCESS_CODE: Code is unknown, inactive, expired, or used up
-            for a new enrolment.
+            unless it qualifies for an existing-enrolment retry.
         ACCOUNT_DISABLED: User account is deactivated.
         FORBIDDEN_ROLE: User is missing or is not a student.
         CLASS_ARCHIVED: Class is archived.
         TA_SAME_CLASS_CONFLICT: Student assists the target class.
         ALREADY_IN_CLASS_FOR_LANGUAGE: Student already has an active class
-            in the same language but it is a different class.
+            in the same language and is not retrying with the original code.
         REMOVED_FROM_CLASS: Student was removed from this class.
 
     Input is normalized by removing spaces and hyphens and converting
@@ -134,6 +134,24 @@ def validate_code_and_enrol(
 
     if access_code is None or not access_code.is_active:
         raise AppError(ErrorCode.INVALID_ACCESS_CODE)
+
+    # Check expiry and usage limits before exposing class or enrolment state.
+    # Only an active enrolment using this exact code qualifies for a retry.
+    code_unavailable = access_code.expires_at <= now or (
+        access_code.max_uses is not None and access_code.uses_count >= access_code.max_uses
+    )
+
+    if code_unavailable:
+        retry_enrolment = db.scalar(
+            select(ClassEnrollment.id).where(
+                ClassEnrollment.student_id == student_id,
+                ClassEnrollment.class_id == access_code.class_id,
+                ClassEnrollment.access_code_id == access_code.id,
+                ClassEnrollment.is_active.is_(True),
+            )
+        )
+        if retry_enrolment is None:
+            raise AppError(ErrorCode.INVALID_ACCESS_CODE)
 
     school_class = db.get(Class, access_code.class_id)
 
@@ -178,15 +196,7 @@ def validate_code_and_enrol(
         ):
             return school_class.id
 
-        if active_enrolment.class_id != school_class.id:
-            raise AppError(ErrorCode.ALREADY_IN_CLASS_FOR_LANGUAGE)
-
-        raise AppError(ErrorCode.INVALID_ACCESS_CODE)
-
-    if access_code.expires_at <= now or (
-        access_code.max_uses is not None and access_code.uses_count >= access_code.max_uses
-    ):
-        raise AppError(ErrorCode.INVALID_ACCESS_CODE)
+        raise AppError(ErrorCode.ALREADY_IN_CLASS_FOR_LANGUAGE)
 
     if existing is not None:
         # Reuse the existing row and preserve the original joining date.
