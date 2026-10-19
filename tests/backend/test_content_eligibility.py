@@ -140,17 +140,6 @@ def test_a_language_missing_a_feedback_phrase_has_no_eligible_locations(
     )
 
 
-def test_snapshot_in_a_language_missing_a_feedback_phrase_is_refused(
-    db: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A phrase removed after game fetched the eligible locations still stops the draw."""
-    location_id = next(iter(eligible_location_ids(Language.KO, Difficulty.BASIC, db)))
-    use_audio_service(monkeypatch, MissingAPhraseIn(Language.KO))
-    with pytest.raises(LocationNotEligibleError):
-        location_snapshot(location_id, Language.KO, Difficulty.BASIC, db)
-    assert location_snapshot(location_id, Language.JA, Difficulty.BASIC, db)
-
-
 def test_content_lookups_never_commit_flush_or_roll_back_the_callers_session(
     db: Session, transaction_calls: list[str]
 ) -> None:

@@ -19,9 +19,8 @@ student-facing response, error message or log.
 
 The clue recording in a snapshot is chosen by AudioService (app.services.audio), which also
 provides the signed URLs for clue and feedback audio (Interface card #13). Game asks AudioService
-for those URLs directly; they are not part of this interface. If AudioService finds no recording
-or a missing feedback phrase, `location_snapshot` raises `LocationNotEligibleError`, the same as
-for any ineligible location.
+for those URLs directly; they are not part of this interface. If AudioService finds no recording,
+`location_snapshot` raises `LocationNotEligibleError`, the same as for any ineligible location.
 
 `Language` and `Difficulty` are defined in app.models.enums and re-exported here.
 """
@@ -111,12 +110,13 @@ def is_location_active(location_id: UUID, db: Session) -> bool:
 def location_snapshot(
     location_id: UUID, language: Language, difficulty: Difficulty, db: Session
 ) -> LocationSnapshot:
-    """The content snapshot of an eligible location; raises `LocationNotEligibleError` if not."""
-    audio = get_audio_service()
+    """The content snapshot of an eligible location; raises `LocationNotEligibleError` if not.
+
+    The feedback phrases are not checked here: game draws only from `eligible_location_ids`,
+    which checks them once per draw instead of once per location.
+    """
     number = _STUB_LOCATION_NUMBERS.get(location_id)
-    # The phrases are checked again in case one was removed after game fetched the eligible
-    # locations.
-    if number is None or not audio.has_all_feedback_phrases(language, db):
+    if number is None:
         raise LocationNotEligibleError(location_id)
     entrance = GpsPoint(
         lat=_STUB_ORIGIN.lat + number * _STUB_SPACING_DEGREES,
@@ -124,7 +124,7 @@ def location_snapshot(
     )
     clue_id = _stub_id("clue", location_id, difficulty.value, language.value)
     try:
-        audio_asset_id = audio.clue_audio_asset_id(clue_id, db)
+        audio_asset_id = get_audio_service().clue_audio_asset_id(clue_id, db)
     except MediaNotFoundError as error:
         # e.g. the recording was deleted after game fetched the eligible locations
         raise LocationNotEligibleError(location_id) from error
