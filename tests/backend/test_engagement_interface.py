@@ -67,7 +67,7 @@ def test_inactive_enrolment(
 
     enrollment.is_active = False
     enrollment.end_reason = EnrollmentEndReason.LEFT
-    enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
+    enrollment.left_at = datetime.now(UTC)
     db.flush()
 
     assert is_actively_enrolled(student.id, school_class.id, db) is False
@@ -116,7 +116,7 @@ def test_enrolment_ended_by_archive(
         db.refresh(enrollment)
         enrollment.is_active = False
         enrollment.end_reason = end_reason
-        enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
+        enrollment.left_at = datetime.now(UTC)
         db.flush()
 
     assert enrolment_ended_by_archive(student.id, school_class.id, db) is expected
