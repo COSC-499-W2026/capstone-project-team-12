@@ -12,11 +12,11 @@ The work was distributed so that:
 
 - Kaedyn focused on turning the functions in the accounts interface into FastAPI dependencies, allowing API endpoints to enforce role-based access (#180, #181), and on the sign-in system utilizing JWT for access tokens and rotating refresh tokens, with the goal of completing the basic authorization system. However, only the dependencies were finished on time.
 
-- Fabiha focused on expanding the engagement component interface with the `EngagementResult` that is used by Eddy and Mia after processing a location's result (#190). Fabiha also implemented the join class endpoint, classroom creation and listing, and access code creation and deletion (#193, #201, #202, #203, #204).
+- Fabiha focused on expanding the engagement component interface with the `EngagementResult` that is used by Eddy and Mia after processing a location's result (#190). Fabiha also worked on the join class endpoint, classroom creation and listing, and access code creation and deletion (#193, #201, #202, #203, #204), though they did not get to merge.
 
 We considered alternative workload distributions such Kaedyn implementing the email system as originally planned, but due to the urgency of finishing the FastAPI dependencies and sign-in system, Mia offered to assist.
 
-Based on the 15 merged PRs, we mostly met this goal because important shared systems for core user interactions were implemented:
+Based on the 21 merged PRs, we mostly met this goal because important shared systems for core user interactions were implemented:
 
 - **Accounts**: email system and user authentication dependencies. The goal for user sign-in was not met, however.
 - **Engagement**: shared interface for points/achievement tracking, as well as classroom and access code creation
