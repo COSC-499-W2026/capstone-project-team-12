@@ -56,7 +56,7 @@ jobs:
       - name: Mypy
         run: mypy  # files come from pyproject.toml
 
-      - name: Dependency rules
+      - name: Dependency rules and graph are up to date
         run: python ../../utils/dep_graph.py --check
 
       - name: OpenAPI spec is up to date
