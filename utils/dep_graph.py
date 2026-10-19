@@ -214,6 +214,7 @@ def report(modules: set[str], edges: Graph, problems: list[str]) -> str:
 
 
 def graph_is_up_to_date(graph_file: Path, text: str) -> bool:
+    """True if graph_file exists and holds exactly the text --graph would write."""
     return graph_file.exists() and graph_file.read_text(encoding="utf-8") == text
 
 
@@ -232,7 +233,8 @@ def main(argv: list[str] | None = None) -> int:
     text = report(modules, edges, problems)
     if args.graph:
         GRAPH_FILE.parent.mkdir(parents=True, exist_ok=True)
-        GRAPH_FILE.write_text(text, encoding="utf-8", newline="\n")  # LF on Windows too
+        # LF on Windows too, so the file matches what CI draws
+        GRAPH_FILE.write_text(text, encoding="utf-8", newline="\n")
         print(f"wrote {GRAPH_FILE}")
     stale = args.check and not graph_is_up_to_date(GRAPH_FILE, text)
     if stale:

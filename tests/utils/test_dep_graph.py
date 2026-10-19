@@ -201,4 +201,5 @@ def test_graph_check_is_not_needed_without_the_check_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     use_fake_app(tmp_path, monkeypatch, {"db.py": ""})
-    assert dep_graph.main([]) == 0  # no file, but nothing asked for a check
+    # no graph file, but nothing asked for a check
+    assert dep_graph.main([]) == 0
