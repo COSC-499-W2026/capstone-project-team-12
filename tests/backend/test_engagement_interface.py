@@ -67,7 +67,7 @@ def test_inactive_enrolment(
 
     enrollment.is_active = False
     enrollment.end_reason = EnrollmentEndReason.LEFT
-    enrollment.left_at = datetime.now(UTC)
+    enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
     db.flush()
 
     assert is_actively_enrolled(student.id, school_class.id, db) is False

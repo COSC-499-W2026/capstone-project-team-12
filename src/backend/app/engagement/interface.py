@@ -92,7 +92,7 @@ def apply_location_result(
         The implementation must resolve the student through the location's
         game session and verify that it matches student_id.
 
-        A mismatch raises FORBIDDEN before any engagement changes.
+        A mismatch raises NOT_FOUND before any engagement changes.
         The signature and ownership check require agreement from the
         finish-location and match/failed-location callers.
 
@@ -233,9 +233,8 @@ def apply_location_result(
         until the implementation is completed.
 
     Raises:
-        AppError(ErrorCode.NOT_FOUND): Session location does not exist.
-        AppError(ErrorCode.FORBIDDEN): Session location belongs to
-            another student.
+        AppError(ErrorCode.NOT_FOUND): Session location does not exist or
+            belongs to another student.
         AppError(ErrorCode.INVALID_STAGE): Session location has not
             reached a final status.
 
