@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -29,7 +29,12 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.game import GameSession, SessionLocation
-from app.services.audio import MediaNotFoundError, clue_audio_url
+from app.services.audio import MediaNotFoundError, UploadedAudioService, get_audio_service
+
+
+class _WithoutRecordings(UploadedAudioService):
+    def clue_audio_url(self, audio_asset_id: UUID, db: Session) -> str:
+        raise MediaNotFoundError
 
 
 def _locations(game_id: UUID, db: Session) -> list[SessionLocation]:
@@ -67,7 +72,7 @@ def test_practice_game_starts_with_five_locations(
     first, *rest = locations
     assert first.status == LocationStatus.NAVIGATING and first.started_at is not None
     assert all(loc.status == LocationStatus.PENDING and loc.started_at is None for loc in rest)
-    assert started.clue_audio_url == clue_audio_url(first.audio_asset_id, db)
+    assert started.clue_audio_url == get_audio_service().clue_audio_url(first.audio_asset_id, db)
 
     snapshot = content.location_snapshot(first.location_id, Language.KO, Difficulty.ADVANCING, db)
     assert first.clue_id == snapshot.clue_id
@@ -293,10 +298,7 @@ def test_admins_do_not_play(db: Session, make_user: Callable[..., User]) -> None
 def test_missing_first_recording_fails_before_a_game_exists(
     db: Session, make_user: Callable[..., User], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def no_recording(*_: Any) -> str:
-        raise MediaNotFoundError
-
-    monkeypatch.setattr(start, "clue_audio_url", no_recording)
+    monkeypatch.setattr(start, "get_audio_service", _WithoutRecordings)
     student = make_user()
 
     with pytest.raises(MediaNotFoundError):
