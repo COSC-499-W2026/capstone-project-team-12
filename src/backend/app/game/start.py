@@ -26,7 +26,7 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.game import OPEN_SESSION_STATES, GameSession, SessionLocation
-from app.services.audio import clue_audio_url
+from app.services.audio import get_audio_service
 
 _ONE_OPEN_GAME = "uq_game_sessions_one_open_per_student"
 
@@ -67,7 +67,7 @@ def start_game(
     _check_no_open_game(user.id, db)
     snapshots = draw_locations(user.id, class_id, language, difficulty, db)
     # before the game exists, so a missing recording fails like any other draw problem
-    clue_url = clue_audio_url(snapshots[0].audio_asset_id, db)
+    clue_url = get_audio_service().clue_audio_url(snapshots[0].audio_asset_id, db)
 
     game = _create_game(user.id, class_id, language, difficulty, db)
     db.add_all(_session_locations(game, snapshots))
