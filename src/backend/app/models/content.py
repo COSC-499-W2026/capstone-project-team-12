@@ -58,7 +58,9 @@ class Location(Base):
 
     __tablename__ = "locations"
     __table_args__ = (
-        UniqueConstraint("room_number"),  # bulk audio files name their location by room number
+        # bulk audio files name their location by room number. Inactive locations count too, so a
+        # deactivated room is reactivated rather than recreated.
+        UniqueConstraint("room_number"),
         # staff lists and the coverage report show these labels, so they cannot be blank
         CheckConstraint("btrim(name) <> ''", name="name_not_blank"),
         CheckConstraint("btrim(building_name) <> ''", name="building_name_not_blank"),

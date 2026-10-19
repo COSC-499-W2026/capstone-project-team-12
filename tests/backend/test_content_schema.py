@@ -70,14 +70,16 @@ def test_answers_and_entrances_are_non_empty_arrays(
         )
 
 
-def test_several_normalised_answers_and_entrances_at_the_range_limits_are_kept(
+def test_a_location_at_the_format_and_range_limits_is_kept(
     db: Session, make_location: Callable[..., Location]
 ) -> None:
     location = make_location(
+        room_number="ART 1234",  # the 4-digit form one campus building uses
         accepted_answers=["SCI333", "ART1234"],
         gps_points=[{"lat": -90, "lng": 180}, {"lat": 90.0, "lng": -180.0, "note": "side door"}],
     )
     db.refresh(location)
+    assert location.room_number == "ART 1234"
     assert location.accepted_answers == ["SCI333", "ART1234"]
     assert len(location.gps_points) == 2
 
@@ -150,6 +152,7 @@ def test_a_location_has_one_clue_per_difficulty_and_language(
 @pytest.mark.parametrize(
     ("field", "value", "constraint"),
     [
+        ("difficulty", 0, "ck_clues_difficulty"),
         ("difficulty", 4, "ck_clues_difficulty"),
         ("language", "en", "ck_clues_language"),
         ("location_id", uuid4(), "fk_clues_location_id_locations"),
