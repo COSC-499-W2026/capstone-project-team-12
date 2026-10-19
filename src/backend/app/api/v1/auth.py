@@ -17,10 +17,12 @@ auth_router = APIRouter(prefix="/auth")
     status_code=201,
     operation_id="registerUser",
     # EMAIL_TAKEN, USERNAME_TAKEN, INVALID_ACCESS_CODE
-    responses=error_responses(HTTPStatus.CONFLICT, HTTPStatus.BAD_REQUEST),  
+    responses=error_responses(HTTPStatus.CONFLICT, HTTPStatus.BAD_REQUEST),
 )
 def register(request: RegisterRequest, db: Annotated[Session, Depends(get_db)]) -> RegisterResponse:
     """Student sign-up: email, username, password, optional access code."""
     user = register_account(request, db)
-    response = RegisterResponse(id=user.id, username=user.username, email=user.email, role=user.role)
+    response = RegisterResponse(
+        id=user.id, username=user.username, email=user.email, role=user.role
+    )
     return response

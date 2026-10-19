@@ -1,6 +1,6 @@
 import re
-
 from uuid import UUID
+
 from pydantic import BaseModel
 from sqlalchemy import func, insert, select
 from sqlalchemy.exc import IntegrityError
@@ -20,11 +20,13 @@ class RegisterRequest(BaseModel):
     password: str
     access_code: str | None = None
 
+
 class RegisterResponse(BaseModel):
     id: UUID
     username: str
     email: str
     role: UserRole
+
 
 def register_account(request: RegisterRequest, db: Session) -> User:
     try:
