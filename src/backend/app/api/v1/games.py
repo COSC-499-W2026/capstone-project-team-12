@@ -60,7 +60,8 @@ def start_new_game(
 
     409 SESSION_ALREADY_OPEN if the student has an active or paused game (its id is in `details`),
     unless it has been idle for 24 hours, then it is expired and the new game starts. If the new
-    game then fails, nothing is committed: the expiry is rolled back and the old game stays open.
+    game then fails (e.g. NOT_ENOUGH_CONTENT), nothing is committed, so the expiry is rolled back
+    and the old game stays open until the next start or the expiry job.
     409 NOT_ENOUGH_CONTENT if the language has fewer than 5 locations to draw.
     409 CLASS_ARCHIVED for a student whose enrolment ended when the class was archived.
     404 NOT_FOUND for a class the student is not in, or if the first clue has no recording (also
