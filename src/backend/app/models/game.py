@@ -18,10 +18,16 @@ from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
-from app.models.columns import created_at, in_check, language_check, uuid_pk
+from app.models.columns import (
+    created_at,
+    difficulty_check,
+    in_check,
+    language_check,
+    non_empty_array,
+    uuid_pk,
+)
 from app.models.enums import (
     ArrivalOverride,
-    Difficulty,
     LocationStatus,
     SessionEndReason,
     SessionState,
@@ -33,13 +39,6 @@ OPEN_SESSION_STATES = (SessionState.ACTIVE, SessionState.PAUSED)
 OPEN_STATES = "state IN ({})".format(", ".join(f"'{state}'" for state in OPEN_SESSION_STATES))
 
 
-def non_empty_array(column: str) -> CheckConstraint:
-    # also rejects JSON null; comparing with '[]' avoids jsonb_array_length on a non-array
-    return CheckConstraint(
-        f"jsonb_typeof({column}) = 'array' AND {column} <> '[]'::jsonb", name=column
-    )
-
-
 class GameSession(Base):
     __tablename__ = "game_sessions"
     __table_args__ = (
@@ -48,9 +47,7 @@ class GameSession(Base):
             ["class_id", "target_language"], ["classes.id", "classes.target_language"]
         ),
         language_check("target_language", name="target_language"),
-        CheckConstraint(
-            f"difficulty IN ({', '.join(str(d.value) for d in Difficulty)})", name="difficulty"
-        ),
+        difficulty_check(),
         in_check("state", SessionState, name="state"),
         in_check("end_reason", SessionEndReason, name="end_reason"),
         # only an abandoned game has an end reason
