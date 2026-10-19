@@ -18,7 +18,8 @@ from app.engagement.interface import (
 )
 from app.models.accounts import User
 from app.models.engagement import Class, ClassEnrollment
-from app.models.enums import EnrollmentEndReason, Language
+from app.models.enums import EnrollmentEndReason, Language, LocationStatus
+from app.models.game import GameSession, SessionLocation
 
 
 def test_get_class_language(db: Session, make_class: Callable[..., Class]) -> None:
@@ -165,11 +166,26 @@ def test_engagement_result_is_frozen() -> None:
         result.total_points = 100  # type: ignore[misc]
 
 
-def test_apply_location_result_returns_placeholder(db: Session) -> None:
-    """Verify the unimplemented stub returns its documented response shape."""
+def test_apply_location_result_returns_placeholder(
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    """Verify the stub response using a completed location owned by the student."""
+    student = make_user()
+    game = make_game_session(student=student)
+    location = make_session_location(
+        game,
+        position=1,
+        status=LocationStatus.COMPLETED,
+        points_awarded=100,
+        completed_at=datetime.now(UTC),
+    )
+
     result = apply_location_result(
-        session_location_id=uuid4(),
-        student_id=uuid4(),
+        session_location_id=location.id,
+        student_id=student.id,
         db=db,
     )
 
@@ -187,11 +203,24 @@ def test_apply_location_result_returns_placeholder(db: Session) -> None:
 def test_apply_location_result_does_not_manage_transaction(
     db: Session,
     transaction_calls: list[str],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
 ) -> None:
     """Ensure the interface stub does not commit or roll back."""
+    student = make_user()
+    game = make_game_session(student=student)
+    location = make_session_location(
+        game,
+        position=1,
+        status=LocationStatus.COMPLETED,
+        points_awarded=100,
+        completed_at=datetime.now(UTC),
+    )
+
     apply_location_result(
-        session_location_id=uuid4(),
-        student_id=uuid4(),
+        session_location_id=location.id,
+        student_id=student.id,
         db=db,
     )
 
