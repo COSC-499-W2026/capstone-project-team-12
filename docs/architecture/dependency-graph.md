@@ -12,6 +12,7 @@ flowchart LR
     app_api_v1_auth["app.api.v1.auth"]
     app_api_v1_classes["app.api.v1.classes"]
     app_api_v1_email_links["app.api.v1.email_links"]
+    app_api_v1_games["app.api.v1.games"]
     app_api_v1_media["app.api.v1.media"]
     app_cli["app.cli"]
     app_main["app.main"]
@@ -82,6 +83,7 @@ flowchart LR
   app_api_v1 --> app_api_v1_auth
   app_api_v1 --> app_api_v1_classes
   app_api_v1 --> app_api_v1_email_links
+  app_api_v1 --> app_api_v1_games
   app_api_v1 --> app_api_v1_media
   app_api_v1 --> app_errors
   app_api_v1_auth --> app_accounts_register
@@ -97,6 +99,12 @@ flowchart LR
   app_api_v1_email_links --> app_accounts_register
   app_api_v1_email_links --> app_db
   app_api_v1_email_links --> app_errors
+  app_api_v1_games --> app_accounts_interface
+  app_api_v1_games --> app_db
+  app_api_v1_games --> app_errors
+  app_api_v1_games --> app_game_start
+  app_api_v1_games --> app_models_accounts
+  app_api_v1_games --> app_models_enums
   app_api_v1_media --> app_errors
   app_api_v1_media --> app_services_storage
   app_cli --> app_config
