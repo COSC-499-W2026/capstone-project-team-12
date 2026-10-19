@@ -59,10 +59,12 @@ def start_new_game(
     are never sent, only the first clue's audio link.
 
     409 SESSION_ALREADY_OPEN if the student has an active or paused game (its id is in `details`),
-    unless it has been idle for 24 hours, then it is expired and the new game starts.
+    unless it has been idle for 24 hours, then it is expired and the new game starts. If the new
+    game then fails, nothing is committed: the expiry is rolled back and the old game stays open.
     409 NOT_ENOUGH_CONTENT if the language has fewer than 5 locations to draw.
     409 CLASS_ARCHIVED for a student whose enrolment ended when the class was archived.
-    404 NOT_FOUND for a class the student is not in. 403 FORBIDDEN_ROLE for an admin.
+    404 NOT_FOUND for a class the student is not in, or if the first clue has no recording (also
+    in a Practice game). 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.
     """
     started = start_game(
         user, request.difficulty, db, class_id=request.class_id, language=request.language
