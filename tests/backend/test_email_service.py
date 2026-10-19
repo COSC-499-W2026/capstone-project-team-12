@@ -247,6 +247,25 @@ def test_bad_tokens_raise_invalid_token(db: Session, make_user: Callable[..., Us
     assert used.value.code == ErrorCode.INVALID_TOKEN
 
 
+def test_is_link_live_matches_what_consume_token_accepts(
+    db: Session, make_user: Callable[..., User]
+) -> None:
+    user = make_user()
+    raw = EmailService.create_token(user, EmailKind.RESET_PASSWORD, db)
+    assert EmailService.is_link_live(raw, EmailKind.RESET_PASSWORD, db)
+    assert not EmailService.is_link_live("missing-token", EmailKind.RESET_PASSWORD, db)
+    assert not EmailService.is_link_live(raw, EmailKind.VERIFY_EMAIL, db)  # other kind
+    row = db.scalars(select(EmailToken).where(EmailToken.user_id == user.id)).one()
+    row.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    db.flush()
+    assert not EmailService.is_link_live(raw, EmailKind.RESET_PASSWORD, db)  # expired
+    row.expires_at = datetime.now(UTC) + timedelta(minutes=30)
+    db.flush()
+    assert EmailService.is_link_live(raw, EmailKind.RESET_PASSWORD, db)
+    EmailService.consume_token(raw, EmailKind.RESET_PASSWORD, db)
+    assert not EmailService.is_link_live(raw, EmailKind.RESET_PASSWORD, db)  # used
+
+
 def test_change_email_and_notices(db: Session, make_user: Callable[..., User]) -> None:
     user = make_user()
     with pytest.raises(ValueError, match="new_email"):
