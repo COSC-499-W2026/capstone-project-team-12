@@ -24,6 +24,8 @@ from sqlalchemy.orm import Session
 
 from app.engagement.classes import (
     create_class,
+)
+from app.engagement.classes import (
     generate_access_code as generate_access_code,
 )
 from app.errors import AppError, ErrorCode
