@@ -497,6 +497,67 @@
         }
       }
     },
+    "/api/v1/teacher/classes": {
+      "get": {
+        "tags": [
+          "teacher-classes"
+        ],
+        "summary": "List classrooms for a teacher or TA",
+        "description": "Return classrooms owned or assisted by the authenticated user.",
+        "operationId": "listTeacherClasses",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ClassListItem"
+                  },
+                  "type": "array",
+                  "title": "Response Listteacherclasses"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -526,6 +587,64 @@
   },
   "components": {
     "schemas": {
+      "ClassListItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "semester": {
+            "type": "string",
+            "title": "Semester"
+          },
+          "target_language": {
+            "$ref": "#/components/schemas/Language"
+          },
+          "leaderboard_enabled": {
+            "type": "boolean",
+            "title": "Leaderboard Enabled"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "staff_role": {
+            "$ref": "#/components/schemas/ClassStaffRole"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "semester",
+          "target_language",
+          "leaderboard_enabled",
+          "archived_at",
+          "staff_role"
+        ],
+        "title": "ClassListItem"
+      },
+      "ClassStaffRole": {
+        "type": "string",
+        "enum": [
+          "owner",
+          "assistant"
+        ],
+        "title": "ClassStaffRole"
+      },
       "Difficulty": {
         "type": "integer",
         "enum": [
