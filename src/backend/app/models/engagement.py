@@ -115,6 +115,7 @@ class ClassEnrollment(Base):
     joined_at: Mapped[datetime] = created_at()
     left_at: Mapped[datetime | None]
 
+
 class PointsLedger(Base):
     """Immutable record of points earned from a specific source."""
 
