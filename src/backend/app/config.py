@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     app_base_url: str = "http://localhost:5173"
     media_dir: str = "/data/media"
     media_url_ttl_seconds: PositiveInt = 900
+    # upload limits from the spec (Audio, Error Codes): photos and audio at most 5 MB (MiB here),
+    # clue and feedback recordings at most 60 s
+    max_media_file_mb: PositiveInt = 5
+    max_audio_seconds: PositiveInt = 60
     audio_service_type: AudioServiceType = "uploaded"
     gps_radius_meters: PositiveInt = 30  # default for a new location; each location stores its own
     # game rules from the spec (Configuration). The services check these upper limits;

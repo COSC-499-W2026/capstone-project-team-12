@@ -1,5 +1,6 @@
 """Shared fixtures for backend tests."""
 
+import io
 import random
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
@@ -8,6 +9,7 @@ from typing import Any, TypeVar
 from urllib.parse import parse_qs, unquote, urlsplit
 from uuid import uuid4
 
+import av
 import pytest
 from fastapi.testclient import TestClient
 from jwt import encode
@@ -301,5 +303,46 @@ def make_feedback_audio(db: Session) -> Callable[..., FeedbackAudio]:
     ) -> FeedbackAudio:
         values: dict[str, Any] = {"code": code, "language": language, "file_path": f"{uuid4()}.mp3"}
         return _add(db, FeedbackAudio(**(values | fields)))
+
+    return make
+
+
+# Uploaded recordings for the audio checks: (FFmpeg container format, encoder) per kind of file.
+# "adts" is raw AAC, which is neither MP3 nor M4A.
+_AUDIO_FILE_FORMATS = {
+    "mp3": ("mp3", "libmp3lame"),
+    "m4a": ("ipod", "aac"),
+    "adts": ("adts", "aac"),
+}
+_SAMPLE_RATE = 22050
+
+
+@pytest.fixture
+def make_audio() -> Callable[..., bytes]:
+    """A silent mono recording `seconds` long, made with PyAV: make(seconds, "mp3" | "m4a" | "adts",
+    title=...). A title is written as a tag on the file and on the stream, as in a real upload."""
+
+    def make(seconds: float, kind: str = "mp3", title: str | None = None) -> bytes:
+        container_format, encoder = _AUDIO_FILE_FORMATS[kind]
+        buffer = io.BytesIO()
+        with av.open(buffer, "w", format=container_format) as container:
+            stream = container.add_stream(encoder, rate=_SAMPLE_RATE, layout="mono")
+            if title:
+                container.metadata["title"] = title
+                stream.metadata["title"] = title
+            frame_size = stream.codec_context.frame_size or 1024
+            total = round(seconds * _SAMPLE_RATE)
+            for start in range(0, total, frame_size):
+                frame = av.AudioFrame(
+                    format=stream.codec_context.format.name,
+                    layout="mono",
+                    samples=min(frame_size, total - start),
+                )
+                for plane in frame.planes:
+                    plane.update(bytes(plane.buffer_size))  # silence
+                frame.sample_rate, frame.pts = _SAMPLE_RATE, start
+                container.mux(stream.encode(frame))
+            container.mux(stream.encode(None))
+        return buffer.getvalue()
 
     return make
