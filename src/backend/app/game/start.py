@@ -26,6 +26,7 @@ from app.models.enums import (
 )
 from app.models.game import OPEN_SESSION_STATES, GameSession, SessionLocation
 from app.services.audio import get_audio_service
+from app.services.locks import lock_user
 
 _ONE_OPEN_GAME = "uq_game_sessions_one_open_per_student"
 
@@ -59,6 +60,9 @@ def start_game(
         raise ValueError("pass either class_id or language")
     if user.role == UserRole.ADMIN:
         raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
+    # the same lock as a class or language switch, so the two can't both pass their open-game check;
+    # taken before the class is looked up, so what is checked is what is stored once we hold it
+    lock_user(user.id, db)
     if class_id is not None:
         language = _class_language(user, class_id, db)
     assert language is not None
