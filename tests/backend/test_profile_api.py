@@ -1,6 +1,7 @@
 """Tests for PATCH /api/v1/me/profile (A15)."""
 
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.errors import ErrorCode
 from app.models.accounts import User
 from app.models.engagement import Class, ClassEnrollment
-from app.models.enums import Language, SessionState, UserRole
+from app.models.enums import EnrollmentEndReason, Language, SessionState, UserRole
 from app.models.game import GameSession
 
 URL = "/api/v1/me/profile"
@@ -92,6 +93,23 @@ def test_class_the_student_is_not_in_is_not_found(
     db.refresh(roster.student)
     assert roster.student.current_class_id == roster.japanese.id
     assert roster.student.preferred_language == Language.JA
+
+
+def test_archived_class_is_class_archived(
+    db: Session,
+    patch_profile: Callable[..., Any],
+    two_class_student: TwoClassStudent,
+    end_enrolment: Callable[..., None],
+) -> None:
+    roster = two_class_student
+    roster.french.archived_at = datetime.now(UTC)
+    end_enrolment(roster.french_enrolment, EnrollmentEndReason.ARCHIVED)
+
+    response = patch_profile(roster.student, {"current_class_id": str(roster.french.id)})
+
+    assert_error(response, 409, ErrorCode.CLASS_ARCHIVED)
+    db.refresh(roster.student)
+    assert roster.student.current_class_id == roster.japanese.id
 
 
 @pytest.mark.parametrize("state", [SessionState.ACTIVE, SessionState.PAUSED])

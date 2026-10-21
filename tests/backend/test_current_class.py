@@ -97,8 +97,11 @@ def test_class_the_student_is_not_in_is_not_found(
     assert roster.student.current_class_id == roster.japanese.id
 
 
-def test_archived_class_is_not_found(
-    db: Session, two_class_student: TwoClassStudent, end_enrolment: Callable[..., None]
+def test_archived_class_is_explained_only_to_its_students(
+    db: Session,
+    make_user: Callable[..., User],
+    two_class_student: TwoClassStudent,
+    end_enrolment: Callable[..., None],
 ) -> None:
     roster = two_class_student
     roster.french.archived_at = datetime.now(UTC)  # archiving ends the enrolments of the class
@@ -106,9 +109,13 @@ def test_archived_class_is_not_found(
 
     with pytest.raises(AppError) as error:
         select_class(roster.student, roster.french.id, db)
-
-    assert error.value.code == ErrorCode.NOT_FOUND
+    assert error.value.code == ErrorCode.CLASS_ARCHIVED
     assert roster.student.current_class_id == roster.japanese.id
+
+    # a student who was never in the class can't tell it from one that doesn't exist
+    with pytest.raises(AppError) as error:
+        select_class(make_user(), roster.french.id, db)
+    assert error.value.code == ErrorCode.NOT_FOUND
 
 
 def test_student_from_another_session_is_refused(
