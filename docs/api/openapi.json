@@ -429,7 +429,7 @@
           "me"
         ],
         "summary": "Select the current class or set the Practice language",
-        "description": "Change the class the app follows, the language of Practice games, or both. A null current_class_id switches to Practice. A class the student is not actively enrolled in is 404 NOT_FOUND, whether or not it exists. While the student has an open (active or paused) game, nothing can be changed: 409 SESSION_ALREADY_OPEN, with the game's id in the error details. Admins don't play, so for them it is 403 FORBIDDEN_ROLE. Nothing is saved if either change is refused.",
+        "description": "Change the class the app follows, the language of Practice games, or both. A null current_class_id switches to Practice. A class the student is not actively enrolled in is 404 NOT_FOUND, whether or not it exists, except that a student whose enrolment ended because the class was archived gets 409 CLASS_ARCHIVED. While the student has an open (active or paused) game, nothing can be changed: 409 SESSION_ALREADY_OPEN, with the game's id in the error details. Admins don't play, so for them it is 403 FORBIDDEN_ROLE. Nothing is saved if either change is refused.",
         "operationId": "updateProfile",
         "requestBody": {
           "content": {
