@@ -2,20 +2,19 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
 from app.content.interface import LocationSnapshot
 from app.db import violated_constraint
 from app.engagement import interface as engagement
 from app.errors import AppError, ErrorCode
 from app.game.draw import draw_locations
-from app.game.sessions import abandon_sessions, is_idle
+from app.game.sessions import abandon_sessions, is_idle, session_idle_limit
 from app.models.accounts import User
 from app.models.enums import (
     Difficulty,
@@ -103,8 +102,7 @@ def _check_no_open_game(student_id: UUID, db: Session) -> None:
     )
     if game is None:
         return
-    idle_limit = timedelta(hours=get_settings().session_idle_expiry_hours)
-    if not is_idle(game, datetime.now(UTC), idle_limit):
+    if not is_idle(game, datetime.now(UTC), session_idle_limit()):
         raise AppError(
             ErrorCode.SESSION_ALREADY_OPEN,
             "Finish or quit your current game first",
