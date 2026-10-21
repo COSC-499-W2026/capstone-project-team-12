@@ -308,19 +308,25 @@ def make_feedback_audio(db: Session) -> Callable[..., FeedbackAudio]:
 
 
 # Uploaded recordings for the audio checks: (FFmpeg container format, encoder) per kind of file.
-# "adts" is raw AAC, which is neither MP3 nor M4A.
+# "adts" is raw AAC, which is neither MP3 nor M4A; the others are MP3 or MP4 files holding other
+# codecs, which are accepted and re-encoded.
 _AUDIO_FILE_FORMATS = {
     "mp3": ("mp3", "libmp3lame"),
     "m4a": ("ipod", "aac"),
     "adts": ("adts", "aac"),
+    "alac": ("ipod", "alac"),
+    "flac-in-mp4": ("mp4", "flac"),
+    "opus-in-mp4": ("mp4", "libopus"),
+    "mp2": ("mp2", "mp2"),
 }
-_SAMPLE_RATE = 22050
+_SAMPLE_RATE = 48000  # one rate every encoder above accepts (Opus needs 48 kHz)
 
 
 @pytest.fixture
 def make_audio() -> Callable[..., bytes]:
-    """A silent mono recording `seconds` long, made with PyAV: make(seconds, "mp3" | "m4a" | "adts",
-    title=...). A title is written as a tag on the file and on the stream, as in a real upload."""
+    """A silent mono recording `seconds` long, made with PyAV: make(seconds, kind, title=...),
+    `kind` one of _AUDIO_FILE_FORMATS (default "mp3"). A title is written as a tag on the file and
+    on the stream, as in a real upload."""
 
     def make(seconds: float, kind: str = "mp3", title: str | None = None) -> bytes:
         container_format, encoder = _AUDIO_FILE_FORMATS[kind]
