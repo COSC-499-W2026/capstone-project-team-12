@@ -26,8 +26,8 @@ from app.engagement.access_code_management import save_access_code_with_retry
 from app.engagement.class_management import (
     create_class_record,
     list_staff_classes,
-    semester_expiration,
 )
+from app.engagement.semester import semester_expiration as semester_expiration
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import AccessCode, Class, ClassEnrollment
