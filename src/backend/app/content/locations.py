@@ -45,7 +45,7 @@ def create_location(fields: LocationFields, db: Session) -> Location:
 def replace_location(location_id: UUID, fields: LocationFields, db: Session) -> Location:
     """Replace every field of the location, `is_active` included; VALIDATION_ERROR if another
     location has the room number."""
-    location = _get_location(location_id, db)
+    location = get_location(location_id, db)
     with _saving_room_number(fields.room_number, db):
         for name, value in fields.model_dump().items():
             setattr(location, name, value)
@@ -54,7 +54,7 @@ def replace_location(location_id: UUID, fields: LocationFields, db: Session) -> 
 
 def deactivate_location(location_id: UUID, db: Session) -> None:
     """Soft delete: new games stop drawing the location. Deactivating it again does nothing."""
-    _get_location(location_id, db).is_active = False
+    get_location(location_id, db).is_active = False
     db.flush()
 
 
@@ -65,7 +65,7 @@ def set_clue_text(
     null (no transcript yet)."""
     if text and "\x00" in text:  # PostgreSQL text cannot hold it
         raise AppError(ErrorCode.VALIDATION_ERROR, "The clue text contains an invalid character")
-    _get_location(location_id, db)
+    get_location(location_id, db)
     clue = get_or_create_clue(location_id, difficulty, language, db)
     clue.text = (text or "").strip() or None
     db.flush()
@@ -84,7 +84,8 @@ def get_or_create_clue(
     return db.scalars(select(Clue).filter_by(**key)).one()
 
 
-def _get_location(location_id: UUID, db: Session) -> Location:
+def get_location(location_id: UUID, db: Session) -> Location:
+    """The location, active or not; NOT_FOUND if there is none."""
     location = db.get(Location, location_id)
     if location is None:
         raise AppError(ErrorCode.NOT_FOUND, "Location not found")

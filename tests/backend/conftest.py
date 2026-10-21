@@ -5,6 +5,7 @@ import random
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from itertools import count
+from pathlib import Path
 from typing import Any, TypeVar
 from urllib.parse import parse_qs, unquote, urlsplit
 from uuid import uuid4
@@ -24,7 +25,7 @@ from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
 from app.models.engagement import ACCESS_CODE_ALPHABET, AccessCode, Class, ClassEnrollment
 from app.models.enums import ClassStaffRole, Difficulty, FeedbackCode, Language, UserRole
 from app.models.game import GameSession, SessionLocation
-from app.services.storage import MEDIA_URL_PREFIX
+from app.services.storage import MEDIA_URL_PREFIX, get_storage_service
 
 
 @pytest.fixture(scope="session")
@@ -352,3 +353,15 @@ def make_audio() -> Callable[..., bytes]:
         return buffer.getvalue()
 
     return make
+
+
+@pytest.fixture
+def media_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """An empty folder that StorageService saves into for this test (MEDIA_DIR)."""
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    get_storage_service.cache_clear()
+    yield tmp_path
+    # the next caller builds both again from the restored environment
+    get_settings.cache_clear()
+    get_storage_service.cache_clear()
