@@ -1,5 +1,6 @@
 """Classroom endpoints for joining and managing classes."""
 
+from datetime import datetime
 from http import HTTPStatus
 from typing import Annotated
 from uuid import UUID
@@ -10,7 +11,12 @@ from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
 from app.db import get_db
-from app.engagement.interface import get_class_language, validate_code_and_enrol
+from app.engagement.interface import (
+    create_class,
+    generate_access_code,
+    get_class_language,
+    validate_code_and_enrol,
+)
 from app.errors import AppError, ErrorCode, error_responses
 from app.models.accounts import User
 from app.models.enums import Language
@@ -34,6 +40,100 @@ class JoinClassResponse(BaseModel):
 
     class_id: UUID
     language: Language
+
+
+class CreateClassRequest(BaseModel):
+    """Details for a new classroom and its initial access code."""
+
+    name: str = Field(
+        min_length=1,
+        max_length=255,
+        description="Classroom name.",
+        examples=["JAPN 101 - Fall 2026"],
+    )
+    semester: str = Field(
+        pattern=r"^[0-9]{4}(W1|W2|S1|S2)$",
+        description="Academic semester identifier.",
+        examples=["2026W1"],
+    )
+    language: Language = Field(
+        description="Fixed target language for the classroom.",
+    )
+    expires_at: datetime = Field(
+        description="Timezone-aware expiration for the initial access code.",
+    )
+    max_uses: int | None = Field(
+        default=None,
+        gt=0,
+        description="Optional maximum number of uses for the initial access code.",
+    )
+
+
+class CreateClassResponse(BaseModel):
+    """Created classroom and its initial enrolment code."""
+
+    class_id: UUID
+    name: str
+    semester: str
+    language: Language
+    access_code: str
+
+
+@classes_router.post(
+    "",
+    response_model=CreateClassResponse,
+    status_code=HTTPStatus.CREATED,
+    operation_id="createClass",
+    summary="Create a classroom",
+    description=(
+        "Create a classroom with a fixed target language and generate "
+        "its initial eight-character access code. Only active staff "
+        "accounts may create classrooms. The classroom, owner assignment, "
+        "and initial access code are saved in one transaction."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.CONFLICT,
+    ),
+)
+def create_class_endpoint(
+    request: CreateClassRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> CreateClassResponse:
+    """Create a classroom and its initial access code atomically."""
+    try:
+        school_class = create_class(
+            teacher=user,
+            name=request.name,
+            semester=request.semester,
+            language=request.language,
+            db=db,
+        )
+
+        access_code = generate_access_code(
+            class_id=school_class.id,
+            creator=user,
+            expires_at=request.expires_at,
+            db=db,
+            max_uses=request.max_uses,
+        )
+
+        response = CreateClassResponse(
+            class_id=school_class.id,
+            name=school_class.name,
+            semester=school_class.semester,
+            language=Language(school_class.target_language),
+            access_code=access_code.code,
+        )
+
+        db.commit()
+        return response
+
+    except Exception:
+        db.rollback()
+        raise
 
 
 @classes_router.post(
