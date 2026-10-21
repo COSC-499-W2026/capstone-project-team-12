@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.game.interface import end_open_sessions, get_open_session_id
+from app.game.sessions import session_idle_limit
 from app.models.accounts import User
 from app.models.engagement import Class
 from app.models.enums import LocationStatus, SessionEndReason, SessionState, SkipReason
@@ -130,13 +131,19 @@ def test_no_open_game_gives_none(
 def test_a_game_idle_for_the_expiry_time_does_not_count(
     db: Session, make_user: Callable[..., User], make_game_session: Callable[..., GameSession]
 ) -> None:
-    just_inside, expired = make_user(), make_user()
+    limit = session_idle_limit()
     now = datetime.now(UTC)
-    inside_game = make_game_session(just_inside, last_activity_at=now - timedelta(hours=23))
-    make_game_session(expired, last_activity_at=now - timedelta(hours=25))
+    just_inside, at_the_limit, long_idle = make_user(), make_user(), make_user()
+    inside_game = make_game_session(
+        just_inside, last_activity_at=now - limit + timedelta(minutes=1)
+    )
+    # exactly the limit counts as idle, the same boundary as is_idle (<=)
+    make_game_session(at_the_limit, last_activity_at=now - limit)
+    make_game_session(long_idle, last_activity_at=now - limit - timedelta(hours=1))
 
     assert get_open_session_id(just_inside.id, db) == inside_game.id
-    assert get_open_session_id(expired.id, db) is None
+    assert get_open_session_id(at_the_limit.id, db) is None
+    assert get_open_session_id(long_idle.id, db) is None
 
 
 def test_looking_for_an_open_game_only_reads(
