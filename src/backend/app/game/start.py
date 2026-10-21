@@ -26,6 +26,7 @@ from app.models.enums import (
 )
 from app.models.game import OPEN_SESSION_STATES, GameSession, SessionLocation
 from app.services.audio import get_audio_service
+from app.services.locks import lock_user
 
 _ONE_OPEN_GAME = "uq_game_sessions_one_open_per_student"
 
@@ -63,6 +64,8 @@ def start_game(
         language = _class_language(user, class_id, db)
     assert language is not None
 
+    # the same lock as a class or language switch, so the two can't both pass their open-game check
+    lock_user(user.id, db)
     _check_no_open_game(user.id, db)
     snapshots = draw_locations(user.id, class_id, language, difficulty, db)
     # before the game exists, so a missing recording fails like any other draw problem
