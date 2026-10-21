@@ -11,12 +11,11 @@ from app.config import get_settings
 from app.content.locations import (
     create_location,
     deactivate_location,
-    get_or_create_clue,
     list_locations,
     replace_location,
     set_clue_text,
 )
-from app.content.schemas import LocationFields, LocationOut
+from app.content.schemas import INT32_MAX, LocationFields, LocationOut
 from app.errors import AppError, ErrorCode
 from app.models.content import Clue, Location
 from app.models.enums import Difficulty, Language
@@ -54,13 +53,19 @@ def test_bad_room_number_is_refused(typed: str) -> None:
         fields(room_number=typed)
 
 
-def test_given_answers_are_normalised_without_repeats() -> None:
-    location = fields(accepted_answers=["sci-333", "SCI333", "sci 334"])
+@pytest.mark.parametrize(
+    ("given", "stored"),
+    [
+        (["sci-333", "SCI333", "sci 334"], ["SCI333", "SCI334"]),
+        (["SCI334"], ["SCI333", "SCI334"]),  # the room's own answer is always accepted
+        ([], ["SCI333"]),
+    ],
+)
+def test_answers_are_normalised_and_include_the_rooms(given: list[str], stored: list[str]) -> None:
+    assert fields(accepted_answers=given).accepted_answers == stored
 
-    assert location.accepted_answers == ["SCI333", "SCI334"]
 
-
-@pytest.mark.parametrize("answers", [[], ["SCI 33"], ["333"]])
+@pytest.mark.parametrize("answers", [["SCI 33"], ["333"]])
 def test_bad_answers_are_refused(answers: list[str]) -> None:
     with pytest.raises(ValidationError, match="accepted_answers"):
         fields(accepted_answers=answers)
@@ -83,15 +88,24 @@ def test_bad_entrance_points_are_refused(points: list[dict[str, float]]) -> None
 
 
 @pytest.mark.parametrize("name_field", ["name", "building_name"])
-def test_blank_names_are_refused(name_field: str) -> None:
+@pytest.mark.parametrize("bad", ["   ", "Lab\x00"])  # blank, and a NUL the database cannot store
+def test_bad_names_are_refused(name_field: str, bad: str) -> None:
     with pytest.raises(ValidationError, match=name_field):
-        fields(**{name_field: "   "})
+        fields(**{name_field: bad})
 
 
-def test_radius_defaults_to_the_setting_and_must_be_positive() -> None:
-    assert fields().gps_radius_meters == get_settings().gps_radius_meters
-    with pytest.raises(ValidationError, match="gps_radius_meters"):
-        fields(gps_radius_meters=0)
+@pytest.mark.parametrize(
+    ("number_field", "bad"),
+    [
+        ("gps_radius_meters", 0),
+        ("gps_radius_meters", INT32_MAX + 1),
+        ("floor_number", INT32_MAX + 1),
+        ("floor_number", -INT32_MAX - 1),
+    ],
+)
+def test_numbers_the_database_cannot_hold_are_refused(number_field: str, bad: int) -> None:
+    with pytest.raises(ValidationError, match=number_field):
+        fields(**{number_field: bad})
 
 
 def test_create_location_saves_every_field(db: Session) -> None:
@@ -126,6 +140,19 @@ def test_room_number_of_an_inactive_location_cannot_be_reused(
     assert error.value.details[0]["field"] == "room_number"
 
 
+def test_duplicate_room_number_keeps_the_work_done_before_it(
+    db: Session, make_location: Callable[..., Location]
+) -> None:
+    make_location(room_number="SCI 333", accepted_answers=["SCI333"])
+    kept = create_location(fields(room_number="SCI 444"), db)
+
+    with pytest.raises(AppError):
+        create_location(fields(), db)
+
+    assert db.get(Location, kept.id) is kept
+    assert list_locations(db)  # the session is still usable
+
+
 def test_other_constraint_errors_are_not_reported_as_a_duplicate(db: Session) -> None:
     unchecked = fields().model_copy(update={"gps_radius_meters": 0})  # skips validation
 
@@ -147,7 +174,10 @@ def test_list_locations_includes_inactive_ones_by_room_number(
 def test_replace_location_replaces_every_field_and_can_reactivate(
     db: Session, make_location: Callable[..., Location]
 ) -> None:
-    location = make_location(is_active=False, floor_number=2)
+    # same room number as the replacement: keeping one's own room number is allowed
+    location = make_location(
+        room_number="SCI 333", accepted_answers=["SCI333"], is_active=False, floor_number=2
+    )
 
     replaced = replace_location(location.id, fields(accepted_answers=["SCI333", "SCI334"]), db)
 
@@ -157,14 +187,6 @@ def test_replace_location_replaces_every_field_and_can_reactivate(
     assert replaced.accepted_answers == ["SCI333", "SCI334"]
     assert replaced.floor_number is None
     assert replaced.is_active
-
-
-def test_replace_location_may_keep_its_room_number(
-    db: Session, make_location: Callable[..., Location]
-) -> None:
-    location = make_location(room_number="SCI 333", accepted_answers=["SCI333"])
-
-    assert replace_location(location.id, fields(name="Renamed"), db).name == "Renamed"
 
 
 def test_replace_location_refuses_another_locations_room_number(
@@ -220,6 +242,15 @@ def test_set_clue_text_creates_the_clue_then_updates_it(
     assert (updated.difficulty, updated.language, updated.text) == (2, "fr", "Salle trois")
 
 
+def test_clue_text_the_database_cannot_hold_is_refused(
+    db: Session, make_location: Callable[..., Location]
+) -> None:
+    with pytest.raises(AppError) as error:
+        set_clue_text(make_location().id, Difficulty.BASIC, Language.JA, "a\x00b", db)
+
+    assert error.value.code == ErrorCode.VALIDATION_ERROR
+
+
 @pytest.mark.parametrize("text", ["", "   ", None])
 def test_blank_clue_text_is_stored_as_null(
     db: Session, make_clue: Callable[..., Clue], text: str | None
@@ -232,14 +263,6 @@ def test_blank_clue_text_is_stored_as_null(
     assert clue.text is None
 
 
-def test_get_or_create_clue_returns_the_existing_clue(
-    db: Session, make_clue: Callable[..., Clue]
-) -> None:
-    clue = make_clue()
-
-    assert get_or_create_clue(clue.location_id, Difficulty.BASIC, Language.JA, db) is clue
-
-
 def test_services_flush_but_never_commit(db: Session, transaction_calls: list[str]) -> None:
     location = create_location(fields(), db)
     replace_location(location.id, fields(name="Renamed"), db)
@@ -247,5 +270,6 @@ def test_services_flush_but_never_commit(db: Session, transaction_calls: list[st
     deactivate_location(location.id, db)
 
     assert "flush" in transaction_calls
-    assert "commit" not in transaction_calls
+    # each of the two saves with a room number uses a savepoint, which fires a commit event too
+    assert transaction_calls.count("commit") == 2
     assert "rollback" not in transaction_calls

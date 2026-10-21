@@ -15,7 +15,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    PositiveInt,
     StringConstraints,
     model_validator,
 )
@@ -44,7 +43,12 @@ def room_answer(text: str) -> str:
     return "".join(_room_parts(text))
 
 
-NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+# PostgreSQL text cannot hold a NUL character, and its integer columns are 32-bit: a value
+# outside either would pass here and fail on save with a 500
+NO_NUL = r"^[^\x00]*$"
+INT32_MAX = 2**31 - 1
+
+NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, pattern=NO_NUL)]
 RoomNumber = Annotated[str, AfterValidator(room_number_sign)]
 Answer = Annotated[str, AfterValidator(room_answer)]
 
@@ -59,23 +63,26 @@ class EntrancePoint(BaseModel):
 class LocationFields(BaseModel):
     """Every field a content manager sets on a location (create, or replace with PUT).
 
-    `accepted_answers` defaults to the room number's answer. Reactivating a deactivated location
-    is a replace with `is_active` true: room numbers stay unique across inactive locations.
+    `accepted_answers` always starts with the room number's answer. Reactivating a deactivated
+    location is a replace with `is_active` true: room numbers stay unique across inactive ones.
     """
 
     name: NonBlank  # internal label, never sent to students
     building_name: NonBlank
-    floor_number: int | None = None
+    floor_number: int | None = Field(default=None, ge=-INT32_MAX, le=INT32_MAX)
     room_number: RoomNumber
-    # None is replaced by the room number's answer once the model is validated
-    accepted_answers: list[Answer] | None = Field(default=None, min_length=1)
+    # extra answers, e.g. for a sign that reads differently; the room number's own answer is
+    # always accepted, so a typo here cannot make the location impossible to complete
+    accepted_answers: list[Answer] = Field(default_factory=list)
     gps_points: list[EntrancePoint] = Field(min_length=1)
-    gps_radius_meters: PositiveInt = Field(default_factory=lambda: get_settings().gps_radius_meters)
+    gps_radius_meters: int = Field(
+        default_factory=lambda: get_settings().gps_radius_meters, gt=0, le=INT32_MAX
+    )
     is_active: bool = True
 
     @model_validator(mode="after")
     def _answers(self) -> Self:
-        answers = self.accepted_answers or [room_answer(self.room_number)]
+        answers = [room_answer(self.room_number), *self.accepted_answers]
         self.accepted_answers = list(dict.fromkeys(answers))  # drop repeats, keep the order
         return self
 

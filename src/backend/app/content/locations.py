@@ -9,6 +9,8 @@ These functions flush so the caller sees new IDs and constraint errors, and neve
 router owns the transaction. Unknown location IDs raise NOT_FOUND.
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from uuid import UUID
 
 from sqlalchemy import select
@@ -35,8 +37,8 @@ def create_location(fields: LocationFields, db: Session) -> Location:
     """Add an active (unless `fields` says otherwise) location; VALIDATION_ERROR if its room
     number is already used, by an inactive location too."""
     location = Location(**fields.model_dump())
-    db.add(location)
-    _flush(fields.room_number, db)
+    with _saving_room_number(fields.room_number, db):
+        db.add(location)
     return location
 
 
@@ -44,9 +46,9 @@ def replace_location(location_id: UUID, fields: LocationFields, db: Session) -> 
     """Replace every field of the location, `is_active` included; VALIDATION_ERROR if another
     location has the room number."""
     location = _get_location(location_id, db)
-    for name, value in fields.model_dump().items():
-        setattr(location, name, value)
-    _flush(fields.room_number, db)
+    with _saving_room_number(fields.room_number, db):
+        for name, value in fields.model_dump().items():
+            setattr(location, name, value)
     return location
 
 
@@ -61,6 +63,8 @@ def set_clue_text(
 ) -> Clue:
     """Set the clue's transcript, creating the clue if needed. A blank transcript is stored as
     null (no transcript yet)."""
+    if text and "\x00" in text:  # PostgreSQL text cannot hold it
+        raise AppError(ErrorCode.VALIDATION_ERROR, "The clue text contains an invalid character")
     _get_location(location_id, db)
     clue = get_or_create_clue(location_id, difficulty, language, db)
     clue.text = (text or "").strip() or None
@@ -87,16 +91,17 @@ def _get_location(location_id: UUID, db: Session) -> Location:
     return location
 
 
-def _flush(room_number: str, db: Session) -> None:
-    """Flush the location; VALIDATION_ERROR if another location has `room_number`.
+@contextmanager
+def _saving_room_number(room_number: str, db: Session) -> Iterator[None]:
+    """Save what the block changes; VALIDATION_ERROR if another location has `room_number`.
 
-    The unique constraint is the check, so two requests saving the same room number at once
-    cannot both succeed. The spec has no error code for a duplicate room number. The failed
-    flush rolls the session back, so a caller saving several locations (the CSV import) must
-    find duplicates before saving rather than through this error.
+    The unique constraint is the check, so two requests cannot both save the same room number.
+    The spec has no error code for it. The block runs in a savepoint (opening one flushes, so
+    the changes must be made inside), so a failed save undoes only itself.
     """
     try:
-        db.flush()
+        with db.begin_nested():
+            yield
     except IntegrityError as error:
         if violated_constraint(error) != "uq_locations_room_number":
             raise
