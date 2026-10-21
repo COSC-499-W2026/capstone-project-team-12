@@ -1,0 +1,251 @@
+from collections.abc import Callable
+from typing import Any
+from uuid import uuid4
+
+import pytest
+from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.config import get_settings
+from app.content.locations import (
+    create_location,
+    deactivate_location,
+    get_or_create_clue,
+    list_locations,
+    replace_location,
+    set_clue_text,
+)
+from app.content.schemas import LocationFields, LocationOut
+from app.errors import AppError, ErrorCode
+from app.models.content import Clue, Location
+from app.models.enums import Difficulty, Language
+
+ENTRANCE = {"lat": 49.9394, "lng": -119.3948}
+
+
+def fields(**overrides: Any) -> LocationFields:
+    values: dict[str, Any] = {
+        "name": "Science lab",
+        "building_name": "Science Building",
+        "room_number": "SCI 333",
+        "gps_points": [ENTRANCE],
+    }
+    return LocationFields.model_validate(values | overrides)
+
+
+@pytest.mark.parametrize("typed", ["SCI 333", "sci 333", "SCI333", "SCI-333", "  Sci 333 "])
+def test_room_number_is_stored_as_on_the_sign(typed: str) -> None:
+    location = fields(room_number=typed)
+
+    assert location.room_number == "SCI 333"
+    assert location.accepted_answers == ["SCI333"]
+
+
+def test_four_digit_room_number_is_accepted() -> None:
+    assert fields(room_number="ART 1001").room_number == "ART 1001"
+
+
+@pytest.mark.parametrize(
+    "typed", ["SC 333", "SCIE 333", "SCI 33", "SCI 33333", "SCI  333", "SCI_333", "SCI ３３３", ""]
+)
+def test_bad_room_number_is_refused(typed: str) -> None:
+    with pytest.raises(ValidationError, match="room_number"):
+        fields(room_number=typed)
+
+
+def test_given_answers_are_normalised_without_repeats() -> None:
+    location = fields(accepted_answers=["sci-333", "SCI333", "sci 334"])
+
+    assert location.accepted_answers == ["SCI333", "SCI334"]
+
+
+@pytest.mark.parametrize("answers", [[], ["SCI 33"], ["333"]])
+def test_bad_answers_are_refused(answers: list[str]) -> None:
+    with pytest.raises(ValidationError, match="accepted_answers"):
+        fields(accepted_answers=answers)
+
+
+@pytest.mark.parametrize(
+    "points",
+    [
+        [],
+        [{"lat": 90.1, "lng": 0}],
+        [{"lat": -90.1, "lng": 0}],
+        [{"lat": 0, "lng": 180.1}],
+        [{"lat": 0, "lng": -180.1}],
+        [{"lat": 0}],
+    ],
+)
+def test_bad_entrance_points_are_refused(points: list[dict[str, float]]) -> None:
+    with pytest.raises(ValidationError, match="gps_points"):
+        fields(gps_points=points)
+
+
+@pytest.mark.parametrize("name_field", ["name", "building_name"])
+def test_blank_names_are_refused(name_field: str) -> None:
+    with pytest.raises(ValidationError, match=name_field):
+        fields(**{name_field: "   "})
+
+
+def test_radius_defaults_to_the_setting_and_must_be_positive() -> None:
+    assert fields().gps_radius_meters == get_settings().gps_radius_meters
+    with pytest.raises(ValidationError, match="gps_radius_meters"):
+        fields(gps_radius_meters=0)
+
+
+def test_create_location_saves_every_field(db: Session) -> None:
+    location = create_location(
+        fields(name=" Lab ", floor_number=3, gps_points=[ENTRANCE, ENTRANCE]), db
+    )
+
+    db.expire_all()
+    saved = db.get(Location, location.id)
+    assert saved is not None
+    assert LocationOut.model_validate(saved).model_dump(exclude={"id"}) == {
+        "name": "Lab",
+        "building_name": "Science Building",
+        "floor_number": 3,
+        "room_number": "SCI 333",
+        "accepted_answers": ["SCI333"],
+        "gps_points": [ENTRANCE, ENTRANCE],
+        "gps_radius_meters": get_settings().gps_radius_meters,
+        "is_active": True,
+    }
+
+
+def test_room_number_of_an_inactive_location_cannot_be_reused(
+    db: Session, make_location: Callable[..., Location]
+) -> None:
+    make_location(room_number="SCI 333", accepted_answers=["SCI333"], is_active=False)
+
+    with pytest.raises(AppError) as error:
+        create_location(fields(room_number="sci333"), db)
+
+    assert error.value.code == ErrorCode.VALIDATION_ERROR
+    assert error.value.details[0]["field"] == "room_number"
+
+
+def test_other_constraint_errors_are_not_reported_as_a_duplicate(db: Session) -> None:
+    unchecked = fields().model_copy(update={"gps_radius_meters": 0})  # skips validation
+
+    with pytest.raises(IntegrityError, match="ck_locations_gps_radius_meters"):
+        create_location(unchecked, db)
+
+
+def test_list_locations_includes_inactive_ones_by_room_number(
+    db: Session, make_location: Callable[..., Location]
+) -> None:
+    later = make_location(room_number="ZZZ 999", accepted_answers=["ZZZ999"])
+    earlier = make_location(room_number="AAA 100", accepted_answers=["AAA100"], is_active=False)
+
+    listed = list_locations(db)
+
+    assert listed.index(earlier) < listed.index(later)
+
+
+def test_replace_location_replaces_every_field_and_can_reactivate(
+    db: Session, make_location: Callable[..., Location]
+) -> None:
+    location = make_location(is_active=False, floor_number=2)
+
+    replaced = replace_location(location.id, fields(accepted_answers=["SCI333", "SCI334"]), db)
+
+    db.expire_all()
+    assert replaced.id == location.id
+    assert replaced.room_number == "SCI 333"
+    assert replaced.accepted_answers == ["SCI333", "SCI334"]
+    assert replaced.floor_number is None
+    assert replaced.is_active
+
+
+def test_replace_location_may_keep_its_room_number(
+    db: Session, make_location: Callable[..., Location]
+) -> None:
+    location = make_location(room_number="SCI 333", accepted_answers=["SCI333"])
+
+    assert replace_location(location.id, fields(name="Renamed"), db).name == "Renamed"
+
+
+def test_replace_location_refuses_another_locations_room_number(
+    db: Session, make_location: Callable[..., Location]
+) -> None:
+    make_location(room_number="SCI 333", accepted_answers=["SCI333"])
+    location = make_location()
+
+    with pytest.raises(AppError) as error:
+        replace_location(location.id, fields(), db)
+
+    assert error.value.code == ErrorCode.VALIDATION_ERROR
+
+
+def test_deactivate_location_keeps_the_row(
+    db: Session, make_location: Callable[..., Location]
+) -> None:
+    location = make_location()
+
+    deactivate_location(location.id, db)
+    deactivate_location(location.id, db)
+
+    db.expire_all()
+    assert db.get(Location, location.id) is not None
+    assert not location.is_active
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda db: replace_location(uuid4(), fields(), db),
+        lambda db: deactivate_location(uuid4(), db),
+        lambda db: set_clue_text(uuid4(), Difficulty.BASIC, Language.JA, "text", db),
+    ],
+)
+def test_unknown_location_is_not_found(db: Session, call: Callable[[Session], object]) -> None:
+    with pytest.raises(AppError) as error:
+        call(db)
+
+    assert error.value.code == ErrorCode.NOT_FOUND
+
+
+def test_set_clue_text_creates_the_clue_then_updates_it(
+    db: Session, make_location: Callable[..., Location]
+) -> None:
+    location = make_location()
+
+    created = set_clue_text(location.id, Difficulty.ADVANCING, Language.FR, " Salle 333 ", db)
+    updated = set_clue_text(location.id, Difficulty.ADVANCING, Language.FR, "Salle trois", db)
+
+    db.expire_all()
+    assert updated.id == created.id
+    assert (updated.difficulty, updated.language, updated.text) == (2, "fr", "Salle trois")
+
+
+@pytest.mark.parametrize("text", ["", "   ", None])
+def test_blank_clue_text_is_stored_as_null(
+    db: Session, make_clue: Callable[..., Clue], text: str | None
+) -> None:
+    clue = make_clue(text="old")
+
+    set_clue_text(clue.location_id, Difficulty.BASIC, Language.JA, text, db)
+
+    db.refresh(clue)
+    assert clue.text is None
+
+
+def test_get_or_create_clue_returns_the_existing_clue(
+    db: Session, make_clue: Callable[..., Clue]
+) -> None:
+    clue = make_clue()
+
+    assert get_or_create_clue(clue.location_id, Difficulty.BASIC, Language.JA, db) is clue
+
+
+def test_services_flush_but_never_commit(db: Session, transaction_calls: list[str]) -> None:
+    location = create_location(fields(), db)
+    replace_location(location.id, fields(name="Renamed"), db)
+    set_clue_text(location.id, Difficulty.BASIC, Language.JA, "text", db)
+    deactivate_location(location.id, db)
+
+    assert "flush" in transaction_calls
+    assert "commit" not in transaction_calls
+    assert "rollback" not in transaction_calls
