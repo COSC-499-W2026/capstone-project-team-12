@@ -2,7 +2,7 @@ import re
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import func, insert, select
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -10,6 +10,7 @@ from app.accounts.password import hash_password, validate_password_security
 from app.engagement.interface import validate_code_and_enrol
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
+from app.models.engagement import Class
 from app.models.enums import EmailKind, UserRole
 from app.services.email import EmailService
 
@@ -68,8 +69,31 @@ def register_account(request: RegisterRequest, db: Session) -> User:
         EmailService.queue_email(user, EmailKind.VERIFY_EMAIL, db)  # spec: sign-up sends it
 
         if access_code is not None:
-            validate_code_and_enrol(user.id, access_code, db)
-            # no verification needed, function raises unless successful
+            try:
+                class_id = validate_code_and_enrol(user.id, access_code, db)
+                class_lang = db.execute(
+                    select(Class.target_language).where(
+                        Class.id == class_id
+                    )
+                ).scalar_one_or_none()
+                db.execute(
+                    update(
+                        User
+                    ).where(
+                        User.id == user.id
+                    ).values(
+                        preferred_language=class_lang,
+                        current_class_id=class_id
+                    )
+                )
+            except AppError as err:
+                db.rollback()  # if access code cannot be validated, rollback user insert
+                raise AppError(
+                    code=err.code,
+                    message=err.message,
+                    details=err.details,
+                    headers=err.headers
+                ) from err
         return user
 
     except IntegrityError as err:

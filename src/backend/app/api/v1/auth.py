@@ -22,7 +22,5 @@ auth_router = APIRouter(prefix="/auth")
 def register(request: RegisterRequest, db: Annotated[Session, Depends(get_db)]) -> RegisterResponse:
     """Student sign-up: email, username, password, optional access code."""
     user = register_account(request, db)
-    response = RegisterResponse(
-        id=user.id, username=user.username, email=user.email, role=user.role
-    )
-    return response
+    db.commit()
+    return RegisterResponse(id=user.id, username=user.username, email=user.email, role=user.role)

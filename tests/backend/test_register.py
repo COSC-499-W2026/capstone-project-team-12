@@ -105,6 +105,24 @@ def test_201_no_code(client: TestClient, db: Session):
     assert user.username == request["username"]
 
 
+def test_invalid_access_code(client: TestClient, db: Session):
+    request = {
+        "email": "invalid@code.com",
+        "username": "JohnLanguage",
+        "password": "ValidPassword1",
+        "access_code": "abc",
+    }
+    response = client.post("/api/v1/auth/register", json=request)
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == ErrorCode.INVALID_ACCESS_CODE
+    user = db.execute(select(User).where(User.email == request["email"])).scalar_one_or_none()
+    assert user is None
+    enrollment = db.execute(
+        select(ClassEnrollment).where(User.email == request["email"])
+    ).scalar_one_or_none()
+    assert enrollment is None
+
+
 def test_409(client: TestClient):
     request = {
         "email": "test@email.com",
