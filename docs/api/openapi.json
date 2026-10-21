@@ -423,6 +423,93 @@
         ]
       }
     },
+    "/api/v1/me/profile": {
+      "patch": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Select the current class or set the Practice language",
+        "description": "Change the class the app follows, the language of Practice games, or both. A null current_class_id switches to Practice. A class the student is not actively enrolled in is 404 NOT_FOUND, whether or not it exists. While the student has an open (active or paused) game, nothing can be changed: 409 SESSION_ALREADY_OPEN, with the game's id in the error details. Admins don't play, so for them it is 403 FORBIDDEN_ROLE. Nothing is saved if either change is refused.",
+        "operationId": "updateProfile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/media/{key}": {
       "get": {
         "tags": [
@@ -681,6 +768,56 @@
         ],
         "title": "Language"
       },
+      "ProfileResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "role": {
+            "$ref": "#/components/schemas/UserRole"
+          },
+          "current_class_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Class Id",
+            "description": "The class the app follows. Null means Practice (or no active class)."
+          },
+          "preferred_language": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Language"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The language of Practice games. Null until the student has chosen one."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "username",
+          "role",
+          "current_class_id",
+          "preferred_language"
+        ],
+        "title": "ProfileResponse",
+        "description": "The user's profile and the settings of their app."
+      },
       "RegisterRequest": {
         "properties": {
           "email": {
@@ -833,6 +970,46 @@
           "token"
         ],
         "title": "TokenRequest"
+      },
+      "UpdateProfileRequest": {
+        "properties": {
+          "current_class_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Class Id",
+            "description": "A class the student is actively enrolled in, or null to switch to Practice."
+          },
+          "preferred_language": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Language"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The language of Practice games. Null (or left out) leaves it as it is."
+          }
+        },
+        "type": "object",
+        "title": "UpdateProfileRequest",
+        "description": "The settings to change. Send at least one; the others stay as they are."
+      },
+      "UserRole": {
+        "type": "string",
+        "enum": [
+          "student",
+          "staff",
+          "admin"
+        ],
+        "title": "UserRole"
       }
     },
     "securitySchemes": {
