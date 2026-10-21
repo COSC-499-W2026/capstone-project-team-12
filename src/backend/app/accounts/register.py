@@ -72,27 +72,17 @@ def register_account(request: RegisterRequest, db: Session) -> User:
             try:
                 class_id = validate_code_and_enrol(user.id, access_code, db)
                 class_lang = db.execute(
-                    select(Class.target_language).where(
-                        Class.id == class_id
-                    )
+                    select(Class.target_language).where(Class.id == class_id)
                 ).scalar_one_or_none()
                 db.execute(
-                    update(
-                        User
-                    ).where(
-                        User.id == user.id
-                    ).values(
-                        preferred_language=class_lang,
-                        current_class_id=class_id
-                    )
+                    update(User)
+                    .where(User.id == user.id)
+                    .values(preferred_language=class_lang, current_class_id=class_id)
                 )
             except AppError as err:
                 db.rollback()  # if access code cannot be validated, rollback user insert
                 raise AppError(
-                    code=err.code,
-                    message=err.message,
-                    details=err.details,
-                    headers=err.headers
+                    code=err.code, message=err.message, details=err.details, headers=err.headers
                 ) from err
         return user
 
