@@ -35,6 +35,7 @@ __all__ = [
     "EngagementResult",
     "apply_location_result",
     "enrolment_ended_by_archive",
+    "get_active_class_ids",
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
@@ -258,6 +259,20 @@ def get_class_language(class_id: UUID, db: Session) -> Language | None:
     if school_class is None:
         return None
     return Language(school_class.target_language)
+
+
+def get_active_class_ids(student_id: UUID, db: Session) -> list[UUID]:
+    """Return the classes the student is actively enrolled in, most recently joined first.
+
+    An archived class has no active enrolments, so it is never listed. A class the student left
+    and rejoined keeps its first `joined_at`, so it can rank lower than "most recent" suggests.
+    """
+    statement = (
+        select(ClassEnrollment.class_id)
+        .where(ClassEnrollment.student_id == student_id, ClassEnrollment.is_active.is_(True))
+        .order_by(ClassEnrollment.joined_at.desc(), ClassEnrollment.class_id)
+    )
+    return list(db.scalars(statement))
 
 
 def is_actively_enrolled(student_id: UUID, class_id: UUID, db: Session) -> bool:
