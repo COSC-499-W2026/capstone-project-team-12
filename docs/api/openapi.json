@@ -128,6 +128,105 @@
         ]
       }
     },
+    "/api/v1/me/classes/{class_id}": {
+      "patch": {
+        "tags": [
+          "classes"
+        ],
+        "summary": "Update classroom settings",
+        "description": "Allow the classroom owner to update its name and leaderboard setting. The target language and semester are fixed and cannot be changed. Teaching assistants and students cannot update classroom settings. Archived classrooms are read-only.",
+        "operationId": "updateClass",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "class_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Class Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateClassRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateClassResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/me/classes/join": {
       "post": {
         "tags": [
@@ -989,6 +1088,76 @@
           "token"
         ],
         "title": "TokenRequest"
+      },
+      "UpdateClassRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "Optional new classroom name.",
+            "examples": [
+              "JAPN 101 - Updated"
+            ]
+          },
+          "leaderboard_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leaderboard Enabled",
+            "description": "Whether the classroom leaderboard is enabled."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "UpdateClassRequest",
+        "description": "Owner-editable classroom settings.\n\nReject unsupported fields, including target language and semester."
+      },
+      "UpdateClassResponse": {
+        "properties": {
+          "class_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Class Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "semester": {
+            "type": "string",
+            "title": "Semester"
+          },
+          "language": {
+            "$ref": "#/components/schemas/Language"
+          },
+          "leaderboard_enabled": {
+            "type": "boolean",
+            "title": "Leaderboard Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "class_id",
+          "name",
+          "semester",
+          "language",
+          "leaderboard_enabled"
+        ],
+        "title": "UpdateClassResponse",
+        "description": "Classroom settings after an update."
       }
     },
     "securitySchemes": {
