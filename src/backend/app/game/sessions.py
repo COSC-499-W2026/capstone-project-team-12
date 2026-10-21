@@ -1,5 +1,6 @@
 """Ending games (spec Session Lifecycle): the one place that abandons a game and skips the
-locations it left unfinished. Used by class closing, expiry on start and the expire job."""
+locations it left unfinished. Used by class closing, expiry on start and the expire job.
+`get_open_session_id` uses its idle rule too."""
 
 from collections.abc import Sequence
 from datetime import datetime, timedelta
