@@ -73,15 +73,20 @@ def set_clue_text(
 
 
 def get_or_create_clue(
-    location_id: UUID, difficulty: Difficulty, language: Language, db: Session
+    location_id: UUID, difficulty: Difficulty, language: Language, db: Session, lock: bool = False
 ) -> Clue:
     """The clue of an existing location for `difficulty` and `language`, created if missing.
 
     The insert skips an existing clue, so two requests creating the same clue both get it.
+    `lock` holds the clue row until the transaction ends (FOR NO KEY UPDATE: other changes to
+    the clue wait, inserts of rows that point at it do not).
     """
     key = {"location_id": location_id, "difficulty": difficulty, "language": language}
     db.execute(insert(Clue).values(key).on_conflict_do_nothing(index_elements=list(key)))
-    return db.scalars(select(Clue).filter_by(**key)).one()
+    query = select(Clue).filter_by(**key)
+    if lock:
+        query = query.with_for_update(key_share=True)
+    return db.scalars(query).one()
 
 
 def get_location(location_id: UUID, db: Session) -> Location:

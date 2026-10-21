@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import event, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.content.clue_audio import add_clue_recording
@@ -15,6 +16,8 @@ from app.models.content import AudioAsset, Clue, Location
 from app.models.enums import Difficulty, Language
 
 FR_2 = (Difficulty.ADVANCING, Language.FR)
+# blocks other uploads to the clue, but not inserts of rows that reference it
+LOCK = "FOR NO KEY UPDATE"
 
 
 @pytest.fixture
@@ -25,7 +28,7 @@ def staff(make_user: Callable[..., User]) -> User:
 @pytest.fixture
 def upload(
     db: Session,
-    media_dir: Path,
+    stored_media_dir: Path,
     staff: User,
     make_location: Callable[..., Location],
     make_audio: Callable[..., bytes],
@@ -45,7 +48,7 @@ def primary_flags(location: Location, db: Session) -> dict[UUID, bool]:
 
 
 def test_first_recording_is_stored_as_the_primary_one(
-    db: Session, media_dir: Path, staff: User, upload: Callable[..., AudioAsset]
+    db: Session, stored_media_dir: Path, staff: User, upload: Callable[..., AudioAsset]
 ) -> None:
     asset = upload()
 
@@ -56,7 +59,7 @@ def test_first_recording_is_stored_as_the_primary_one(
     assert asset.is_primary
     assert (asset.source_type, asset.provider) == ("uploaded", "teacher")
     assert asset.duration_seconds == pytest.approx(3, abs=0.05)
-    stored = (media_dir / asset.file_path).read_bytes()
+    stored = (stored_media_dir / asset.file_path).read_bytes()
     assert asset.file_size_kb == math.ceil(len(stored) / 1024)
     assert asset.uploaded_by == staff.id
 
@@ -69,6 +72,7 @@ def test_later_recording_is_not_primary_unless_asked(
 
     second = upload(location)
 
+    db.expire_all()
     assert first.is_primary
     assert not second.is_primary
     assert first.clue_id == second.clue_id
@@ -89,7 +93,7 @@ def test_new_primary_replaces_the_old_one_which_keeps_its_row(
 
 def test_stored_file_has_a_random_name_and_no_tags(
     db: Session,
-    media_dir: Path,
+    stored_media_dir: Path,
     make_location: Callable[..., Location],
     make_user: Callable[..., User],
     make_audio: Callable[..., bytes],
@@ -101,22 +105,39 @@ def test_stored_file_has_a_random_name_and_no_tags(
 
     key, suffix = asset.file_path.rsplit(".", 1)
     assert (str(UUID(key)), suffix) == (key, "mp3")
-    assert b"SCI333" not in (media_dir / asset.file_path).read_bytes()
+    assert b"SCI333" not in (stored_media_dir / asset.file_path).read_bytes()
 
 
 def test_unknown_location_stores_nothing(
-    db: Session, media_dir: Path, make_user: Callable[..., User], make_audio: Callable[..., bytes]
+    db: Session,
+    stored_media_dir: Path,
+    make_user: Callable[..., User],
+    make_audio: Callable[..., bytes],
 ) -> None:
     with pytest.raises(AppError) as error:
         add_clue_recording(uuid4(), *FR_2, make_audio(3), make_user().id, db)
 
     assert error.value.code == ErrorCode.NOT_FOUND
-    assert not list(media_dir.iterdir())
+    assert not list(stored_media_dir.iterdir())
+
+
+def test_file_is_deleted_when_its_row_cannot_be_saved(
+    db: Session,
+    stored_media_dir: Path,
+    make_location: Callable[..., Location],
+    make_audio: Callable[..., bytes],
+) -> None:
+    unknown_user = uuid4()  # breaks the uploaded_by foreign key on flush
+
+    with pytest.raises(IntegrityError):
+        add_clue_recording(make_location().id, *FR_2, make_audio(3), unknown_user, db)
+
+    assert not list(stored_media_dir.iterdir())
 
 
 def test_rejected_audio_stores_nothing_and_creates_no_clue(
     db: Session,
-    media_dir: Path,
+    stored_media_dir: Path,
     make_location: Callable[..., Location],
     make_user: Callable[..., User],
 ) -> None:
@@ -126,7 +147,7 @@ def test_rejected_audio_stores_nothing_and_creates_no_clue(
         add_clue_recording(location.id, *FR_2, b"not audio", make_user().id, db)
 
     assert error.value.code == ErrorCode.UNSUPPORTED_MEDIA_TYPE
-    assert not list(media_dir.iterdir())
+    assert not list(stored_media_dir.iterdir())
     assert db.scalars(select(Clue).where(Clue.location_id == location.id)).first() is None
 
 
@@ -149,9 +170,7 @@ def test_clue_is_locked_before_the_primary_is_chosen(
 ) -> None:
     upload()
 
-    lock = next(
-        i for i, sql in enumerate(statements) if "FROM clues" in sql and "FOR UPDATE" in sql
-    )
+    lock = next(i for i, sql in enumerate(statements) if "FROM clues" in sql and LOCK in sql)
     primary = next(i for i, sql in enumerate(statements) if "FROM audio_assets" in sql)
     assert lock < primary
 

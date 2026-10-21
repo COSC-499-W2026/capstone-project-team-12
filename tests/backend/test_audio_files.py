@@ -103,6 +103,14 @@ def test_a_recording_over_the_time_limit_is_rejected(
     assert rejection(too_long) == (ErrorCode.AUDIO_TOO_LONG, HTTPStatus.UNPROCESSABLE_ENTITY)
 
 
+def test_a_recording_too_short_to_store_a_length_is_rejected(
+    make_audio: Callable[..., bytes],
+) -> None:
+    # 4 ms rounds to a length of 0.00 s, which audio_assets refuses; 6 ms rounds to 0.01 s
+    assert rejection(make_audio(0.004)) == UNSUPPORTED
+    assert check_audio(make_audio(0.006)).duration_seconds == 0.01
+
+
 def test_a_file_over_the_size_limit_is_rejected_before_it_is_read(
     make_audio: Callable[..., bytes],
 ) -> None:

@@ -18,6 +18,7 @@ from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.content.clue_audio import UPLOAD_PROVIDER
 from app.db import get_db
 from app.main import create_app
 from app.models.accounts import ClassStaff, User
@@ -284,7 +285,7 @@ def make_audio_asset(db: Session, make_clue: Callable[..., Clue]) -> Callable[..
     def make(clue: Clue | None = None, **fields: Any) -> AudioAsset:
         values: dict[str, Any] = {
             "file_path": f"{uuid4()}.mp3",
-            "provider": "teacher",
+            "provider": UPLOAD_PROVIDER,
             "duration_seconds": 5.0,
             "file_size_kb": 80,
         }
@@ -356,7 +357,7 @@ def make_audio() -> Callable[..., bytes]:
 
 
 @pytest.fixture
-def media_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+def stored_media_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """An empty folder that StorageService saves into for this test (MEDIA_DIR)."""
     monkeypatch.setenv("MEDIA_DIR", str(tmp_path))
     get_settings.cache_clear()

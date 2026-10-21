@@ -1,12 +1,13 @@
 """5.3 Upload clue audio (A20): store a clue recording and choose which recording is primary.
 
-The primary recording is the one new games draw (AudioService). A clue's first recording is
-always primary; a later one replaces it only when asked. Recordings are never deleted here: an
-open game's snapshot may still point at the old one, so replacing a recording only moves
-`is_primary`.
+The primary recording is the one new games draw (AudioService). An upload becomes primary when
+the clue has none yet; otherwise it replaces the primary only when asked. Recordings are never
+deleted here: an open game's snapshot may still point at the old one, so replacing a recording
+only moves `is_primary`.
 
-The file is stored before the transaction commits, so a request that fails after this leaves
-an unused file behind (the spec has no cleanup job yet).
+The file is stored before the transaction commits. It is deleted again if its row cannot be
+saved here, but a transaction rolled back later (by the caller) leaves an unused file behind:
+the spec has no cleanup job yet.
 """
 
 from uuid import UUID
@@ -34,32 +35,36 @@ def add_clue_recording(
 ) -> AudioAsset:
     """Store the recording `data` for the clue, creating the clue if needed.
 
-    It becomes the primary recording if it is the clue's first or `make_primary` is set.
+    It becomes the primary recording if the clue has none yet or `make_primary` is set.
     AppError: NOT_FOUND for an unknown location (checked before the file is), and the audio
     checks' FILE_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE or AUDIO_TOO_LONG. Flushes, never commits.
     """
     get_location(location_id, db)
     checked = check_audio(data)
-    clue = get_or_create_clue(location_id, difficulty, language, db)
-    # one upload per clue at a time, so two first recordings cannot both become primary
-    db.refresh(clue, with_for_update=True)
+    # locked, so two uploads to the clue at once cannot both find no primary and take it
+    clue = get_or_create_clue(location_id, difficulty, language, db, lock=True)
     current = db.scalars(
         select(AudioAsset).where(AudioAsset.clue_id == clue.id, AudioAsset.is_primary)
     ).one_or_none()
-    primary = make_primary or current is None
-    if primary and current is not None:
+    if make_primary and current is not None:
         current.is_primary = False
         db.flush()  # before the new primary: the one-primary index is checked row by row
+    storage = get_storage_service()
+    key = storage.save(checked.data, checked.suffix)
     asset = AudioAsset(
         clue_id=clue.id,
-        file_path=get_storage_service().save(checked.data, checked.suffix),
+        file_path=key,
         source_type=AudioSourceType.UPLOADED,
         provider=UPLOAD_PROVIDER,
-        is_primary=primary,
+        is_primary=make_primary or current is None,
         duration_seconds=checked.duration_seconds,
         file_size_kb=checked.size_kb,
         uploaded_by=uploaded_by,
     )
     db.add(asset)
-    db.flush()
+    try:
+        db.flush()
+    except Exception:
+        storage.delete(key)  # no row points at it
+        raise
     return asset

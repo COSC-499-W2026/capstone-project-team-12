@@ -141,9 +141,10 @@ def _transcode(
                 )
             for resampled in resampler.resample(frame):
                 target.mux(encoded.encode(resampled))
-    if not samples_seconds:
+    duration = round(float(samples_seconds), 2)
+    if not duration:  # no audio, or under 5 ms: audio_assets needs a length above 0
         raise _unsupported()
     for resampled in resampler.resample(None):
         target.mux(encoded.encode(resampled))
     target.mux(encoded.encode(None))
-    return round(float(samples_seconds), 2)
+    return duration
