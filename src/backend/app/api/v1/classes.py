@@ -6,7 +6,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
@@ -15,6 +15,7 @@ from app.engagement.interface import (
     create_class,
     generate_access_code,
     get_class_language,
+    update_class_settings,
     validate_code_and_enrol,
 )
 from app.errors import AppError, ErrorCode, error_responses
@@ -79,6 +80,36 @@ class CreateClassResponse(BaseModel):
     access_code: str
 
 
+class UpdateClassRequest(BaseModel):
+    """Owner-editable classroom settings.
+
+    Reject unsupported fields, including target language and semester.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(
+        default=None,
+        max_length=255,
+        description="Optional new classroom name.",
+        examples=["JAPN 101 - Updated"],
+    )
+    leaderboard_enabled: bool | None = Field(
+        default=None,
+        description="Whether the classroom leaderboard is enabled.",
+    )
+
+
+class UpdateClassResponse(BaseModel):
+    """Classroom settings after an update."""
+
+    class_id: UUID
+    name: str
+    semester: str
+    language: Language
+    leaderboard_enabled: bool
+
+
 @classes_router.post(
     "",
     response_model=CreateClassResponse,
@@ -125,6 +156,57 @@ def create_class_endpoint(
             semester=school_class.semester,
             language=Language(school_class.target_language),
             access_code=access_code.code,
+        )
+
+        db.commit()
+        return response
+
+    except Exception:
+        db.rollback()
+        raise
+
+
+@classes_router.patch(
+    "/{class_id}",
+    response_model=UpdateClassResponse,
+    operation_id="updateClass",
+    summary="Update classroom settings",
+    description=(
+        "Allow the classroom owner to update its name and leaderboard "
+        "setting. The target language and semester are fixed and cannot "
+        "be changed. Teaching assistants and students cannot update "
+        "classroom settings. Archived classrooms are read-only."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.CONFLICT,
+        HTTPStatus.UNPROCESSABLE_ENTITY,
+    ),
+)
+def update_class_endpoint(
+    class_id: UUID,
+    request: UpdateClassRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> UpdateClassResponse:
+    """Update owner-editable classroom settings in one transaction."""
+    try:
+        school_class = update_class_settings(
+            class_id=class_id,
+            actor=user,
+            db=db,
+            name=request.name,
+            leaderboard_enabled=request.leaderboard_enabled,
+        )
+
+        response = UpdateClassResponse(
+            class_id=school_class.id,
+            name=school_class.name,
+            semester=school_class.semester,
+            language=Language(school_class.target_language),
+            leaderboard_enabled=school_class.leaderboard_enabled,
         )
 
         db.commit()
