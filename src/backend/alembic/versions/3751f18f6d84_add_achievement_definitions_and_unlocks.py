@@ -78,9 +78,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["achievement_id"],
             ["achievements.id"],
-            name=op.f(
-                "fk_user_achievements_achievement_id_achievements"
-            ),
+            name=op.f("fk_user_achievements_achievement_id_achievements"),
         ),
         sa.ForeignKeyConstraint(
             ["user_id"],
@@ -95,9 +93,7 @@ def upgrade() -> None:
             "user_id",
             "achievement_id",
             "language",
-            name=op.f(
-                "uq_user_achievements_user_id_achievement_id_language"
-            ),
+            name=op.f("uq_user_achievements_user_id_achievement_id_language"),
             postgresql_nulls_not_distinct=True,
         ),
     )
