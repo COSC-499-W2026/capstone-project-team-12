@@ -12,9 +12,9 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.errors import ErrorCode
-from app.models.accounts import User
+from app.models.accounts import ClassStaff, User
 from app.models.engagement import AccessCode, Class, ClassEnrollment
-from app.models.enums import Language
+from app.models.enums import ClassStaffRole, EnrollmentEndReason, Language, UserRole
 
 
 def join_as(client: TestClient, user: User, code: str) -> Any:
@@ -43,29 +43,29 @@ def test_successful_join(
     make_class: Callable[..., Class],
     make_access_code: Callable[..., AccessCode],
 ) -> None:
+    """Joining a class updates the student's current class and app language."""
     student = make_user(preferred_language=Language.FR)
     school_class = make_class(target_language=Language.JA)
     access_code = make_access_code(school_class)
     formatted = f"{access_code.code[:4]}-{access_code.code[4:]}".lower()
 
     response = join_as(client, student, formatted)
+
     assert response.status_code == 200, response.text
     assert response.json() == {
         "class_id": str(school_class.id),
         "language": Language.JA.value,
     }
+
     db.refresh(student)
     db.refresh(access_code)
+
     assert student.current_class_id == school_class.id
-    assert student.preferred_language == Language.FR
+    assert student.preferred_language == Language.JA
     assert access_code.uses_count == 1
+
     enrollment = (
-        db.query(ClassEnrollment)
-        .filter_by(
-            student_id=student.id,
-            class_id=school_class.id,
-        )
-        .one()
+        db.query(ClassEnrollment).filter_by(student_id=student.id, class_id=school_class.id).one()
     )
     assert enrollment.is_active
     assert enrollment.access_code_id == access_code.id
@@ -78,6 +78,7 @@ def test_authentication_required(
 ) -> None:
     if token is not None:
         client.headers["Authorization"] = f"Bearer {token}"
+
     response = client.post(
         "/api/v1/me/classes/join",
         json={"access_code": "K7PM-3QXD"},
@@ -93,6 +94,7 @@ def test_disabled_account(
     student = make_user()
     student.is_active = False
     db.flush()
+
     assert_error(
         join_as(client, student, "K7PM-3QXD"),
         403,
@@ -111,15 +113,18 @@ def test_invalid_code_states(
 ) -> None:
     student = make_user()
     code = "INVALIDCODE"
+
     if state != "unknown":
         access_code = make_access_code(make_class())
         code = access_code.code
+
         if state == "expired":
             access_code.expires_at = datetime.now(UTC) - timedelta(seconds=1)
         else:
             access_code.max_uses = 1
             access_code.uses_count = 1
         db.flush()
+
     assert_error(
         join_as(client, student, code),
         400,
@@ -138,6 +143,7 @@ def test_archived_class(
     access_code = make_access_code(school_class)
     school_class.archived_at = datetime.now(UTC)
     db.flush()
+
     assert_error(
         join_as(client, make_user(), access_code.code),
         409,
@@ -155,6 +161,7 @@ def test_same_language_conflict(
     student = make_user()
     make_enrollment(student, make_class(target_language=Language.JA))
     access_code = make_access_code(make_class(target_language=Language.JA))
+
     assert_error(
         join_as(client, student, access_code.code),
         409,
@@ -183,8 +190,10 @@ def test_retry_does_not_consume_code(
     student = make_user()
     school_class = make_class()
     access_code = make_access_code(school_class)
+
     first = join_as(client, student, access_code.code)
     assert first.status_code == 200, first.text
+
     db.refresh(access_code)
     original_uses = access_code.uses_count
 
@@ -198,10 +207,12 @@ def test_retry_does_not_consume_code(
 
     retry = join_as(client, student, access_code.code)
     assert retry.status_code == expected_status, retry.text
+
     if expected_status == 200:
         assert retry.json()["class_id"] == str(school_class.id)
     else:
         assert_error(retry, 400, ErrorCode.INVALID_ACCESS_CODE)
+
     db.refresh(access_code)
     assert access_code.uses_count == original_uses
 
@@ -271,3 +282,139 @@ def test_unavailable_code_rejected_before_class_state(
         400,
         ErrorCode.INVALID_ACCESS_CODE,
     )
+
+
+def test_removed_student_cannot_rejoin(
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_access_code: Callable[..., AccessCode],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> None:
+    """A student removed by a teacher cannot rejoin using an access code."""
+    student = make_user()
+    school_class = make_class()
+    access_code = make_access_code(school_class)
+    enrollment = make_enrollment(student, school_class)
+
+    enrollment.is_active = False
+    enrollment.end_reason = EnrollmentEndReason.REMOVED
+    enrollment.left_at = enrollment.joined_at + timedelta(minutes=1)
+    db.flush()
+
+    assert_error(
+        join_as(client, student, access_code.code),
+        409,
+        ErrorCode.REMOVED_FROM_CLASS,
+    )
+
+
+def test_voluntarily_left_student_can_rejoin(
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_access_code: Callable[..., AccessCode],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> None:
+    """A student who voluntarily left can rejoin their former class."""
+    student = make_user(preferred_language=Language.FR)
+    school_class = make_class(target_language=Language.JA)
+    access_code = make_access_code(school_class)
+    enrollment = make_enrollment(student, school_class)
+
+    enrollment.is_active = False
+    enrollment.end_reason = EnrollmentEndReason.LEFT
+    enrollment.left_at = enrollment.joined_at + timedelta(minutes=1)
+    db.flush()
+
+    response = join_as(client, student, access_code.code)
+
+    assert response.status_code == 200, response.text
+
+    db.refresh(enrollment)
+    db.refresh(student)
+
+    assert enrollment.is_active
+    assert enrollment.end_reason is None
+    assert enrollment.left_at is None
+    assert student.current_class_id == school_class.id
+    assert student.preferred_language == Language.JA
+
+
+def test_teacher_cannot_join_as_student(
+    client: TestClient,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_access_code: Callable[..., AccessCode],
+) -> None:
+    """A staff account cannot join a classroom as a student."""
+    teacher = make_user(role=UserRole.STAFF)
+    school_class = make_class()
+    access_code = make_access_code(school_class)
+
+    assert_error(
+        join_as(client, teacher, access_code.code),
+        403,
+        ErrorCode.FORBIDDEN_ROLE,
+    )
+
+
+def test_ta_cannot_join_assisted_class(
+    client: TestClient,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_access_code: Callable[..., AccessCode],
+    make_class_staff: Callable[..., ClassStaff],
+) -> None:
+    """A teaching assistant cannot enrol in the class they assist."""
+    student = make_user()
+    school_class = make_class()
+    access_code = make_access_code(school_class)
+
+    make_class_staff(
+        school_class,
+        student,
+        role=ClassStaffRole.ASSISTANT,
+    )
+
+    assert_error(
+        join_as(client, student, access_code.code),
+        409,
+        ErrorCode.TA_SAME_CLASS_CONFLICT,
+    )
+
+
+def test_ta_can_join_another_class_in_same_language(
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_access_code: Callable[..., AccessCode],
+    make_class_staff: Callable[..., ClassStaff],
+) -> None:
+    """A TA can join another class in the same language as a student."""
+    student = make_user(preferred_language=Language.FR)
+
+    assisted_class = make_class(target_language=Language.JA)
+    target_class = make_class(target_language=Language.JA)
+    access_code = make_access_code(target_class)
+
+    make_class_staff(
+        assisted_class,
+        student,
+        role=ClassStaffRole.ASSISTANT,
+    )
+
+    response = join_as(client, student, access_code.code)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "class_id": str(target_class.id),
+        "language": Language.JA.value,
+    }
+
+    db.refresh(student)
+    assert student.current_class_id == target_class.id
+    assert student.preferred_language == Language.JA
