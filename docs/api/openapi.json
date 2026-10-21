@@ -61,6 +61,93 @@
         }
       }
     },
+    "/api/v1/me/classes/join": {
+      "post": {
+        "tags": [
+          "classes"
+        ],
+        "summary": "Join a classroom",
+        "description": "Enrol the authenticated student using a classroom access code. A student may have only one active classroom per language. Students who voluntarily left may rejoin, but students removed by a teacher cannot. Teachers cannot join as students, and teaching assistants cannot join classes they assist. Successful enrolment also makes it the student's current class. Repeating a successful request with the original access code returns success without consuming another use, even if the code has expired or reached its usage limit. Deactivated codes are rejected.",
+        "operationId": "joinClass",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinClassRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JoinClassResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/auth/verify-email": {
       "post": {
         "tags": [
@@ -247,6 +334,93 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/games": {
+      "post": {
+        "tags": [
+          "games"
+        ],
+        "summary": "Start New Game",
+        "description": "Start a class game (`class_id`) or a Practice game (`language`).\n\nSend exactly one of them. The game gets 5 different locations in the language. Locations the\nstudent has not completed yet come first. After a quit the same day, the locations that were\nnot played carry over to the new game, but not after a reset. Names, rooms and coordinates\nare never sent, only the first clue's audio link.\n\n409 SESSION_ALREADY_OPEN if the student has an active or paused game (its id is in `details`),\nunless it has been idle for 24 hours, then it is expired and the new game starts. If the new\ngame then fails (e.g. NOT_ENOUGH_CONTENT), nothing is committed, so the expiry is rolled back\nand the old game stays open until the next start or the expiry job.\n409 NOT_ENOUGH_CONTENT if the language has fewer than 5 locations to draw.\n409 CLASS_ARCHIVED for a student whose enrolment ended when the class was archived.\n404 NOT_FOUND for a class the student is not in, or if the first clue has no recording (also\nin a Practice game). 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.",
+        "operationId": "startGame",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartGameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartGameResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
       }
     },
     "/api/v1/media/{key}": {
@@ -594,6 +768,15 @@
         ],
         "title": "CreateClassResponse"
       },
+      "Difficulty": {
+        "type": "integer",
+        "enum": [
+          1,
+          2,
+          3
+        ],
+        "title": "Difficulty"
+      },
       "EmailRequest": {
         "properties": {
           "email": {
@@ -689,6 +872,45 @@
         "title": "ErrorResponse",
         "description": "The body of every error response, the same shape as AppError.body() (for OpenAPI)."
       },
+      "JoinClassRequest": {
+        "properties": {
+          "access_code": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Access Code",
+            "description": "Eight-character classroom access code. Spaces and hyphens are accepted.",
+            "examples": [
+              "K7PM-3QXD"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "access_code"
+        ],
+        "title": "JoinClassRequest",
+        "description": "Access code provided by a student joining a classroom."
+      },
+      "JoinClassResponse": {
+        "properties": {
+          "class_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Class Id"
+          },
+          "language": {
+            "$ref": "#/components/schemas/Language"
+          }
+        },
+        "type": "object",
+        "required": [
+          "class_id",
+          "language"
+        ],
+        "title": "JoinClassResponse",
+        "description": "Classroom selected after successful enrolment."
+      },
       "Language": {
         "type": "string",
         "enum": [
@@ -755,6 +977,78 @@
           "new_password"
         ],
         "title": "ResetPasswordRequest"
+      },
+      "SessionState": {
+        "type": "string",
+        "enum": [
+          "active",
+          "paused",
+          "completed",
+          "abandoned"
+        ],
+        "title": "SessionState"
+      },
+      "StartGameRequest": {
+        "properties": {
+          "difficulty": {
+            "$ref": "#/components/schemas/Difficulty"
+          },
+          "class_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Id"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Language"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "difficulty"
+        ],
+        "title": "StartGameRequest"
+      },
+      "StartGameResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SessionState"
+          },
+          "position": {
+            "type": "integer",
+            "title": "Position"
+          },
+          "clue_audio_url": {
+            "type": "string",
+            "title": "Clue Audio Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "state",
+          "position",
+          "clue_audio_url"
+        ],
+        "title": "StartGameResponse"
       },
       "StatusResponse": {
         "properties": {

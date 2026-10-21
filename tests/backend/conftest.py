@@ -3,12 +3,14 @@
 import random
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
+from itertools import count
 from typing import Any, TypeVar
 from urllib.parse import parse_qs, unquote, urlsplit
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from jwt import encode
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session
 
@@ -16,8 +18,9 @@ from app.config import get_settings
 from app.db import get_db
 from app.main import create_app
 from app.models.accounts import ClassStaff, User
+from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
 from app.models.engagement import ACCESS_CODE_ALPHABET, AccessCode, Class, ClassEnrollment
-from app.models.enums import ClassStaffRole, Difficulty, Language, UserRole
+from app.models.enums import ClassStaffRole, Difficulty, FeedbackCode, Language, UserRole
 from app.models.game import GameSession, SessionLocation
 from app.services.storage import MEDIA_URL_PREFIX
 
@@ -73,6 +76,19 @@ def transaction_calls(db: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     event.listen(db, "after_commit", record("commit"))
     event.listen(db, "after_soft_rollback", record("rollback"))
     yield calls
+
+
+@pytest.fixture
+def auth_headers() -> Callable[[User], dict[str, str]]:
+    """The Authorization header for a user, with an access token that is valid for an hour."""
+
+    def headers(user: User) -> dict[str, str]:
+        expires = int((datetime.now(UTC) + timedelta(hours=1)).timestamp())
+        key = str(get_settings().access_token_secret_key)
+        token = encode({"sub": str(user.id), "exp": expires}, key, "HS256")
+        return {"Authorization": f"Bearer {token}"}
+
+    return headers
 
 
 @pytest.fixture
@@ -218,5 +234,72 @@ def make_session_location(db: Session) -> Callable[..., SessionLocation]:
             "radius_snapshot": 30,
         }
         return _add(db, SessionLocation(**(values | fields)))
+
+    return make
+
+
+# Unique test room numbers: "TST 1000", "TST 1001", ... (4 digits match the room number format).
+_room_numbers = count(1000)
+
+
+@pytest.fixture
+def make_location(db: Session) -> Callable[..., Location]:
+    """An active location with a new room number, its answer and one entrance."""
+
+    def make(**fields: Any) -> Location:
+        room_number = f"TST {next(_room_numbers)}"
+        values: dict[str, Any] = {
+            "name": f"Test room {room_number}",
+            "building_name": "Test Building",
+            "room_number": room_number,
+            "accepted_answers": [room_number.replace(" ", "")],
+            "gps_points": [{"lat": 49.9394, "lng": -119.3948}],
+            "gps_radius_meters": get_settings().gps_radius_meters,
+        }
+        return _add(db, Location(**(values | fields)))
+
+    return make
+
+
+@pytest.fixture
+def make_clue(db: Session, make_location: Callable[..., Location]) -> Callable[..., Clue]:
+    """A Japanese difficulty 1 clue with no transcript, for a new location unless given one."""
+
+    def make(location: Location | None = None, **fields: Any) -> Clue:
+        values: dict[str, Any] = {"difficulty": Difficulty.BASIC, "language": Language.JA}
+        if "location_id" not in fields:
+            values["location_id"] = (location or make_location()).id
+        return _add(db, Clue(**(values | fields)))
+
+    return make
+
+
+@pytest.fixture
+def make_audio_asset(db: Session, make_clue: Callable[..., Clue]) -> Callable[..., AudioAsset]:
+    """A 5-second uploaded recording that is not primary, for a new clue unless given one."""
+
+    def make(clue: Clue | None = None, **fields: Any) -> AudioAsset:
+        values: dict[str, Any] = {
+            "file_path": f"{uuid4()}.mp3",
+            "provider": "teacher",
+            "duration_seconds": 5.0,
+            "file_size_kb": 80,
+        }
+        if "clue_id" not in fields:
+            values["clue_id"] = (clue or make_clue()).id
+        return _add(db, AudioAsset(**(values | fields)))
+
+    return make
+
+
+@pytest.fixture
+def make_feedback_audio(db: Session) -> Callable[..., FeedbackAudio]:
+    """The phrase `code` in `language` (NAV_START in Japanese by default)."""
+
+    def make(
+        code: str = FeedbackCode.NAV_START, language: str = Language.JA, **fields: Any
+    ) -> FeedbackAudio:
+        values: dict[str, Any] = {"code": code, "language": language, "file_path": f"{uuid4()}.mp3"}
+        return _add(db, FeedbackAudio(**(values | fields)))
 
     return make

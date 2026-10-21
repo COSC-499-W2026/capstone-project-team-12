@@ -4,8 +4,9 @@ Content eligibility and snapshot (Interface card #12, agreed with game): which l
 drawn for a language and difficulty, whether a drawn location is still active, and the content
 snapshot that game copies into `session_locations` when it draws a location. A location is
 eligible when it is active, has a room number and has a primary clue recording in that language
-and difficulty. Content only decides which locations qualify; game does the picking (carry-over,
-preferring uncompleted locations, shuffle exclusions, NOT_ENOUGH_CONTENT).
+and difficulty, and every feedback phrase exists in that language (otherwise a feedback URL could
+fail during the game). Content only decides which locations qualify; game does the picking
+(carry-over, preferring uncompleted locations, shuffle exclusions, NOT_ENOUGH_CONTENT).
 
 These are stubs: the content tables do not exist yet, so they serve 30 fake locations with fixed
 IDs and ignore `db`. The real versions will query `locations` and `clues` through `db` and read
@@ -31,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models.enums import Difficulty, Language
-from app.services.audio import MediaNotFoundError, clue_audio_asset_id
+from app.services.audio import MediaNotFoundError, get_audio_service
 
 __all__ = [
     "Difficulty",
@@ -92,7 +93,12 @@ _STUB_LOCATION_NUMBERS = {
 def eligible_location_ids(
     language: Language, difficulty: Difficulty, db: Session
 ) -> frozenset[UUID]:
-    """IDs of every location that can be drawn for `language` and `difficulty`."""
+    """IDs of every location that can be drawn for `language` and `difficulty`.
+
+    Empty while the language is missing a feedback phrase.
+    """
+    if not get_audio_service().has_all_feedback_phrases(language, db):
+        return frozenset()
     return frozenset(_STUB_LOCATION_NUMBERS)
 
 
@@ -104,7 +110,11 @@ def is_location_active(location_id: UUID, db: Session) -> bool:
 def location_snapshot(
     location_id: UUID, language: Language, difficulty: Difficulty, db: Session
 ) -> LocationSnapshot:
-    """The content snapshot of an eligible location; raises `LocationNotEligibleError` if not."""
+    """The content snapshot of an eligible location; raises `LocationNotEligibleError` if not.
+
+    The feedback phrases are not checked here: game draws only from `eligible_location_ids`,
+    which checks them once per draw instead of once per location.
+    """
     number = _STUB_LOCATION_NUMBERS.get(location_id)
     if number is None:
         raise LocationNotEligibleError(location_id)
@@ -114,7 +124,7 @@ def location_snapshot(
     )
     clue_id = _stub_id("clue", location_id, difficulty.value, language.value)
     try:
-        audio_asset_id = clue_audio_asset_id(clue_id, db)
+        audio_asset_id = get_audio_service().clue_audio_asset_id(clue_id, db)
     except MediaNotFoundError as error:
         # e.g. the recording was deleted after game fetched the eligible locations
         raise LocationNotEligibleError(location_id) from error
