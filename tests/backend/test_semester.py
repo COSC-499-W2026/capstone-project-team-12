@@ -1,6 +1,7 @@
 """Tests for UBC semester expiration boundaries."""
 
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -9,20 +10,26 @@ from app.errors import AppError
 
 
 @pytest.mark.parametrize(
-    ("semester", "expected"),
+    ("semester", "year", "month", "day"),
     [
-        ("2026W1", datetime(2027, 1, 1, 7, tzinfo=UTC)),
-        ("2026W2", datetime(2027, 5, 1, 7, tzinfo=UTC)),
-        ("2026S1", datetime(2026, 7, 1, 7, tzinfo=UTC)),
-        ("2026S2", datetime(2026, 9, 1, 7, tzinfo=UTC)),
+        ("2026W1", 2027, 1, 1),
+        ("2026W2", 2027, 5, 1),
+        ("2026S1", 2026, 7, 1),
+        ("2026S2", 2026, 9, 1),
     ],
 )
 def test_semester_expiration_boundaries(
     semester: str,
-    expected: datetime,
+    year: int,
+    month: int,
+    day: int,
 ) -> None:
-    """Use Vancouver midnight, converted to UTC."""
-    assert semester_expiration(semester) == expected
+    """Require midnight in America/Vancouver."""
+    expected_local = datetime(year, month, day, tzinfo=ZoneInfo("America/Vancouver"))
+    result = semester_expiration(semester)
+
+    assert result.tzinfo == UTC
+    assert result.astimezone(ZoneInfo("America/Vancouver")) == expected_local
 
 
 @pytest.mark.parametrize(
