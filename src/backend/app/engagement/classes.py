@@ -1,7 +1,6 @@
 """Classroom creation operations owned by the engagement component."""
 
 import re
-from uuid import UUID
 
 from sqlalchemy.orm import Session
 
