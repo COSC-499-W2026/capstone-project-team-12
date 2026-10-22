@@ -123,3 +123,54 @@ def test_creation_assigns_exactly_one_owner(
 
     assert len(owners) == 1
     assert owners[0].user_id == teacher.id
+
+
+def test_class_name_is_trimmed(
+    db: Session,
+    make_user: Callable[..., User],
+) -> None:
+    teacher = make_user(role=UserRole.STAFF)
+
+    school_class = create_class(teacher, "  Japanese 101  ", "2026W1", Language.JA, db)
+
+    db.refresh(school_class)
+    assert school_class.name == "Japanese 101"
+
+
+def test_class_name_rejects_nul_character(
+    db: Session,
+    make_user: Callable[..., User],
+) -> None:
+    teacher = make_user(role=UserRole.STAFF)
+
+    with pytest.raises(AppError) as exc:
+        create_class(teacher, "Japanese\x00 101", "2026W1", Language.JA, db)
+
+    assert exc.value.code == ErrorCode.VALIDATION_ERROR
+    assert exc.value.details[0]["field"] == "name"
+    assert db.scalars(select(Class)).all() == []
+
+
+@pytest.mark.parametrize(
+    ("name", "semester", "expected_field"),
+    [
+        ("   ", "2026W1", "name"),
+        ("Test", "invalid", "semester"),
+    ],
+)
+def test_validation_error_identifies_field(
+    db: Session,
+    make_user: Callable[..., User],
+    name: str,
+    semester: str,
+    expected_field: str,
+) -> None:
+    teacher = make_user(role=UserRole.STAFF)
+
+    with pytest.raises(AppError) as exc:
+        create_class(teacher, name, semester, Language.JA, db)
+
+    assert exc.value.code == ErrorCode.VALIDATION_ERROR
+    assert exc.value.details
+    assert exc.value.details[0]["in"] == "body"
+    assert exc.value.details[0]["field"] == expected_field

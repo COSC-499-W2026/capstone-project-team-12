@@ -29,14 +29,43 @@ def create_class(
     if teacher.role != UserRole.STAFF:
         raise AppError(ErrorCode.FORBIDDEN_ROLE)
 
-    if not name.strip():
-        raise AppError(ErrorCode.VALIDATION_ERROR, "Class name cannot be empty")
+    normalized_name = name.strip()
+
+    if not normalized_name:
+        raise AppError(
+            ErrorCode.VALIDATION_ERROR,
+            "Class name cannot be empty",
+            details=[{"in": "body", "field": "name", "message": "Class name cannot be empty"}],
+        )
+
+    if "\x00" in normalized_name:
+        raise AppError(
+            ErrorCode.VALIDATION_ERROR,
+            "Class name contains a NUL character",
+            details=[
+                {
+                    "in": "body",
+                    "field": "name",
+                    "message": "Class name cannot contain NUL characters",
+                }
+            ],
+        )
 
     if not SEMESTER_PATTERN.fullmatch(semester):
-        raise AppError(ErrorCode.VALIDATION_ERROR, "Invalid semester format")
+        raise AppError(
+            ErrorCode.VALIDATION_ERROR,
+            "Invalid semester format",
+            details=[
+                {
+                    "in": "body",
+                    "field": "semester",
+                    "message": "Expected YYYYW1, YYYYW2, YYYYS1, or YYYYS2",
+                }
+            ],
+        )
 
     school_class = Class(
-        name=name.strip(),
+        name=normalized_name,
         semester=semester,
         target_language=language,
     )
