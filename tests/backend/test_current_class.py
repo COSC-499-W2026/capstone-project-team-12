@@ -102,10 +102,12 @@ def test_archived_class_is_explained_only_to_its_students(
     make_user: Callable[..., User],
     two_class_student: TwoClassStudent,
     end_enrolment: Callable[..., None],
+    open_game: Callable[..., GameSession],
 ) -> None:
     roster = two_class_student
     roster.french.archived_at = datetime.now(UTC)  # archiving ends the enrolments of the class
     end_enrolment(roster.french_enrolment, EnrollmentEndReason.ARCHIVED)
+    open_game(roster.student)  # the class is checked before the open game
 
     with pytest.raises(AppError) as error:
         select_class(roster.student, roster.french.id, db)
