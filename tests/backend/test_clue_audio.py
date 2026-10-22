@@ -1,3 +1,4 @@
+import io
 import math
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -37,7 +38,9 @@ def upload(
 
     def add(location: Location | None = None, **options: Any) -> AudioAsset:
         location_id = (location or make_location()).id
-        return add_clue_recording(location_id, *FR_2, make_audio(3), staff.id, db, **options)
+        return add_clue_recording(
+            location_id, *FR_2, io.BytesIO(make_audio(3)), staff.id, db, **options
+        )
 
     return add
 
@@ -99,7 +102,7 @@ def test_stored_file_has_a_random_name_and_no_tags(
     make_audio: Callable[..., bytes],
 ) -> None:
     location = make_location(room_number="SCI 333", accepted_answers=["SCI333"])
-    data = make_audio(3, title="SCI333")
+    data = io.BytesIO(make_audio(3, title="SCI333"))
 
     asset = add_clue_recording(location.id, *FR_2, data, make_user().id, db)
 
@@ -115,7 +118,7 @@ def test_unknown_location_stores_nothing(
     make_audio: Callable[..., bytes],
 ) -> None:
     with pytest.raises(AppError) as error:
-        add_clue_recording(uuid4(), *FR_2, make_audio(3), make_user().id, db)
+        add_clue_recording(uuid4(), *FR_2, io.BytesIO(make_audio(3)), make_user().id, db)
 
     assert error.value.code == ErrorCode.NOT_FOUND
     assert not list(stored_media_dir.iterdir())
@@ -130,7 +133,7 @@ def test_file_is_deleted_when_its_row_cannot_be_saved(
     unknown_user = uuid4()  # breaks the uploaded_by foreign key on flush
 
     with pytest.raises(IntegrityError):
-        add_clue_recording(make_location().id, *FR_2, make_audio(3), unknown_user, db)
+        add_clue_recording(make_location().id, *FR_2, io.BytesIO(make_audio(3)), unknown_user, db)
 
     assert not list(stored_media_dir.iterdir())
 
@@ -144,7 +147,7 @@ def test_rejected_audio_stores_nothing_and_creates_no_clue(
     location = make_location()
 
     with pytest.raises(AppError) as error:
-        add_clue_recording(location.id, *FR_2, b"not audio", make_user().id, db)
+        add_clue_recording(location.id, *FR_2, io.BytesIO(b"not audio"), make_user().id, db)
 
     assert error.value.code == ErrorCode.UNSUPPORTED_MEDIA_TYPE
     assert not list(stored_media_dir.iterdir())

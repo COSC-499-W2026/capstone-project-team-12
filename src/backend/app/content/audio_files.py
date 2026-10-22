@@ -1,14 +1,16 @@
 """Checks an uploaded clue or feedback recording and re-encodes it (spec, File Handling).
 
 A recording must be MP3 or M4A (recognised by its first bytes, not its name), at most
-`max_media_file_mb` and at most `max_audio_seconds` long. Its first audio stream is decoded and
-encoded again into a new file, so nothing but the sound survives: no tags, chapters, cover art or
-bytes appended after the audio (such as ID3v1 or Lyrics3 tags), so a title such as "SCI333" can
-never reveal an answer. Packets that do not decode as audio (such as those appended bytes) are
-skipped. An MP3 stays MP3; an M4A is always stored as AAC, which every browser can play (an ALAC
-M4A could not be played in Chrome or Firefox). The length is counted from the decoded samples,
-which leave out the silence encoders add when the file records it (MP3 encoder headers, most
-M4A files); up to 50 ms of unrecorded padding is allowed over the limit.
+`max_media_file_mb` and at most `max_audio_seconds` long. An MP3 file must hold MPEG layer III
+audio (not layer I or II) and an M4A an MP4 audio file of a M4A brand holding AAC or ALAC (not a
+.mov or .3gp, nor FLAC or Opus in MP4). At most one byte over the size limit is read. Its first
+audio stream is decoded and encoded again into a new file, so nothing but the sound survives: no
+tags, chapters, cover art or bytes appended after the audio (such as ID3v1 or Lyrics3 tags), so a
+title such as "SCI333" can never reveal an answer. Packets that do not decode as audio (such as
+those appended bytes) are skipped. An MP3 stays MP3; an M4A is always stored as AAC, which every
+browser can play (an ALAC M4A could not be played in Chrome or Firefox). The length is counted
+from the decoded samples, which leave out the silence encoders add when the file records it (MP3
+encoder headers, most M4A files); up to 50 ms of unrecorded padding is allowed over the limit.
 
 A file with a video track is rejected (only an MP3's embedded cover picture is allowed, and
 dropped), as is a file without any audio that decodes.
@@ -18,7 +20,7 @@ import io
 import math
 from dataclasses import dataclass, field
 from fractions import Fraction
-from typing import cast
+from typing import BinaryIO, cast
 
 import av
 from av.audio.stream import AudioStream
@@ -55,18 +57,25 @@ class _AudioFormat:
     demuxer: str  # FFmpeg's names; forcing the demuxer stops FFmpeg guessing another format
     muxer: str
     encoder: str
+    codecs: frozenset[str]  # the decoders of the audio an upload of this format may hold
     options: dict[str, str] = field(default_factory=dict)
 
 
 # bitexact: no encoder version strings; id3v2_version 0: no ID3 tag at all
-_MP3 = _AudioFormat(".mp3", "mp3", "mp3", "libmp3lame", {"id3v2_version": "0"})
-_M4A = _AudioFormat(".m4a", "mp4", "ipod", "aac")
+_MP3 = _AudioFormat(
+    ".mp3", "mp3", "mp3", "libmp3lame", frozenset({"mp3", "mp3float"}), {"id3v2_version": "0"}
+)
+_M4A = _AudioFormat(".m4a", "mp4", "ipod", "aac", frozenset({"aac", "alac"}))
+# the major brands of M4A files; other ISO media files (.mov "qt  ", .3gp "3gp4") are not M4A
+_M4A_BRANDS = frozenset({b"M4A ", b"M4B ", b"mp41", b"mp42", b"isom", b"iso2"})
 
 
-def check_audio(data: bytes) -> CheckedAudio:
-    """The recording `data` re-encoded without its metadata, or AppError: 413 FILE_TOO_LARGE,
-    415 UNSUPPORTED_MEDIA_TYPE (not MP3 or M4A audio, or unreadable) or 422 AUDIO_TOO_LONG."""
+def check_audio(upload: BinaryIO) -> CheckedAudio:
+    """The recording read from `upload` re-encoded without its metadata, or AppError:
+    413 FILE_TOO_LARGE, 415 UNSUPPORTED_MEDIA_TYPE (not MP3 or M4A audio, or unreadable) or
+    422 AUDIO_TOO_LONG. Reads one byte more than the size limit at most."""
     max_mb = get_settings().max_media_file_mb
+    data = upload.read(max_mb * _BYTES_PER_MB + 1)
     if len(data) > max_mb * _BYTES_PER_MB:
         raise AppError(ErrorCode.FILE_TOO_LARGE, f"Audio files can be at most {max_mb} MB")
     audio_format = _detect_format(data)
@@ -83,7 +92,7 @@ def _detect_format(data: bytes) -> _AudioFormat:
     # FFmpeg's MP3 reader then finds no MP3 frames and rejects it)
     if data.startswith(b"ID3") or (len(data) >= 2 and data[0] == 0xFF and data[1] >= 0xE0):
         return _MP3
-    if data[4:8] == b"ftyp":  # an MP4 container; M4A is MP4 with only audio
+    if data[4:8] == b"ftyp" and data[8:12] in _M4A_BRANDS:  # M4A is MP4 with only audio
         return _M4A
     raise _unsupported()
 
@@ -95,7 +104,7 @@ def _reencode(data: bytes, audio_format: _AudioFormat) -> tuple[bytes, float]:
         with av.open(
             io.BytesIO(data), "r", format=audio_format.demuxer, metadata_errors="ignore"
         ) as source:
-            stream = _only_audio_stream(source)
+            stream = _only_audio_stream(source, audio_format)
             options = {"fflags": "+bitexact", **audio_format.options}
             with av.open(output, "w", format=audio_format.muxer, options=options) as target:
                 duration = _transcode(source, stream, target, audio_format.encoder)
@@ -104,12 +113,15 @@ def _reencode(data: bytes, audio_format: _AudioFormat) -> tuple[bytes, float]:
     return output.getvalue(), duration
 
 
-def _only_audio_stream(source: InputContainer) -> AudioStream:
+def _only_audio_stream(source: InputContainer, audio_format: _AudioFormat) -> AudioStream:
     if any(not video.disposition & Disposition.attached_pic for video in source.streams.video):
         raise _unsupported("Upload an audio recording, not a video")
     if not source.streams.audio:
         raise _unsupported()
-    return source.streams.audio[0]
+    stream = source.streams.audio[0]
+    if stream.codec_context.name not in audio_format.codecs:  # e.g. MPEG layer II in an MP3
+        raise _unsupported()
+    return stream
 
 
 def _transcode(

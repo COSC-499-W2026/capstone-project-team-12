@@ -310,8 +310,8 @@ def make_feedback_audio(db: Session) -> Callable[..., FeedbackAudio]:
 
 
 # Uploaded recordings for the audio checks: (FFmpeg container format, encoder) per kind of file.
-# "adts" is raw AAC, which is neither MP3 nor M4A; the others are MP3 or MP4 files holding other
-# codecs, which are accepted and re-encoded.
+# "adts" is raw AAC, "mp2" MPEG layer II and the "*-in-mp4" kinds FLAC or Opus in MP4: none of them
+# is MP3 or M4A. "alac" is an M4A holding lossless audio, which is accepted and re-encoded.
 _AUDIO_FILE_FORMATS = {
     "mp3": ("mp3", "libmp3lame"),
     "m4a": ("ipod", "aac"),

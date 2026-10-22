@@ -10,6 +10,7 @@ saved here, but a transaction rolled back later (by the caller) leaves an unused
 the spec has no cleanup job yet.
 """
 
+from typing import BinaryIO
 from uuid import UUID
 
 from sqlalchemy import select
@@ -28,19 +29,19 @@ def add_clue_recording(
     location_id: UUID,
     difficulty: Difficulty,
     language: Language,
-    data: bytes,
+    upload: BinaryIO,
     uploaded_by: UUID,
     db: Session,
     make_primary: bool = False,
 ) -> AudioAsset:
-    """Store the recording `data` for the clue, creating the clue if needed.
+    """Store the recording read from `upload` for the clue, creating the clue if needed.
 
     It becomes the primary recording if the clue has none yet or `make_primary` is set.
     AppError: NOT_FOUND for an unknown location (checked before the file is), and the audio
     checks' FILE_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE or AUDIO_TOO_LONG. Flushes, never commits.
     """
     get_location(location_id, db)
-    checked = check_audio(data)
+    checked = check_audio(upload)
     # locked, so two uploads to the clue at once cannot both find no primary and take it
     clue = get_or_create_clue(location_id, difficulty, language, db, lock=True)
     current = db.scalars(
