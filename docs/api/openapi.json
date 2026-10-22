@@ -67,7 +67,7 @@
           "classes"
         ],
         "summary": "Join a classroom",
-        "description": "Enrol the authenticated student using a classroom access code. A student may have only one active classroom per language. Students who voluntarily left may rejoin, but students removed by a teacher cannot. Teachers cannot join as students, and teaching assistants cannot join classes they assist. Successful enrolment makes the classroom the student's current class and updates their preferred app language to the classroom's target language. Repeating a successful request with the original access code returns success without consuming another use, even if the code has expired or reached its usage limit. Deactivated codes are rejected.",
+        "description": "Enrol the authenticated student using a classroom access code. A student may have only one active classroom per language. Students who voluntarily left may rejoin, but students removed by a teacher cannot. Teachers cannot join as students, and teaching assistants cannot join classes they assist. Successful enrolment also makes it the student's current class. Repeating a successful request with the original access code returns success without consuming another use, even if the code has expired or reached its usage limit. Deactivated codes are rejected.",
         "operationId": "joinClass",
         "requestBody": {
           "content": {

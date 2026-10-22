@@ -47,9 +47,7 @@ class JoinClassResponse(BaseModel):
         "Students who voluntarily left may rejoin, but students removed "
         "by a teacher cannot. Teachers cannot join as students, and "
         "teaching assistants cannot join classes they assist. "
-        "Successful enrolment makes the classroom the student's current "
-        "class and updates their preferred app language to the classroom's "
-        "target language. "
+        "Successful enrolment also makes it the student's current class. "
         "Repeating a successful request with the original access code "
         "returns success without consuming another use, even if the code "
         "has expired or reached its usage limit. Deactivated codes are rejected."
@@ -66,7 +64,7 @@ def join_class(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> JoinClassResponse:
-    """Join a classroom and update the student's app language atomically."""
+    """Join a classroom and select it in one transaction."""
     class_id = validate_code_and_enrol(
         user.id,
         request.access_code,
@@ -79,7 +77,6 @@ def join_class(
         raise AppError(ErrorCode.INTERNAL_ERROR)
 
     user.current_class_id = class_id
-    user.preferred_language = language
 
     db.commit()
 

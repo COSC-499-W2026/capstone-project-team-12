@@ -43,7 +43,7 @@ def test_successful_join(
     make_class: Callable[..., Class],
     make_access_code: Callable[..., AccessCode],
 ) -> None:
-    """Joining a class updates the student's current class and app language."""
+    """Joining a class preserves the student's Practice language."""
     student = make_user(preferred_language=Language.FR)
     school_class = make_class(target_language=Language.JA)
     access_code = make_access_code(school_class)
@@ -61,7 +61,7 @@ def test_successful_join(
     db.refresh(access_code)
 
     assert student.current_class_id == school_class.id
-    assert student.preferred_language == Language.JA
+    assert student.preferred_language == Language.FR
     assert access_code.uses_count == 1
 
     enrollment = (
@@ -340,7 +340,44 @@ def test_voluntarily_left_student_can_rejoin(
     assert enrollment.end_reason is None
     assert enrollment.left_at is None
     assert student.current_class_id == school_class.id
-    assert student.preferred_language == Language.JA
+    assert student.preferred_language == Language.FR
+
+
+@pytest.mark.parametrize("code_state", ["expired", "exhausted"])
+def test_voluntarily_left_student_cannot_rejoin_with_unavailable_code(
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_access_code: Callable[..., AccessCode],
+    make_enrollment: Callable[..., ClassEnrollment],
+    code_state: str,
+) -> None:
+    """A student who left must use a currently valid access code to rejoin."""
+    student = make_user()
+    school_class = make_class()
+    access_code = make_access_code(school_class)
+    enrollment = make_enrollment(student, school_class)
+
+    enrollment.is_active = False
+    enrollment.end_reason = EnrollmentEndReason.LEFT
+    enrollment.left_at = enrollment.joined_at + timedelta(minutes=1)
+
+    if code_state == "expired":
+        access_code.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    else:
+        access_code.max_uses = 1
+        access_code.uses_count = 1
+
+    db.flush()
+
+    response = join_as(client, student, access_code.code)
+
+    assert_error(response, 400, ErrorCode.INVALID_ACCESS_CODE)
+
+    db.refresh(enrollment)
+    assert not enrollment.is_active
+    assert enrollment.end_reason == EnrollmentEndReason.LEFT
 
 
 def test_teacher_cannot_join_as_student(
@@ -417,4 +454,4 @@ def test_ta_can_join_another_class_in_same_language(
 
     db.refresh(student)
     assert student.current_class_id == target_class.id
-    assert student.preferred_language == Language.JA
+    assert student.preferred_language == Language.FR
