@@ -2,8 +2,9 @@
 student's open game."""
 
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 
+import pytest
 from sqlalchemy.orm import Session
 
 from app.game.interface import end_open_sessions, get_open_session_id
@@ -128,11 +129,26 @@ def test_no_open_game_gives_none(
     assert get_open_session_id(never_played.id, db) is None
 
 
+def _freeze_clock(monkeypatch: pytest.MonkeyPatch, frozen: datetime) -> None:
+    """Make datetime.now() in app.game.interface return `frozen`, so a test can hit the cutoff."""
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> "FrozenDatetime":
+            return cls.fromtimestamp(frozen.timestamp(), tz)
+
+    monkeypatch.setattr("app.game.interface.datetime", FrozenDatetime)
+
+
 def test_a_game_idle_for_the_expiry_time_does_not_count(
-    db: Session, make_user: Callable[..., User], make_game_session: Callable[..., GameSession]
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     limit = session_idle_limit()
     now = datetime.now(UTC)
+    _freeze_clock(monkeypatch, now)
     just_inside, at_the_limit, long_idle = make_user(), make_user(), make_user()
     inside_game = make_game_session(
         just_inside, last_activity_at=now - limit + timedelta(minutes=1)
