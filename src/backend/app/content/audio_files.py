@@ -13,7 +13,8 @@ from the decoded samples, which leave out the silence encoders add when the file
 encoder headers, most M4A files); up to 50 ms of unrecorded padding is allowed over the limit.
 
 A file with a video track is rejected (only an MP3's embedded cover picture is allowed, and
-dropped), as is a file without any audio that decodes.
+dropped), as is a file without any audio that decodes. A recording under 5 ms is too short to
+store a length (VALIDATION_ERROR: it is MP3 or M4A audio, so not UNSUPPORTED_MEDIA_TYPE).
 """
 
 import io
@@ -153,9 +154,13 @@ def _transcode(
                 )
             for resampled in resampler.resample(frame):
                 target.mux(encoded.encode(resampled))
-    duration = round(float(samples_seconds), 2)
-    if not duration:  # no audio, or under 5 ms: audio_assets needs a length above 0
+    if not samples_seconds:
         raise _unsupported()
+    duration = round(float(samples_seconds), 2)
+    if not duration:  # under 5 ms: audio_assets needs a length above 0
+        message = "The recording is too short"
+        details = [{"in": "body", "field": "file", "message": message}]
+        raise AppError(ErrorCode.VALIDATION_ERROR, message, details)
     for resampled in resampler.resample(None):
         target.mux(encoded.encode(resampled))
     target.mux(encoded.encode(None))
