@@ -11,7 +11,7 @@ from app.accounts.interface import get_current_user
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.start import start_game
-from app.game.status import find_current_game
+from app.game.status import find_current_game, get_game
 from app.models.accounts import User
 from app.models.enums import (
     Difficulty,
@@ -111,6 +111,7 @@ class GameStatusResponse(BaseModel):
     locations: list[LocationProgressResponse]
 
 
+# before /{game_id}, so "current" isn't read as an id
 @games_router.get(
     "/current",
     operation_id="getCurrentGame",
@@ -134,4 +135,26 @@ def current_game(
     db.commit()
     if status is None:
         raise AppError(ErrorCode.NOT_FOUND, "No open game")
+    return GameStatusResponse.model_validate(status, from_attributes=True)
+
+
+@games_router.get(
+    "/{game_id}",
+    operation_id="getGame",
+    response_model=GameStatusResponse,
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND),
+)
+def game_status(
+    game_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> GameStatusResponse:
+    """One of the student's games, open or finished, with the status of each location.
+
+    404 NOT_FOUND for another student's game, the same as for an id that doesn't exist. An open
+    game idle for 24 hours is expired when it is read. 403 ACCOUNT_DISABLED for a disabled
+    account.
+    """
+    status = get_game(user.id, game_id, db)
+    db.commit()
     return GameStatusResponse.model_validate(status, from_attributes=True)
