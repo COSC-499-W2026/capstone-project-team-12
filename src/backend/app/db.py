@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from datetime import datetime
 
 from sqlalchemy import DateTime, MetaData, Text, create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
@@ -28,6 +29,12 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
     # str columns are Postgres text, and every timestamp is timestamptz (stored in UTC)
     type_annotation_map = {str: Text(), datetime: DateTime(timezone=True)}
+
+
+def violated_constraint(error: IntegrityError) -> str | None:
+    """The name of the constraint an IntegrityError broke, or None if the driver didn't say."""
+    diagnostics = getattr(error.orig, "diag", None)
+    return None if diagnostics is None else diagnostics.constraint_name
 
 
 def get_db() -> Iterator[Session]:

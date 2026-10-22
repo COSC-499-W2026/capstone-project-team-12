@@ -37,6 +37,17 @@ class FeedbackCode(StrEnum):
     SESSION_COMPLETE = "SESSION_COMPLETE"
 
 
+class VerificationType(StrEnum):
+    """How Stage 2 checks that the student found a location; other types are Future Work."""
+
+    ROOM_NUMBER = "room_number"  # OCR reads the room-number sign
+
+
+class AudioSourceType(StrEnum):
+    UPLOADED = "uploaded"  # recorded and uploaded by a content manager
+    AI_GENERATED = "ai_generated"  # TTS when the location is drawn (Future Work, spec AudioService)
+
+
 class UserRole(StrEnum):
     STUDENT = "student"
     STAFF = "staff"  # teachers; a TA is a class_staff row, not a role

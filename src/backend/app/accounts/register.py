@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from app.accounts.password import hash_password, validate_password_security
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
-from app.models.enums import UserRole
+from app.models.enums import EmailKind, UserRole
+from app.services.email import EmailService
 
 
 class RegisterRequest(BaseModel):
@@ -53,9 +54,14 @@ def register_account(request: RegisterRequest, db: Session) -> None:
             role=UserRole.STUDENT,
             can_manage_content=False,
         )
+<<<<<<< HEAD
 
         db.execute(stmt)
         db.flush()
+=======
+        user = db.scalars(stmt.returning(User)).one()
+        EmailService.queue_email(user, EmailKind.VERIFY_EMAIL, db)  # spec: sign-up sends it
+>>>>>>> main
 
         #  TODO: Validate access code here
 
@@ -70,6 +76,8 @@ def register_account(request: RegisterRequest, db: Session) -> None:
             raise AppError(
                 ErrorCode.USERNAME_TAKEN, "The username you have chosen is already in use."
             ) from err
+        # any other constraint is a real error
+        raise
 
 
 def username_exists(username: str, db: Session) -> bool:
