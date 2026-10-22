@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.errors import ErrorCode
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import Class
-from app.models.enums import ClassStaffRole, UserRole
+from app.models.enums import UserRole
 
 URL = "/api/v1/me/classes"
 
@@ -194,6 +194,7 @@ def test_non_owner_staff_cannot_update_class(
     assert response.status_code == 403, response.text
     assert response.json()["error"]["code"] == ErrorCode.FORBIDDEN_ROLE.value
 
+
 def test_archived_class_cannot_be_updated(
     client: TestClient,
     make_user: Callable[..., User],
@@ -217,6 +218,7 @@ def test_archived_class_cannot_be_updated(
 
     # The request is rejected before the classroom name is modified.
     assert school_class.name == original_name
+
 
 def test_unauthenticated_update_rejected(
     client: TestClient,
