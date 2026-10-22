@@ -1,4 +1,4 @@
-"""GET /api/v1/games/current (A25) over HTTP.
+"""GET /api/v1/games/current and GET /api/v1/games/{id} (A25) over HTTP.
 
 The rules are tested in test_game_status.py. These check the status codes, the response body and
 that an expiry done while reading is committed.
@@ -7,6 +7,7 @@ that an expiry done while reading is committed.
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -126,13 +127,65 @@ def test_expiry_while_reading_is_committed(
     assert (game.state, game.end_reason) == (SessionState.ABANDONED, SessionEndReason.EXPIRED)
 
 
-def test_needs_a_signed_in_user(client: TestClient) -> None:
-    response = client.get(f"{URL}/current")
+def test_own_game_by_id(
+    get: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+) -> None:
+    student = make_user()
+    game = make_game_session(student, state=SessionState.COMPLETED, completed_at=datetime.now(UTC))
+
+    response = get(student, str(game.id))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == SessionState.COMPLETED.value
+
+
+def test_expiry_while_reading_by_id_is_committed(
+    db: Session,
+    get: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    transaction_calls: list[str],
+) -> None:
+    student = make_user()
+    idle_since = datetime.now(UTC) - session_idle_limit() - timedelta(minutes=1)
+    game = make_game_session(student, last_activity_at=idle_since)
+    transaction_calls.clear()
+
+    response = get(student, str(game.id))
+
+    assert response.json()["end_reason"] == SessionEndReason.EXPIRED.value
+    assert transaction_calls.count("commit") == 1
+
+
+def test_another_students_game_or_an_unknown_id_is_404(
+    get: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+) -> None:
+    student = make_user()
+    game = make_game_session(student)
+
+    assert_error(get(make_user(), str(game.id)), 404, ErrorCode.NOT_FOUND)
+    assert_error(get(student, str(uuid4())), 404, ErrorCode.NOT_FOUND)
+
+
+def test_an_id_that_is_not_a_uuid_is_422(
+    get: Callable[..., Response], make_user: Callable[..., User]
+) -> None:
+    assert get(make_user(), "not-a-uuid").status_code == 422
+
+
+@pytest.mark.parametrize("path", ["current", str(uuid4())])
+def test_needs_a_signed_in_user(client: TestClient, path: str) -> None:
+    response = client.get(f"{URL}/{path}")
 
     assert_error(response, 401, ErrorCode.NOT_AUTHENTICATED)
 
 
+@pytest.mark.parametrize("path", ["current", str(uuid4())])
 def test_disabled_account_is_403(
-    get: Callable[..., Response], make_user: Callable[..., User]
+    get: Callable[..., Response], make_user: Callable[..., User], path: str
 ) -> None:
-    assert_error(get(make_user(is_active=False), "current"), 403, ErrorCode.ACCOUNT_DISABLED)
+    assert_error(get(make_user(is_active=False), path), 403, ErrorCode.ACCOUNT_DISABLED)
