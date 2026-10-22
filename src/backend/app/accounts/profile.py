@@ -31,7 +31,7 @@ def current_class_id(user: User, db: Session) -> UUID | None:
 def select_class(user: User, class_id: UUID | None, db: Session) -> None:
     """Make an active class of the student the current one, or None to switch to Practice.
 
-    Raises 404 NOT_FOUND for any other class, so it doesn't show which classes exist, and 409
+    Raises 404 NOT_FOUND for any other class, so it doesn't show which classes exist, and then 409
     SESSION_ALREADY_OPEN while the student has an open game. Choosing the class the student
     already sees as current always succeeds, even if the stored class is stale, since nothing
     changes for them. It is judged after the lock, so a change another request just committed
@@ -40,9 +40,9 @@ def select_class(user: User, class_id: UUID | None, db: Session) -> None:
     """
     _lock(user, db)
     if class_id != current_class_id(user, db):
-        _refuse_if_game_open(user, db)
         if class_id is not None and not engagement.is_actively_enrolled(user.id, class_id, db):
             raise AppError(ErrorCode.NOT_FOUND, "Class not found")
+        _refuse_if_game_open(user, db)
     # Also saves a fallback class the student chose again, since reads never write it back.
     user.current_class_id = class_id
     db.flush()
