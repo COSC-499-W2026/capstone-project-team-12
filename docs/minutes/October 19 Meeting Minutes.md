@@ -17,6 +17,7 @@ Kaedyn    Mia    Eddy   Fabiha
 
 ### Weekly goals
 - Kaedyn's goal is to wrap up A1, A2, A4 so that Mia can finish A3.
+- Eddy is working on closing #60 (A20).
 
 ### Client Meeting 2
 - The team discussed potentially creating a mini front-end demo if the client meeting is in November. The possibility of Kaedyn creating the front-end demo was discussed due to the backend workload easing off later in the term.
