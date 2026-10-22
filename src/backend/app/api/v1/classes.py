@@ -94,7 +94,6 @@ class CreateClassResponse(BaseModel):
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
         HTTPStatus.FORBIDDEN,
-        HTTPStatus.CONFLICT,
     ),
 )
 def create_class_endpoint(
