@@ -26,10 +26,7 @@ from app.models.enums import Difficulty, Language
 
 
 def list_locations(db: Session) -> list[Location]:
-    """Every location, inactive ones too (so they can be reactivated), by room number.
-
-    Not paginated: a campus has a few dozen locations.
-    """
+    """Every location, inactive ones too (to reactivate), by room number; a few dozen: unpaged."""
     return list(db.scalars(select(Location).order_by(Location.room_number, Location.name)))
 
 
@@ -64,7 +61,7 @@ def set_clue_text(
     """Set the clue's transcript, creating the clue if needed. A blank transcript is stored as
     null (no transcript yet)."""
     if text and "\x00" in text:  # PostgreSQL text cannot hold it
-        raise AppError(ErrorCode.VALIDATION_ERROR, "The clue text contains an invalid character")
+        raise _invalid_field("text", "The clue text contains an invalid character")
     get_location(location_id, db)
     clue = get_or_create_clue(location_id, difficulty, language, db)
     clue.text = (text or "").strip() or None
@@ -112,5 +109,10 @@ def _saving_room_number(room_number: str, db: Session) -> Iterator[None]:
         if violated_constraint(error) != "uq_locations_room_number":
             raise
         message = f"Another location already has room number {room_number}"
-        details = [{"field": "room_number", "message": message}]
-        raise AppError(ErrorCode.VALIDATION_ERROR, message, details) from error
+        raise _invalid_field("room_number", message) from error
+
+
+def _invalid_field(field: str, message: str) -> AppError:
+    """VALIDATION_ERROR naming the body field, in the shape of the request validation errors."""
+    details = [{"in": "body", "field": field, "message": message}]
+    return AppError(ErrorCode.VALIDATION_ERROR, message, details)

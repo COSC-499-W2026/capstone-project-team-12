@@ -41,10 +41,6 @@ def test_room_number_is_stored_as_on_the_sign(typed: str) -> None:
     assert location.accepted_answers == ["SCI333"]
 
 
-def test_four_digit_room_number_is_accepted() -> None:
-    assert fields(room_number="ART 1001").room_number == "ART 1001"
-
-
 @pytest.mark.parametrize(
     "typed", ["SC 333", "SCIE 333", "SCI 33", "SCI 33333", "SCI  333", "SCI_333", "SCI ３３３", ""]
 )
@@ -109,8 +105,9 @@ def test_numbers_the_database_cannot_hold_are_refused(number_field: str, bad: in
 
 
 def test_create_location_saves_every_field(db: Session) -> None:
+    # one building has 4-digit room numbers
     location = create_location(
-        fields(name=" Lab ", floor_number=3, gps_points=[ENTRANCE, ENTRANCE]), db
+        fields(name=" Lab ", floor_number=3, room_number="art 1001", gps_points=[ENTRANCE] * 2), db
     )
 
     db.expire_all()
@@ -120,8 +117,8 @@ def test_create_location_saves_every_field(db: Session) -> None:
         "name": "Lab",
         "building_name": "Science Building",
         "floor_number": 3,
-        "room_number": "SCI 333",
-        "accepted_answers": ["SCI333"],
+        "room_number": "ART 1001",
+        "accepted_answers": ["ART1001"],
         "gps_points": [ENTRANCE, ENTRANCE],
         "gps_radius_meters": get_settings().gps_radius_meters,
         "is_active": True,
@@ -137,17 +134,24 @@ def test_room_number_of_an_inactive_location_cannot_be_reused(
         create_location(fields(room_number="sci333"), db)
 
     assert error.value.code == ErrorCode.VALIDATION_ERROR
-    assert error.value.details[0]["field"] == "room_number"
+    details = error.value.details
+    assert details == [{"in": "body", "field": "room_number", "message": error.value.message}]
 
 
 def test_duplicate_room_number_keeps_the_work_done_before_it(
     db: Session, make_location: Callable[..., Location]
 ) -> None:
     make_location(room_number="SCI 333", accepted_answers=["SCI333"])
+    other = make_location()
     kept = create_location(fields(room_number="SCI 444"), db)
 
-    with pytest.raises(AppError):
-        create_location(fields(), db)
+    for save in (
+        lambda: create_location(fields(), db),
+        lambda: replace_location(other.id, fields(), db),
+    ):
+        with pytest.raises(AppError) as error:
+            save()
+        assert error.value.code == ErrorCode.VALIDATION_ERROR
 
     assert db.get(Location, kept.id) is kept
     assert list_locations(db)  # the session is still usable
@@ -187,18 +191,6 @@ def test_replace_location_replaces_every_field_and_can_reactivate(
     assert replaced.accepted_answers == ["SCI333", "SCI334"]
     assert replaced.floor_number is None
     assert replaced.is_active
-
-
-def test_replace_location_refuses_another_locations_room_number(
-    db: Session, make_location: Callable[..., Location]
-) -> None:
-    make_location(room_number="SCI 333", accepted_answers=["SCI333"])
-    location = make_location()
-
-    with pytest.raises(AppError) as error:
-        replace_location(location.id, fields(), db)
-
-    assert error.value.code == ErrorCode.VALIDATION_ERROR
 
 
 def test_deactivate_location_keeps_the_row(
@@ -249,6 +241,7 @@ def test_clue_text_the_database_cannot_hold_is_refused(
         set_clue_text(make_location().id, Difficulty.BASIC, Language.JA, "a\x00b", db)
 
     assert error.value.code == ErrorCode.VALIDATION_ERROR
+    assert error.value.details == [{"in": "body", "field": "text", "message": error.value.message}]
 
 
 @pytest.mark.parametrize("text", ["", "   ", None])
@@ -263,13 +256,17 @@ def test_blank_clue_text_is_stored_as_null(
     assert clue.text is None
 
 
-def test_services_flush_but_never_commit(db: Session, transaction_calls: list[str]) -> None:
+def test_services_flush_but_never_commit(
+    db: Session, monkeypatch: pytest.MonkeyPatch, transaction_calls: list[str]
+) -> None:
+    # The savepoints of create and replace fire commit events too, so spy on Session.commit itself
+    committed: list[str] = []
+    monkeypatch.setattr(db, "commit", lambda: committed.append("commit"))
     location = create_location(fields(), db)
     replace_location(location.id, fields(name="Renamed"), db)
     set_clue_text(location.id, Difficulty.BASIC, Language.JA, "text", db)
     deactivate_location(location.id, db)
 
     assert "flush" in transaction_calls
-    # each of the two saves with a room number uses a savepoint, which fires a commit event too
-    assert transaction_calls.count("commit") == 2
+    assert not committed
     assert "rollback" not in transaction_calls
