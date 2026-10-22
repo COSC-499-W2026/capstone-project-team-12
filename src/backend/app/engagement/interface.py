@@ -22,7 +22,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.errors import AppError, ErrorCode
-from app.models.accounts import ClassStaff, User
+from app.models.accounts import ClassStaff
 from app.models.engagement import AccessCode, Class, ClassEnrollment
 from app.models.enums import (
     ClassStaffRole,
@@ -30,6 +30,7 @@ from app.models.enums import (
     Language,
     UserRole,
 )
+from app.services.locks import lock_user
 
 __all__ = [
     "EngagementResult",
@@ -345,7 +346,7 @@ def validate_code_and_enrol(
     normalized_code = "".join(code.upper().split()).replace("-", "")
     now = datetime.now(UTC)
 
-    user = db.scalar(select(User).where(User.id == student_id).with_for_update())
+    user = lock_user(student_id, db)
 
     if user is None:
         raise AppError(ErrorCode.FORBIDDEN_ROLE)
