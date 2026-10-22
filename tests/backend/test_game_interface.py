@@ -4,9 +4,11 @@ student's open game."""
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy.orm import Session
 
-from app.game.interface import end_open_sessions, get_open_session_id
+from app.errors import AppError, ErrorCode
+from app.game.interface import end_open_sessions, get_open_session_id, refuse_if_game_open
 from app.game.sessions import session_idle_limit
 from app.models.accounts import User
 from app.models.engagement import Class
@@ -159,3 +161,17 @@ def test_looking_for_an_open_game_only_reads(
     get_open_session_id(student.id, db)
 
     assert transaction_calls == []
+
+
+def test_refuse_if_game_open(
+    db: Session, make_user: Callable[..., User], make_game_session: Callable[..., GameSession]
+) -> None:
+    student = make_user()
+    refuse_if_game_open(student.id, db)  # no game, nothing to refuse
+    game = make_game_session(student)
+
+    with pytest.raises(AppError) as error:
+        refuse_if_game_open(student.id, db)
+
+    assert error.value.code == ErrorCode.SESSION_ALREADY_OPEN
+    assert error.value.details == [{"session_id": str(game.id)}]
