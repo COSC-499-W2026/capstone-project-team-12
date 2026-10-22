@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, object_session
 
 from app.engagement import interface as engagement
 from app.errors import AppError, ErrorCode
-from app.game.interface import get_open_session_id
+from app.game.interface import refuse_if_game_open
 from app.models.accounts import User
 from app.models.enums import Language
 from app.services.locks import lock_user
@@ -46,7 +46,7 @@ def select_class(user: User, class_id: UUID | None, db: Session) -> None:
             if engagement.enrolment_ended_by_archive(user.id, class_id, db):
                 raise AppError(ErrorCode.CLASS_ARCHIVED)
             raise AppError(ErrorCode.NOT_FOUND, "Class not found")
-        _refuse_if_game_open(user, db)
+        refuse_if_game_open(user.id, db)
     # Also saves a fallback class the student chose again, since reads never write it back.
     user.current_class_id = class_id
     db.flush()
@@ -62,7 +62,7 @@ def set_practice_language(user: User, language: Language, db: Session) -> None:
     _lock(user, db)
     if language == user.preferred_language:
         return
-    _refuse_if_game_open(user, db)
+    refuse_if_game_open(user.id, db)
     user.preferred_language = language
     db.flush()
 
@@ -73,13 +73,3 @@ def _lock(user: User, db: Session) -> None:
     if object_session(user) is not db:
         raise ValueError("the student must be loaded with the same db session")
     lock_user(user.id, db)
-
-
-def _refuse_if_game_open(user: User, db: Session) -> None:
-    game_id = get_open_session_id(user.id, db)
-    if game_id is not None:
-        raise AppError(
-            ErrorCode.SESSION_ALREADY_OPEN,
-            "Finish or quit your current game first",
-            details=[{"session_id": str(game_id)}],
-        )

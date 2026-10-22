@@ -14,7 +14,7 @@ from app.db import violated_constraint
 from app.engagement import interface as engagement
 from app.errors import AppError, ErrorCode
 from app.game.draw import draw_locations
-from app.game.sessions import abandon_sessions, is_idle, session_idle_limit
+from app.game.sessions import abandon_sessions, game_already_open, is_idle, session_idle_limit
 from app.models.accounts import User
 from app.models.enums import (
     Difficulty,
@@ -107,11 +107,7 @@ def _check_no_open_game(student_id: UUID, db: Session) -> None:
     if game is None:
         return
     if not is_idle(game, datetime.now(UTC), session_idle_limit()):
-        raise AppError(
-            ErrorCode.SESSION_ALREADY_OPEN,
-            "Finish or quit your current game first",
-            details=[{"session_id": str(game.id)}],
-        )
+        raise game_already_open(game.id)
     abandon_sessions(SessionEndReason.EXPIRED, [GameSession.id == game.id], db)
 
 
