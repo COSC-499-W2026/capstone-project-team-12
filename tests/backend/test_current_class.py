@@ -83,9 +83,11 @@ def test_class_the_student_is_not_in_is_not_found(
     two_class_student: TwoClassStudent,
     make_class: Callable[..., Class],
     end_enrolment: Callable[..., None],
+    open_game: Callable[..., GameSession],
 ) -> None:
     roster = two_class_student
     end_enrolment(roster.french_enrolment)
+    open_game(roster.student)  # the class is checked first, so an open game doesn't show it
 
     # someone else's class, a class that doesn't exist and a class the student left look the same
     for class_id in (make_class().id, uuid4(), roster.french.id):
