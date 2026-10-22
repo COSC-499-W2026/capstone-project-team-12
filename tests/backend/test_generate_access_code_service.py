@@ -254,21 +254,20 @@ def test_generation_does_not_commit(
     make_class: Callable[..., Class],
     make_class_staff: Callable[..., object],
     expires_at: datetime,
-    monkeypatch: pytest.MonkeyPatch,
+    transaction_calls: list[str],
 ) -> None:
     owner = make_user(role=UserRole.STAFF)
     school_class = make_class()
     make_class_staff(school_class, owner)
 
-    def forbidden_commit() -> None:
-        pytest.fail("generate_access_code must not commit")
-
-    monkeypatch.setattr(db, "commit", forbidden_commit)
+    transaction_calls.clear()
 
     result = generate_access_code(school_class.id, owner, expires_at, db)
 
     assert result.id is not None
     assert db.execute(select(AccessCode).where(AccessCode.id == result.id)).scalar_one() is result
+    assert "commit" not in transaction_calls
+    assert "rollback" not in transaction_calls
 
 
 def test_existing_code_collision_is_retried(
