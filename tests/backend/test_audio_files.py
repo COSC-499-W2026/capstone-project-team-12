@@ -10,7 +10,7 @@ import pytest
 from av.stream import Disposition
 
 from app.config import get_settings
-from app.content.audio_files import check_audio
+from app.content.audio_files import CheckedAudio, check_audio
 from app.errors import AppError, ErrorCode
 
 ONE_MB = 1024 * 1024
@@ -19,9 +19,13 @@ ID3V1_TAG = b"TAG" + b"SCI333".ljust(30, b"\0") + bytes(95)  # 128 bytes after t
 LYRICS3_TAG = b"LYRICSBEGININD0000210ETT00006SCI333000035LYRICS200"
 
 
+def check(data: bytes) -> CheckedAudio:
+    return check_audio(io.BytesIO(data))
+
+
 def rejection(data: bytes) -> tuple[ErrorCode, HTTPStatus]:
     with pytest.raises(AppError) as error:
-        check_audio(data)
+        check(data)
     return error.value.code, error.value.status
 
 
@@ -37,19 +41,19 @@ def test_a_valid_recording_is_kept_with_its_length_and_without_its_tags(
     original = make_audio(3, kind, title="SCI333")
     assert b"SCI333" in original  # the tag the check must remove
 
-    checked = check_audio(original)
+    checked = check(original)
 
     assert checked.suffix == suffix
     assert checked.duration_seconds == pytest.approx(3, abs=0.05)  # AAC may keep its padding
     assert b"SCI333" not in checked.data
     assert checked.size_kb == -(-len(checked.data) // 1024)
-    assert check_audio(checked.data).duration_seconds == pytest.approx(3, abs=0.05)  # it plays
+    assert check(checked.data).duration_seconds == pytest.approx(3, abs=0.05)  # it plays
 
 
 def test_an_mp3_keeps_no_id3_tag(make_audio: Callable[..., bytes]) -> None:
     original = make_audio(1, title="SCI333")
     assert original.startswith(b"ID3")
-    assert not check_audio(original).data.startswith(b"ID3")
+    assert not check(original).data.startswith(b"ID3")
 
 
 @pytest.mark.parametrize(
@@ -59,32 +63,37 @@ def test_an_mp3_keeps_no_id3_tag(make_audio: Callable[..., bytes]) -> None:
 def test_bytes_after_the_audio_are_dropped(
     make_audio: Callable[..., bytes], appended: bytes
 ) -> None:
-    checked = check_audio(make_audio(2) + appended)
+    checked = check(make_audio(2) + appended)
     assert b"SCI333" not in checked.data
     assert checked.duration_seconds == 2
 
 
-@pytest.mark.parametrize(
-    ("kind", "suffix", "codec"),
-    [
-        ("alac", ".m4a", "aac"),  # lossless M4A, which Chrome and Firefox cannot play
-        ("flac-in-mp4", ".m4a", "aac"),
-        ("opus-in-mp4", ".m4a", "aac"),
-        ("mp2", ".mp3", "mp3float"),  # MPEG audio layer 2 starts like an MP3 frame
-    ],
-)
-def test_other_codecs_are_stored_as_mp3_or_aac(
-    make_audio: Callable[..., bytes], kind: str, suffix: str, codec: str
+def test_an_alac_m4a_is_stored_as_aac(make_audio: Callable[..., bytes]) -> None:
+    # lossless M4A, which Chrome and Firefox cannot play
+    checked = check(make_audio(2, "alac"))
+    assert (checked.suffix, codec_of(checked.data, checked.suffix)) == (".m4a", "aac")
+
+
+@pytest.mark.parametrize("kind", ["mp2", "flac-in-mp4", "opus-in-mp4"])
+def test_audio_that_is_not_mp3_or_m4a_codec_is_rejected(
+    make_audio: Callable[..., bytes], kind: str
 ) -> None:
-    checked = check_audio(make_audio(2, kind))
-    assert (checked.suffix, codec_of(checked.data, checked.suffix)) == (suffix, codec)
+    # an MPEG layer II file starts like an MP3 frame
+    assert rejection(make_audio(2, kind)) == UNSUPPORTED
+
+
+def test_an_audio_only_mov_is_rejected(make_audio: Callable[..., bytes]) -> None:
+    m4a = make_audio(1, "m4a")
+    mov = m4a.replace(b"ftypM4A ", b"ftypqt  ", 1)  # a QuickTime file has the same layout
+    assert mov != m4a
+    assert rejection(mov) == UNSUPPORTED
 
 
 def test_a_tag_in_an_unknown_text_encoding_is_dropped_too(
     make_audio: Callable[..., bytes],
 ) -> None:
     tagged = make_audio(1, "m4a", title="SCIxx3").replace(b"SCIxx3", b"\xff\xfeSC33")  # not UTF-8
-    assert b"\xff\xfeSC33" not in check_audio(tagged).data
+    assert b"\xff\xfeSC33" not in check(tagged).data
 
 
 @pytest.mark.parametrize("kind", ["mp3", "m4a"])
@@ -92,7 +101,7 @@ def test_a_recording_exactly_at_the_time_limit_is_accepted(
     make_audio: Callable[..., bytes], kind: str
 ) -> None:
     limit = get_settings().max_audio_seconds
-    assert check_audio(make_audio(limit, kind)).duration_seconds == pytest.approx(limit, abs=0.05)
+    assert check(make_audio(limit, kind)).duration_seconds == pytest.approx(limit, abs=0.05)
 
 
 @pytest.mark.parametrize("kind", ["mp3", "m4a"])
@@ -103,11 +112,18 @@ def test_a_recording_over_the_time_limit_is_rejected(
     assert rejection(too_long) == (ErrorCode.AUDIO_TOO_LONG, HTTPStatus.UNPROCESSABLE_ENTITY)
 
 
-def test_a_file_over_the_size_limit_is_rejected_before_it_is_read(
+def test_a_file_over_the_size_limit_is_rejected_without_reading_it_all(
     make_audio: Callable[..., bytes],
 ) -> None:
-    too_big = make_audio(1) + bytes(get_settings().max_media_file_mb * ONE_MB)
-    assert rejection(too_big) == (ErrorCode.FILE_TOO_LARGE, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+    limit = get_settings().max_media_file_mb * ONE_MB
+    too_big = io.BytesIO(make_audio(1) + bytes(limit))
+    with pytest.raises(AppError) as error:
+        check_audio(too_big)
+    assert (error.value.code, error.value.status) == (
+        ErrorCode.FILE_TOO_LARGE,
+        HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+    )
+    assert too_big.tell() == limit + 1  # one byte past the limit, not the rest
 
 
 PNG = b"\x89PNG\r\n\x1a\n" + bytes(200)
@@ -194,7 +210,7 @@ def test_an_mp3_with_a_cover_picture_is_accepted_without_it(
     header = b"ID3\x03\x00\x00" + bytes((size >> shift) & 0x7F for shift in (21, 14, 7, 0))
     with_cover = header + frame + mp3[10 + tag_size :]
 
-    checked = check_audio(with_cover)
+    checked = check(with_cover)
 
     assert b"SCI333" not in checked.data
     assert checked.duration_seconds == 1
