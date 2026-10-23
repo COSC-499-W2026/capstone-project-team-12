@@ -9,7 +9,7 @@ from app.accounts.login import login_account
 from app.accounts.register import RegisterRequest, register_account
 from app.accounts.tokens import TokenResponse, rotate_tokens
 from app.db import get_db
-from app.errors import error_responses
+from app.errors import error_responses, ErrorCode, AppError
 
 auth_router = APIRouter(prefix="/auth")
 
@@ -30,35 +30,37 @@ def register(request: RegisterRequest, db: Annotated[Session, Depends(get_db)]) 
     return {"status": "ok"}
 
 
-@auth_router.post("/login", tags=["login"], status_code=200)
+@auth_router.post(
+    "/login",
+    tags=["login"],
+    status_code=200,
+    operation_id="loginUser",
+    responses=error_responses(HTTPStatus.UNAUTHORIZED),
+)
 def login(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: Annotated[Session, Depends(get_db)],
-    response: Response,
-) -> dict[str, str]:
-    """Sign in with email and password (all roles)"""
-    tokens: TokenResponse = login_account(form_data, db)
-
-    refresh_token = str(tokens.refresh_token.get("token"))
-    response.set_cookie(
-        "refresh", refresh_token, secure=True, httponly=True
-    )  #  refresh token set through cookie, httponly and secure
-
-    return tokens.access_token  #  Only access token is returned through json
+) -> TokenResponse:
+    """Sign in with email and password (all roles)
+    
+    Returns an access token (expiry 60 minutes) and a refresh token (expiry 14 days).
+    """
+    return login_account(form_data, db)
 
 
-@auth_router.post("/refresh", tags=["refresh"], status_code=200)
+@auth_router.post(
+    "/refresh",
+    tags=["refresh"],
+    status_code=200,
+    operation_id="refreshTokens",
+    responses=error_responses(HTTPStatus.UNAUTHORIZED),
+)
 def refresh(
-    response: Response,
     db: Annotated[Session, Depends(get_db)],
-    refresh: str | None = Cookie(default=None),
-) -> dict[str, str] | None:
+    refresh_token: Annotated[str | None, Cookie()] = None
+) -> TokenResponse:
     """Rotates refresh token of user and returns a new access token and refresh token"""
-    tokens = rotate_tokens(str(refresh), db)
-
-    refresh_token = str(tokens.refresh_token.get("token"))
-    response.set_cookie(
-        "refresh", refresh_token, secure=True, httponly=True
-    )  #  refresh token set through cookie, httponly and secure
-
-    return tokens.access_token  #  Only access token is returned through json
+    if refresh_token is None:
+        raise AppError(ErrorCode.NOT_AUTHENTICATED, "Invalid token: please sign in again")
+    else:
+        return rotate_tokens(refresh_token, db)

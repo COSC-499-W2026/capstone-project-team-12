@@ -10,6 +10,7 @@ from jwt import InvalidTokenError, decode
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.accounts.tokens import revoke_refresh_tokens
 from app.config import get_settings
 from app.db import get_db
 from app.errors import AppError, ErrorCode
@@ -99,3 +100,7 @@ def can_manage_content(user: Annotated[User, Depends(get_current_user)]) -> None
             ErrorCode.FORBIDDEN_ROLE,
             "You do not have the required permissions to perform this action.",
         )
+
+
+def revoke_all_refresh_tokens(user_id: UUID, db: Session) -> None:
+    revoke_refresh_tokens(user_id, db)

@@ -54,14 +54,8 @@ def register_account(request: RegisterRequest, db: Session) -> None:
             role=UserRole.STUDENT,
             can_manage_content=False,
         )
-<<<<<<< HEAD
-
-        db.execute(stmt)
-        db.flush()
-=======
         user = db.scalars(stmt.returning(User)).one()
         EmailService.queue_email(user, EmailKind.VERIFY_EMAIL, db)  # spec: sign-up sends it
->>>>>>> main
 
         #  TODO: Validate access code here
 

@@ -1,5 +1,6 @@
 import os
 import zoneinfo
+import hashlib
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -21,8 +22,8 @@ REFRESH_TOKEN_EXPIRES_DAYS = 14
 
 
 class TokenResponse(BaseModel):
-    access_token: dict[str, str]
-    refresh_token: dict[str, str]
+    access_token: str
+    refresh_token: str
 
 
 def encode_jwt(data: dict[str, Any], expires_at: timedelta, key: str) -> str:
@@ -34,12 +35,13 @@ def encode_jwt(data: dict[str, Any], expires_at: timedelta, key: str) -> str:
 
 
 def decode_jwt(jwt: str, key: str) -> dict[str, Any]:
-    """Decodes provided jwt and returns its contents"""
+    """Decodes provided JWT and returns its contents"""
     decoded_jwt = decode(jwt, key, [ALGORITHM])
     return decoded_jwt
 
 
 def create_access_token(data: dict[str, Any]) -> str:
+    """Creates a new access token with the provided data."""
     expire = now() + timedelta(ACCESS_TOKEN_EXPIRES_MINUTES)
     data.update({"exp": expire})
     return encode_jwt(data, timedelta(ACCESS_TOKEN_EXPIRES_MINUTES), str(ACCESS_TOKEN_KEY))
@@ -53,10 +55,9 @@ def create_refresh_token(user_id: UUID, db: Session, family_id: UUID | None = No
     expires = now() + timedelta(days=REFRESH_TOKEN_EXPIRES_DAYS)
     new_family_id = family_id or uuid4()
     jwt = encode_jwt(
-        {"sub": user_id}, timedelta(days=REFRESH_TOKEN_EXPIRES_DAYS), str(REFRESH_TOKEN_KEY)
+        {"sub": str(user_id)}, timedelta(days=REFRESH_TOKEN_EXPIRES_DAYS), str(REFRESH_TOKEN_KEY)
     )
-    salt = gensalt(12)
-    jwt_hash = hashpw(salt, jwt.encode("utf-8")).decode("utf-8")
+    jwt_hash = hashlib.sha256(jwt.encode()).hexdigest()
     stmt = insert(RefreshToken).values(
         id=token_id,
         user_id=user_id,
@@ -75,7 +76,7 @@ def rotate_tokens(token: str, db: Session) -> TokenResponse:
     JWT access code and refresh token in the same family."""
     valid_token_id = validate_refresh_token(token, db)
     if valid_token_id is None:
-        raise AppError(ErrorCode.INVALID_TOKEN)
+        raise AppError(ErrorCode.NOT_AUTHENTICATED)
     result = db.execute(
         select(RefreshToken.user_id, RefreshToken.family_id).where(
             RefreshToken.id == valid_token_id
@@ -95,19 +96,18 @@ def rotate_tokens(token: str, db: Session) -> TokenResponse:
 
     db.commit()
 
-    new_access_token = create_access_token({"sub": user_id})
+    new_access_token = create_access_token({"sub": str(user_id)})
     new_refresh_token = create_refresh_token(user_id, db, family_id)
 
     return TokenResponse(
-        access_token={"token": new_access_token, "type": "bearer"},
-        refresh_token={"token": new_refresh_token, "type": "refresh"},
+        access_token=new_access_token,
+        refresh_token=new_refresh_token
     )
 
 
 def validate_refresh_token(token: str, db: Session) -> UUID | None:
     """Returns the id of the token if it is valid, and None otherwise"""
-    payload = decode(token, REFRESH_TOKEN_KEY, [ALGORITHM])
-    user_id = payload.get("sub")
+    hash = hashlib.sha256(token.encode()).hexdigest()
     result = db.execute(
         select(
             RefreshToken.id,
@@ -116,18 +116,17 @@ def validate_refresh_token(token: str, db: Session) -> UUID | None:
             RefreshToken.rotated_at,
             RefreshToken.token_hash,
         )
-        .where(RefreshToken.user_id == user_id)
+        .where(RefreshToken.token_hash == hash)
         .order_by(desc(RefreshToken.created_at))
     )
     if result:
         for row in result:
             id = row[0]
-            token_bytes = token.encode("utf-8")
             if (
                 row[1] > now()
                 and row[2] is None
                 and row[3] is None
-                and checkpw(token_bytes, row[4].encode("utf-8"))
+                and row[4] == hash
             ):
                 return id
     return None

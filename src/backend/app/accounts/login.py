@@ -20,12 +20,12 @@ def login_account(form_data: OAuth2PasswordRequestForm, db: Session) -> TokenRes
     if result:
         for row in result:
             user_id = row[0]
-            jwt_data = {"sub": user_id}
+            jwt_data = {"sub": str(user_id)}
             new_access_token = create_access_token(jwt_data)
             new_refresh_token = create_refresh_token(user_id, db)
             return TokenResponse(
-                access_token={"token": new_access_token, "type": "bearer"},
-                refresh_token={"token": new_refresh_token, "type": "refresh"},
+                access_token=new_access_token,
+                refresh_token=new_refresh_token,
             )
 
     raise AppError(
