@@ -192,6 +192,24 @@ def test_another_students_game_or_an_unknown_id_is_404(
     assert_error(get(student, str(uuid4())), 404, ErrorCode.NOT_FOUND)
 
 
+def test_another_students_idle_game_is_404_and_is_not_expired(
+    db: Session,
+    get: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    transaction_calls: list[str],
+) -> None:
+    idle_since = datetime.now(UTC) - session_idle_limit() - timedelta(minutes=1)
+    game = make_game_session(make_user(), last_activity_at=idle_since)
+    transaction_calls.clear()
+
+    assert_error(get(make_user(), str(game.id)), 404, ErrorCode.NOT_FOUND)
+
+    assert "commit" not in transaction_calls
+    db.refresh(game)
+    assert (game.state, game.end_reason) == (SessionState.ACTIVE, None)
+
+
 def test_an_id_that_is_not_a_uuid_is_422(
     get: Callable[..., Response], make_user: Callable[..., User]
 ) -> None:
