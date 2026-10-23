@@ -32,7 +32,7 @@ def statements(db: Session) -> Iterator[list[str]]:
 
 
 def _assert_locked_before_the_game_check(statements: list[str]) -> None:
-    lock = next(i for i, s in enumerate(statements) if "FOR UPDATE" in s and "users" in s)
+    lock = next(i for i, s in enumerate(statements) if "FOR NO KEY UPDATE" in s and "users" in s)
     game_check = next(i for i, s in enumerate(statements) if "game_sessions" in s)
     assert lock < game_check
 
