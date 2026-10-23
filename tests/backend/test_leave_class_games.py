@@ -4,24 +4,19 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import patch
-from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.engagement.interface import leave_class
 from app.errors import ErrorCode
 from app.models.accounts import User
 from app.models.engagement import AccessCode, Class, ClassEnrollment
 from app.models.enums import (
-    EnrollmentEndReason,
-    Language,
     LocationStatus,
     SessionEndReason,
     SessionState,
     SkipReason,
-    UserRole,
 )
 from app.models.game import GameSession, SessionLocation
 
