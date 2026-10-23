@@ -77,7 +77,6 @@ def join_class(
         raise AppError(ErrorCode.INTERNAL_ERROR)
 
     user.current_class_id = class_id
-
     db.commit()
 
     return JoinClassResponse(
