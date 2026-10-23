@@ -35,7 +35,6 @@ def assert_error(response: Any, status: int, code: ErrorCode) -> None:
     assert response.status_code == status, response.text
     assert response.json()["error"]["code"] == code.value
 
-
 def test_successful_join(
     client: TestClient,
     db: Session,
@@ -50,26 +49,26 @@ def test_successful_join(
     formatted = f"{access_code.code[:4]}-{access_code.code[4:]}".lower()
 
     response = join_as(client, student, formatted)
-
     assert response.status_code == 200, response.text
     assert response.json() == {
         "class_id": str(school_class.id),
         "language": Language.JA.value,
     }
-
     db.refresh(student)
     db.refresh(access_code)
-
     assert student.current_class_id == school_class.id
     assert student.preferred_language == Language.FR
     assert access_code.uses_count == 1
-
     enrollment = (
-        db.query(ClassEnrollment).filter_by(student_id=student.id, class_id=school_class.id).one()
+        db.query(ClassEnrollment)
+        .filter_by(
+            student_id=student.id,
+            class_id=school_class.id,
+        )
+        .one()
     )
     assert enrollment.is_active
     assert enrollment.access_code_id == access_code.id
-
 
 @pytest.mark.parametrize("token", [None, "invalid-token"])
 def test_authentication_required(
@@ -357,8 +356,7 @@ def test_voluntarily_left_student_cannot_rejoin_with_unavailable_code(
     student = make_user()
     school_class = make_class()
     access_code = make_access_code(school_class)
-    enrollment = make_enrollment(student, school_class)
-
+    enrollment = make_enrollment(student, school_class, access_code_id=access_code.id)
     enrollment.is_active = False
     enrollment.end_reason = EnrollmentEndReason.LEFT
     enrollment.left_at = enrollment.joined_at + timedelta(minutes=1)
@@ -376,8 +374,12 @@ def test_voluntarily_left_student_cannot_rejoin_with_unavailable_code(
     assert_error(response, 400, ErrorCode.INVALID_ACCESS_CODE)
 
     db.refresh(enrollment)
+    db.refresh(access_code)
+
     assert not enrollment.is_active
     assert enrollment.end_reason == EnrollmentEndReason.LEFT
+    assert enrollment.access_code_id == access_code.id
+    assert access_code.uses_count == (1 if code_state == "exhausted" else 0)
 
 
 def test_teacher_cannot_join_as_student(
