@@ -85,8 +85,10 @@ def test_times_are_utc_with_a_z(
     student = make_user()
     make_game_session(student, state=SessionState.PAUSED, paused_at=datetime.now(UTC))
 
-    body = get(student, "current").json()
+    response = get(student, "current")
 
+    assert response.status_code == 200
+    body = response.json()
     assert body["started_at"].endswith("Z")
     assert body["paused_at"].endswith("Z")
 
