@@ -19,7 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 from app.models.columns import created_at, in_check, language_check, updated_at, uuid_pk
-from app.models.enums import EnrollmentEndReason
+from app.models.enums import EnrollmentEndReason, PointsSourceType
 
 # Letters and digits that are hard to mix up when read aloud or copied by hand:
 # no 0/O, no 1/I/L. The code generator must pick from these characters too.
@@ -122,20 +122,20 @@ class PointsLedger(Base):
     __tablename__ = "points_ledger"
     __table_args__ = (
         UniqueConstraint("user_id", "source_type", "source_ref"),
-        in_check(
-            "source_type",
-            ("location", "daily_challenge", "streak_milestone"),
-            name="source_type",
+        in_check("source_type", PointsSourceType, name="source_type"),
+        ForeignKeyConstraint(
+            ["class_id", "language"],
+            ["classes.id", "classes.target_language"],
         ),
         language_check(),
         CheckConstraint("points > 0", name="points_positive"),
     )
 
     id: Mapped[UUID] = uuid_pk()
-    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
     source_type: Mapped[str]
     source_ref: Mapped[str]
-    class_id: Mapped[UUID | None] = mapped_column(ForeignKey("classes.id"))
+    class_id: Mapped[UUID | None]
     language: Mapped[str]
     points: Mapped[int]
     created_at: Mapped[datetime] = created_at()
