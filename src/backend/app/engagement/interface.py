@@ -44,6 +44,7 @@ __all__ = [
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
+    "require_active_enrolment",
     "validate_code_and_enrol",
 ]
 
@@ -313,6 +314,27 @@ def is_class_archived(class_id: UUID, db: Session) -> bool:
     """
     school_class = db.get(Class, class_id)
     return school_class is not None and school_class.archived_at is not None
+
+
+def require_active_enrolment(student_id: UUID, class_id: UUID, db: Session) -> Language:
+    """Return the class language if the student is actively enrolled in a class that isn't archived.
+
+    Raises 404 NOT_FOUND, the same for a class that doesn't exist and one the student isn't in, so
+    a student can't find out which classes exist. Raises 409 CLASS_ARCHIVED, but only for a student
+    whose enrolment ended when the class was archived. Starting a game and selecting a class both
+    use it.
+    """
+    language = get_class_language(class_id, db)
+    not_found = AppError(ErrorCode.NOT_FOUND, "Class not found")
+    if language is None:
+        raise not_found
+    if is_class_archived(class_id, db):
+        if enrolment_ended_by_archive(student_id, class_id, db):
+            raise AppError(ErrorCode.CLASS_ARCHIVED)
+        raise not_found
+    if not is_actively_enrolled(student_id, class_id, db):
+        raise not_found
+    return language
 
 
 def validate_code_and_enrol(
