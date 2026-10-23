@@ -131,6 +131,7 @@ def test_class_left_before_it_was_archived_is_not_found(
     with pytest.raises(AppError) as error:
         select_class(roster.student, roster.french.id, db)
     assert error.value.code == ErrorCode.NOT_FOUND
+    assert roster.student.current_class_id == roster.japanese.id
 
 
 def test_student_from_another_session_is_refused(
