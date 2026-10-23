@@ -61,7 +61,94 @@
         }
       }
     },
-    "/api/v1/me/classes": {
+    "/api/v1/me/classes/join": {
+      "post": {
+        "tags": [
+          "classes"
+        ],
+        "summary": "Join a classroom",
+        "description": "Enrol the authenticated student using a classroom access code. A student may have only one active classroom per language. Students who voluntarily left may rejoin, but students removed by a teacher cannot. Teachers cannot join as students, and teaching assistants cannot join classes they assist. Successful enrolment also makes it the student's current class. Repeating a successful request with the original access code returns success without consuming another use, even if the code has expired or reached its usage limit. Deactivated codes are rejected.",
+        "operationId": "joinClass",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinClassRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JoinClassResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/teacher/classes": {
       "post": {
         "tags": [
           "classes"
@@ -128,7 +215,7 @@
         ]
       }
     },
-    "/api/v1/me/classes/{class_id}": {
+    "/api/v1/teacher/classes/{class_id}": {
       "patch": {
         "tags": [
           "classes"
@@ -225,93 +312,6 @@
             }
           }
         }
-      }
-    },
-    "/api/v1/me/classes/join": {
-      "post": {
-        "tags": [
-          "classes"
-        ],
-        "summary": "Join a classroom",
-        "description": "Enrol the authenticated student using a classroom access code. A student may have only one active classroom per language. Students who voluntarily left may rejoin, but students removed by a teacher cannot. Teachers cannot join as students, and teaching assistants cannot join classes they assist. Successful enrolment also makes it the student's current class. Repeating a successful request with the original access code returns success without consuming another use, even if the code has expired or reached its usage limit. Deactivated codes are rejected.",
-        "operationId": "joinClass",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JoinClassRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JoinClassResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "OAuth2PasswordBearer": []
-          }
-        ]
       }
     },
     "/api/v1/auth/verify-email": {

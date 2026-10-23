@@ -304,3 +304,28 @@ def test_existing_code_collision_is_retried(
 
     assert result.code == "BBBBBBBB"
     assert result.code != existing.code
+
+@pytest.mark.parametrize(
+    ("semester", "expected"),
+    [
+        ("2026W1", datetime(2027, 1, 1, 7, tzinfo=UTC)),
+        ("2026W2", datetime(2027, 5, 1, 7, tzinfo=UTC)),
+        ("2027S1", datetime(2027, 7, 1, 7, tzinfo=UTC)),
+        ("2027S2", datetime(2027, 9, 1, 7, tzinfo=UTC)),
+    ],
+)
+def test_default_expiration_is_semester_end(
+    semester: str,
+    expected: datetime,
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., object],
+) -> None:
+    owner = make_user(role=UserRole.STAFF)
+    school_class = make_class(semester=semester)
+    make_class_staff(school_class, owner)
+
+    result = generate_access_code(school_class.id, owner, None, db)
+
+    assert result.expires_at == expected
