@@ -9,7 +9,12 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
 
-engine = create_engine(get_settings().database_url, pool_pre_ping=True)
+# Every connection returns timestamps in UTC, whatever the server's own time zone is, so the API
+# always writes them with a trailing Z.
+DB_CONNECT_ARGS = {"options": "-c timezone=utc"}
+engine = create_engine(
+    get_settings().database_url, pool_pre_ping=True, connect_args=DB_CONNECT_ARGS
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 # Fixed constraint names, so a later migration can drop or change a constraint by name.
