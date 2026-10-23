@@ -11,7 +11,6 @@ from app.models.accounts import User
 from app.models.engagement import Achievement, UserAchievement
 from app.models.enums import Language
 
-
 EXPECTED_KEYS = {
     "first_step",
     "starter",
