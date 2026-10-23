@@ -152,9 +152,11 @@ def game_status(
     """One of the student's games, open or finished, with the status of each location.
 
     404 NOT_FOUND for another student's game, the same as for an id that doesn't exist. An open
-    game idle for 24 hours is expired when it is read. 403 ACCOUNT_DISABLED for a disabled
-    account.
+    game that has been idle for the expiry limit (24 hours by default) is expired when it is read.
+    403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.
     """
+    if user.role == UserRole.ADMIN:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
     status = get_game(user.id, game_id, db)
     db.commit()
     return GameStatusResponse.model_validate(status, from_attributes=True)
