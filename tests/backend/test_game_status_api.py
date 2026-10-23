@@ -12,12 +12,14 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from httpx2 import Response
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.db import engine
 from app.errors import ErrorCode
 from app.game.sessions import session_idle_limit
 from app.models.accounts import User
-from app.models.enums import LocationStatus, SessionEndReason, SessionState
+from app.models.enums import LocationStatus, SessionEndReason, SessionState, UserRole
 from app.models.game import GameSession, SessionLocation
 
 URL = "/api/v1/games"
@@ -72,6 +74,31 @@ def test_current_game_is_returned_without_giving_locations_away(
     assert (body["session_id"], body["state"]) == (str(game.id), SessionState.ACTIVE.value)
     assert set(body["locations"][0]) == LOCATION_FIELDS  # no room, answers or coordinates
     assert "SCI333" not in response.text
+
+
+def test_times_are_utc_with_a_z(
+    get: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+) -> None:
+    student = make_user()
+    make_game_session(student, state=SessionState.PAUSED, paused_at=datetime.now(UTC))
+
+    body = get(student, "current").json()
+
+    assert body["started_at"].endswith("Z")
+    assert body["paused_at"].endswith("Z")
+
+
+def test_the_app_connects_with_the_utc_time_zone() -> None:
+    # the server's own time zone would otherwise decide how the times are written
+    with engine.connect() as connection:
+        assert connection.scalar(text("SHOW timezone")) == "UTC"
+
+
+def test_admin_is_403(get: Callable[..., Response], make_user: Callable[..., User]) -> None:
+    # the same as starting a game: admins don't play
+    assert_error(get(make_user(role=UserRole.ADMIN), "current"), 403, ErrorCode.FORBIDDEN_ROLE)
 
 
 def test_no_open_game_is_404(get: Callable[..., Response], make_user: Callable[..., User]) -> None:

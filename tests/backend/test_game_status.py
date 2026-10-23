@@ -20,16 +20,14 @@ from app.models.enums import (
     SessionState,
     SkipReason,
 )
-from app.models.game import GameSession, SessionLocation
-
-OPEN_STATES = [SessionState.ACTIVE, SessionState.PAUSED]
+from app.models.game import OPEN_SESSION_STATES, GameSession, SessionLocation
 
 
 def _idle_since() -> datetime:
     return datetime.now(UTC) - session_idle_limit() - timedelta(minutes=1)
 
 
-@pytest.mark.parametrize("state", OPEN_STATES)
+@pytest.mark.parametrize("state", OPEN_SESSION_STATES)
 def test_open_game_is_found_with_its_locations_in_order(
     db: Session,
     make_game_session: Callable[..., GameSession],

@@ -20,6 +20,7 @@ from app.models.enums import (
     SessionEndReason,
     SessionState,
     SkipReason,
+    UserRole,
 )
 
 games_router = APIRouter(prefix="/games", tags=["games"])
@@ -68,9 +69,10 @@ def start_new_game(
     are never sent, only the first clue's audio link.
 
     409 SESSION_ALREADY_OPEN if the student has an active or paused game (its id is in `details`),
-    unless it has been idle for 24 hours, then it is expired and the new game starts. If the new
-    game then fails (e.g. NOT_ENOUGH_CONTENT), nothing is committed, so the expiry is rolled back
-    and the old game stays open until the next start or the expiry job.
+    unless it has been idle for the expiry limit (24 hours by default), then it is expired and the
+    new game starts. If the new game then fails (e.g. NOT_ENOUGH_CONTENT), nothing is committed,
+    so the expiry is rolled back and the old game stays open until the next start or the expiry
+    job.
     409 NOT_ENOUGH_CONTENT if the language has fewer than 5 locations to draw.
     409 CLASS_ARCHIVED for a student whose enrolment ended when the class was archived.
     404 NOT_FOUND for a class the student is not in, or if the first clue has no recording (also
@@ -122,9 +124,12 @@ def current_game(
 ) -> GameStatusResponse:
     """The student's open (active or paused) game, with the status of each location.
 
-    404 NOT_FOUND if there is none. A game idle for 24 hours is expired when it is read, so it
-    gives 404 too. 403 ACCOUNT_DISABLED for a disabled account.
+    404 NOT_FOUND if there is none. A game that has been idle for the expiry limit (24 hours by
+    default) is expired when it is read, so it gives 404 too. 403 FORBIDDEN_ROLE for an admin,
+    ACCOUNT_DISABLED for a disabled account.
     """
+    if user.role == UserRole.ADMIN:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
     status = find_current_game(user.id, db)
     # commit before the 404, so an expiry done while reading is kept
     db.commit()

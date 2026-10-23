@@ -15,7 +15,7 @@ from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.db import get_db
+from app.db import DB_CONNECT_ARGS, get_db
 from app.main import create_app
 from app.models.accounts import ClassStaff, User
 from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
@@ -27,7 +27,9 @@ from app.services.storage import MEDIA_URL_PREFIX
 
 @pytest.fixture(scope="session")
 def test_engine() -> Iterator[Engine]:
-    engine = create_engine(get_settings().database_url, pool_pre_ping=True)
+    engine = create_engine(
+        get_settings().database_url, pool_pre_ping=True, connect_args=DB_CONNECT_ARGS
+    )
     yield engine
     engine.dispose()
 
