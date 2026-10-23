@@ -287,7 +287,7 @@ def test_a_student_can_join_again_after_leaving(
     old = make_enrollment(student, make_class())
     old.is_active = False
     old.end_reason = EnrollmentEndReason.LEFT
-    old.left_at = datetime.now(UTC)
+    old.left_at = max(datetime.now(UTC), old.joined_at)
     db.flush()
     make_enrollment(student, make_class())
 
@@ -327,12 +327,11 @@ def test_unknown_end_reason_is_rejected(
             left_at=datetime.now(UTC),
         )
 
-
 def leave(enrollment: ClassEnrollment) -> None:
+    """Mark an enrolment as left without violating timestamp constraints."""
     enrollment.is_active = False
     enrollment.end_reason = EnrollmentEndReason.LEFT
-    enrollment.left_at = datetime.now(UTC)
-
+    enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
 
 def test_a_student_can_rejoin_the_same_class(
     db: Session,

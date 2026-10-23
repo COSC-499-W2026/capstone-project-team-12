@@ -215,6 +215,78 @@
         ]
       }
     },
+    "/api/v1/me/classes/{class_id}/leave": {
+      "post": {
+        "tags": [
+          "classes"
+        ],
+        "summary": "Leave a classroom",
+        "description": "Leave an actively enrolled classroom. The student may rejoin later using a valid access code. Leaving clears the current class selection if it references this classroom and ends any active class game sessions.",
+        "operationId": "leaveClass",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "class_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Class Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/verify-email": {
       "post": {
         "tags": [

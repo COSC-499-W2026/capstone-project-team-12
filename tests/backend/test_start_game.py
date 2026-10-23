@@ -230,13 +230,11 @@ def test_archived_class(
 ) -> None:
     student, school_class = make_user(), make_class(archived_at=datetime.now(UTC))
     # what archiving does to an enrolment
-    make_enrollment(
-        student,
-        school_class,
-        is_active=False,
-        end_reason=EnrollmentEndReason.ARCHIVED,
-        left_at=datetime.now(UTC),
-    )
+    enrollment = make_enrollment(student, school_class)
+    enrollment.is_active = False
+    enrollment.end_reason = EnrollmentEndReason.ARCHIVED
+    enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
+    db.flush()
 
     with pytest.raises(AppError) as raised:
         start_game(student, Difficulty.BASIC, db, class_id=school_class.id)
@@ -267,15 +265,13 @@ def test_class_the_user_is_not_in(
     )
     user = make_user(role=UserRole.STAFF) if case == "staff" else make_user()
     if case in ("left", "removed", "archived_but_left_before"):
-        make_enrollment(
-            user,
-            school_class,
-            is_active=False,
-            end_reason=(
-                EnrollmentEndReason.REMOVED if case == "removed" else EnrollmentEndReason.LEFT
-            ),
-            left_at=datetime.now(UTC),
+        enrollment = make_enrollment(user, school_class)
+        enrollment.is_active = False
+        enrollment.end_reason = (
+            EnrollmentEndReason.REMOVED if case == "removed" else EnrollmentEndReason.LEFT
         )
+        enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
+        db.flush()
     class_id = uuid4() if case == "unknown" else school_class.id
 
     with pytest.raises(AppError) as raised:
