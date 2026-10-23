@@ -75,7 +75,8 @@ class SessionState(StrEnum):
 class SessionEndReason(StrEnum):
     QUIT = "quit"
     RESET = "reset"
-    EXPIRED = "expired"  # no game action for 24 hours
+    # no game action for SESSION_IDLE_EXPIRY_HOURS
+    EXPIRED = "expired"
     CLASS_CLOSED = "class_closed"  # the class was archived, or the student left or was removed
 
 
