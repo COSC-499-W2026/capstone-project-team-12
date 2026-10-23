@@ -1,6 +1,8 @@
+from collections.abc import Callable
+from dataclasses import asdict
 from datetime import datetime
 from http import HTTPStatus
-from typing import Annotated, Self
+from typing import Annotated, Self, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -10,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.accounts.interface import get_current_user
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
+from app.game.control import pause_game
 from app.game.start import start_game
 from app.game.status import find_current_game, get_game
 from app.models.accounts import User
@@ -24,6 +27,8 @@ from app.models.enums import (
 )
 
 games_router = APIRouter(prefix="/games", tags=["games"])
+
+T = TypeVar("T")
 
 
 class StartGameRequest(BaseModel):
@@ -160,3 +165,47 @@ def game_status(
     status = get_game(user.id, game_id, db)
     db.commit()
     return GameStatusResponse.model_validate(status, from_attributes=True)
+
+
+class PausedGameResponse(GameStatusResponse):
+    # when the game expires if nothing else happens
+    expires_at: datetime
+
+
+@games_router.post(
+    "/{game_id}/pause",
+    operation_id="pauseGame",
+    response_model=PausedGameResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def pause(
+    game_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> PausedGameResponse:
+    """Pause the student's game. The current location keeps its stage and attempts.
+
+    Pausing counts as a game action, so `expires_at` is now plus the expiry limit (24 hours by
+    default). Pausing a paused game changes nothing and returns it. 409 SESSION_NOT_ACTIVE for a
+    completed or abandoned game, or one that has been idle for the expiry limit, which is expired.
+    404 NOT_FOUND for another student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED
+    for a disabled account.
+    """
+    paused = _play(lambda: pause_game(user.id, game_id, db), user, db)
+    return PausedGameResponse(**asdict(paused.status), expires_at=paused.expires_at)
+
+
+def _play(action: Callable[[], T], user: User, db: Session) -> T:
+    """Run a game action and commit, also when it is refused, so an expiry done before the 409 is
+    kept."""
+    if user.role == UserRole.ADMIN:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
+    try:
+        result = action()
+    except AppError:
+        db.commit()
+        raise
+    db.commit()
+    return result

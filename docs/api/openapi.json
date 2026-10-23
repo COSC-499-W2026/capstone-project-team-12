@@ -569,6 +569,95 @@
         }
       }
     },
+    "/api/v1/games/{game_id}/pause": {
+      "post": {
+        "tags": [
+          "games"
+        ],
+        "summary": "Pause",
+        "description": "Pause the student's game. The current location keeps its stage and attempts.\n\nPausing counts as a game action, so `expires_at` is now plus the expiry limit (24 hours by\ndefault). Pausing a paused game changes nothing and returns it. 409 SESSION_NOT_ACTIVE for a\ncompleted or abandoned game, or one that has been idle for the expiry limit, which is expired.\n404 NOT_FOUND for another student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED\nfor a disabled account.",
+        "operationId": "pauseGame",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "game_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Game Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PausedGameResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/media/{key}": {
       "get": {
         "tags": [
@@ -969,6 +1058,104 @@
           "skipped"
         ],
         "title": "LocationStatus"
+      },
+      "PausedGameResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SessionState"
+          },
+          "end_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionEndReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "class_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Id"
+          },
+          "language": {
+            "$ref": "#/components/schemas/Language"
+          },
+          "difficulty": {
+            "$ref": "#/components/schemas/Difficulty"
+          },
+          "current_position": {
+            "type": "integer",
+            "title": "Current Position"
+          },
+          "shuffles_used": {
+            "type": "integer",
+            "title": "Shuffles Used"
+          },
+          "total_score": {
+            "type": "integer",
+            "title": "Total Score"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "paused_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused At"
+          },
+          "locations": {
+            "items": {
+              "$ref": "#/components/schemas/LocationProgressResponse"
+            },
+            "type": "array",
+            "title": "Locations"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "state",
+          "end_reason",
+          "class_id",
+          "language",
+          "difficulty",
+          "current_position",
+          "shuffles_used",
+          "total_score",
+          "started_at",
+          "paused_at",
+          "locations",
+          "expires_at"
+        ],
+        "title": "PausedGameResponse"
       },
       "RegisterRequest": {
         "properties": {
