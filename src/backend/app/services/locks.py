@@ -18,9 +18,8 @@ def lock_user(user_id: UUID, db: Session) -> User | None:
     flushed first (the app's sessions don't autoflush), so none is lost. Returns None if there is
     no such user.
 
-    The lock is FOR NO KEY UPDATE (key_share=True), so rows that only reference the user, such as
-    an email being queued, aren't blocked while a game is being started. Two callers still wait for
-    each other.
+    The lock is key_share=True, so rows that only reference the user, such as a queued email,
+    aren't blocked while a game starts. Two callers still wait for each other.
     """
     db.flush()
     return db.scalar(
