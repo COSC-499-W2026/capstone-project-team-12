@@ -215,6 +215,26 @@ def update_class_settings(
             raise AppError(
                 ErrorCode.VALIDATION_ERROR,
                 "Class name cannot be empty",
+                details=[
+                    {
+                        "in": "body",
+                        "field": "name",
+                        "message": "Class name cannot be empty",
+                    }
+                ],
+            )
+
+        if "\x00" in cleaned_name:
+            raise AppError(
+                ErrorCode.VALIDATION_ERROR,
+                "Class name contains a NUL character",
+                details=[
+                    {
+                        "in": "body",
+                        "field": "name",
+                        "message": "Class name cannot contain NUL characters",
+                    }
+                ],
             )
 
         school_class.name = cleaned_name

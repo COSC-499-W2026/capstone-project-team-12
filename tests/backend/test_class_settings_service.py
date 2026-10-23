@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.orm import Session
@@ -93,6 +94,13 @@ def test_blank_name_is_rejected(
         update_class_settings(school_class.id, owner, db, name="   ")
 
     assert exc.value.code == ErrorCode.VALIDATION_ERROR
+    assert exc.value.details == [
+        {
+            "in": "body",
+            "field": "name",
+            "message": "Class name cannot be empty",
+        }
+    ]
 
 
 def test_inactive_owner_cannot_update_settings(
@@ -109,3 +117,57 @@ def test_inactive_owner_cannot_update_settings(
         update_class_settings(school_class.id, owner, db, name="Changed")
 
     assert exc.value.code == ErrorCode.ACCOUNT_DISABLED
+
+
+def test_update_class_settings_does_not_manage_transaction(
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., ClassStaff],
+    transaction_calls: list[str],
+) -> None:
+    owner = make_user(role=UserRole.STAFF)
+    school_class = make_class()
+    make_class_staff(school_class, owner)
+
+    transaction_calls.clear()
+
+    update_class_settings(school_class.id, owner, db, name="Updated")
+
+    assert "commit" not in transaction_calls
+    assert "rollback" not in transaction_calls
+
+
+def test_missing_class_returns_not_found(
+    db: Session,
+    make_user: Callable[..., User],
+) -> None:
+    owner = make_user(role=UserRole.STAFF)
+
+    with pytest.raises(AppError) as exc:
+        update_class_settings(uuid4(), owner, db, name="Updated")
+
+    assert exc.value.code == ErrorCode.NOT_FOUND
+
+
+def test_name_with_nul_character_is_rejected(
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., ClassStaff],
+) -> None:
+    owner = make_user(role=UserRole.STAFF)
+    school_class = make_class()
+    make_class_staff(school_class, owner)
+
+    with pytest.raises(AppError) as exc:
+        update_class_settings(school_class.id, owner, db, name="Bad\x00Name")
+
+    assert exc.value.code == ErrorCode.VALIDATION_ERROR
+    assert exc.value.details == [
+        {
+            "in": "body",
+            "field": "name",
+            "message": "Class name cannot contain NUL characters",
+        }
+    ]
