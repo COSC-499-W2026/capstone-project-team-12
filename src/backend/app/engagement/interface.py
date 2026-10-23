@@ -3,6 +3,7 @@
 Implemented:
 - Issue #11: Class language, active enrolment, and archived-state lookups.
 - Issue #106: Access code validation and student enrolment.
+- Issue #84: Classroom creation service.
 
 Interface stub:
 - Issue #15: Location result to engagement.
@@ -21,6 +22,7 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.engagement.classes import create_class
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import AccessCode, Class, ClassEnrollment
@@ -34,6 +36,7 @@ from app.models.enums import (
 __all__ = [
     "EngagementResult",
     "apply_location_result",
+    "create_class",
     "enrolment_ended_by_archive",
     "get_class_language",
     "is_actively_enrolled",
