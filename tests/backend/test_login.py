@@ -1,15 +1,12 @@
 from time import sleep
 
-from fastapi import APIRouter, FastAPI
-import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from fastapi.testclient import TestClient
 
 from app.accounts.interface import revoke_all_refresh_tokens
-from app.accounts.login import login_account
 from app.accounts.register import RegisterRequest, register_account
-from app.errors import AppError, ErrorCode, add_error_handlers
+from app.errors import ErrorCode
 from app.models.accounts import RefreshToken, User
 
 VALID_EMAIL = "test@email.com"
@@ -21,16 +18,9 @@ INVALID_PASSWORD = "NotValidPassword1"
 
 
 def test_valid_login(client: TestClient):
-    register = {
-        "email": VALID_EMAIL,
-        "username": VALID_USERNAME,
-        "password": VALID_PASSWORD
-    }
+    register = {"email": VALID_EMAIL, "username": VALID_USERNAME, "password": VALID_PASSWORD}
     client.post("api/v1/auth/register", json=register)
-    login = {
-        "username": VALID_EMAIL,
-        "password": VALID_PASSWORD
-    }
+    login = {"username": VALID_EMAIL, "password": VALID_PASSWORD}
     response = client.post("api/v1/auth/login", data=login)
     tokens = response.json()
     assert tokens["access_token"]
@@ -55,10 +45,7 @@ def test_invalid_email(client: TestClient, db: Session):
         email=VALID_EMAIL, username=VALID_USERNAME, password=VALID_PASSWORD
     )
     register_account(register_request, db)
-    login = {
-        "username": INVALID_EMAIL,
-        "password": VALID_PASSWORD
-    }
+    login = {"username": INVALID_EMAIL, "password": VALID_PASSWORD}
     response = client.post("/api/v1/auth/login", data=login)
     assert response.json()["error"]["code"] == ErrorCode.INVALID_CREDENTIALS
 
@@ -68,10 +55,7 @@ def test_invalid_password(client: TestClient, db: Session):
         email=VALID_EMAIL, username=VALID_USERNAME, password=VALID_PASSWORD
     )
     register_account(register_request, db)
-    login = {
-        "username": VALID_EMAIL,
-        "password": INVALID_PASSWORD
-    }
+    login = {"username": VALID_EMAIL, "password": INVALID_PASSWORD}
     response = client.post("/api/v1/auth/login", data=login)
     assert response.json()["error"]["code"] == ErrorCode.INVALID_CREDENTIALS
 
@@ -83,11 +67,8 @@ def test_revoke_tokens(client: TestClient, db: Session):
     )
 
     register_account(register_request, db)
-    login = {
-        "username": VALID_EMAIL,
-        "password": VALID_PASSWORD
-    }
-    response = client.post("/api/v1/auth/login", data=login)
+    login = {"username": VALID_EMAIL, "password": VALID_PASSWORD}
+    client.post("/api/v1/auth/login", data=login)
 
     stmt = select(User.id).where(User.email == VALID_EMAIL)
     result = db.execute(stmt)
@@ -103,11 +84,7 @@ def test_revoke_tokens(client: TestClient, db: Session):
 
 
 def test_refresh_with_no_refresh_token(client: TestClient):
-    register = {
-        "email": VALID_EMAIL,
-        "username": VALID_USERNAME,
-        "password": VALID_PASSWORD
-    }
+    register = {"email": VALID_EMAIL, "username": VALID_USERNAME, "password": VALID_PASSWORD}
     client.post("api/v1/auth/register", json=register)
     response = client.post("/api/v1/auth/refresh")
     assert response.json()["error"]["code"] == ErrorCode.NOT_AUTHENTICATED

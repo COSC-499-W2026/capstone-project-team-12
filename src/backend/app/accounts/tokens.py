@@ -1,11 +1,10 @@
+import hashlib
 import os
 import zoneinfo
-import hashlib
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from bcrypt import checkpw, gensalt, hashpw
 from jwt import decode, encode
 from pydantic import BaseModel
 from sqlalchemy import desc, insert, select, update
@@ -99,10 +98,7 @@ def rotate_tokens(token: str, db: Session) -> TokenResponse:
     new_access_token = create_access_token({"sub": str(user_id)})
     new_refresh_token = create_refresh_token(user_id, db, family_id)
 
-    return TokenResponse(
-        access_token=new_access_token,
-        refresh_token=new_refresh_token
-    )
+    return TokenResponse(access_token=new_access_token, refresh_token=new_refresh_token)
 
 
 def validate_refresh_token(token: str, db: Session) -> UUID | None:
@@ -122,12 +118,7 @@ def validate_refresh_token(token: str, db: Session) -> UUID | None:
     if result:
         for row in result:
             id = row[0]
-            if (
-                row[1] > now()
-                and row[2] is None
-                and row[3] is None
-                and row[4] == hash
-            ):
+            if row[1] > now() and row[2] is None and row[3] is None and row[4] == hash:
                 return id
     return None
 
