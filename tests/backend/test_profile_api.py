@@ -72,6 +72,12 @@ def test_null_class_switches_to_practice_and_back(
     back = patch_profile(roster.student, {"current_class_id": str(roster.french.id)})
     assert back.json()["current_class_id"] == str(roster.french.id)
 
+    # a null language next to it changes nothing
+    both = patch_profile(roster.student, {"current_class_id": None, "preferred_language": None})
+    assert both.status_code == 200, both.text
+    assert both.json()["current_class_id"] is None
+    assert both.json()["preferred_language"] == Language.JA.value
+
 
 def test_class_the_student_is_not_in_is_not_found(
     db: Session,
