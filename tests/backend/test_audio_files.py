@@ -112,6 +112,21 @@ def test_a_recording_over_the_time_limit_is_rejected(
     assert rejection(too_long) == (ErrorCode.AUDIO_TOO_LONG, HTTPStatus.UNPROCESSABLE_ENTITY)
 
 
+def test_a_recording_too_short_to_store_a_length_is_rejected(
+    make_audio: Callable[..., bytes],
+) -> None:
+    # 4 ms rounds to a length of 0.00 s, which audio_assets refuses; 6 ms rounds to 0.01 s. It is
+    # real MP3 audio, so the error is not UNSUPPORTED_MEDIA_TYPE
+    with pytest.raises(AppError) as error:
+        check(make_audio(0.004))
+    assert (error.value.code, error.value.status) == (
+        ErrorCode.VALIDATION_ERROR,
+        HTTPStatus.UNPROCESSABLE_ENTITY,
+    )
+    assert [(d["in"], d["field"]) for d in error.value.details] == [("body", "file")]
+    assert check(make_audio(0.006)).duration_seconds == 0.01
+
+
 def test_a_file_over_the_size_limit_is_rejected_without_reading_it_all(
     make_audio: Callable[..., bytes],
 ) -> None:
