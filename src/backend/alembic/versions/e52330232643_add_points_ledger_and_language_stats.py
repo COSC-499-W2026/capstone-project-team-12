@@ -47,6 +47,11 @@ def upgrade() -> None:
             ["classes.id", "classes.target_language"],
             name=op.f("fk_points_ledger_class_id_language_classes"),
         ),
+        sa.ForeignKeyConstraint(
+            ["user_id"],
+            ["users.id"],
+            name=op.f("fk_points_ledger_user_id_users"),
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_points_ledger")),
         sa.UniqueConstraint(
             "user_id",
