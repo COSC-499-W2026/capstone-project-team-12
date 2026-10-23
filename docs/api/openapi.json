@@ -61,6 +61,73 @@
         }
       }
     },
+    "/api/v1/me/classes": {
+      "post": {
+        "tags": [
+          "classes"
+        ],
+        "summary": "Create a classroom",
+        "description": "Create a classroom with a fixed target language and generate its initial eight-character access code. Only active staff accounts may create classrooms. The classroom, owner assignment, and initial access code are saved in one transaction.",
+        "operationId": "createClass",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClassRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateClassResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/me/classes/join": {
       "post": {
         "tags": [
@@ -613,6 +680,95 @@
   },
   "components": {
     "schemas": {
+      "CreateClassRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "description": "Classroom name.",
+            "examples": [
+              "JAPN 101 - Fall 2026"
+            ]
+          },
+          "semester": {
+            "type": "string",
+            "pattern": "^[0-9]{4}(W1|W2|S1|S2)$",
+            "title": "Semester",
+            "description": "Academic semester identifier.",
+            "examples": [
+              "2026W1"
+            ]
+          },
+          "language": {
+            "$ref": "#/components/schemas/Language",
+            "description": "Fixed target language for the classroom."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At",
+            "description": "Timezone-aware expiration for the initial access code."
+          },
+          "max_uses": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Uses",
+            "description": "Optional maximum number of uses for the initial access code."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "semester",
+          "language",
+          "expires_at"
+        ],
+        "title": "CreateClassRequest",
+        "description": "Details for a new classroom and its initial access code."
+      },
+      "CreateClassResponse": {
+        "properties": {
+          "class_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Class Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "semester": {
+            "type": "string",
+            "title": "Semester"
+          },
+          "language": {
+            "$ref": "#/components/schemas/Language"
+          },
+          "access_code": {
+            "type": "string",
+            "title": "Access Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "class_id",
+          "name",
+          "semester",
+          "language",
+          "access_code"
+        ],
+        "title": "CreateClassResponse",
+        "description": "Created classroom and its initial enrolment code."
+      },
       "Difficulty": {
         "type": "integer",
         "enum": [
