@@ -10,6 +10,9 @@ this function, in the same transaction (spec, Architecture and Session Lifecycle
 get_open_session_id: switching the current class or the Practice language is refused while the
 student has an open game (spec, Starting a Session), so accounts asks game instead of reading
 game_sessions.
+
+expire_idle_sessions: the expire-sessions job (spec, Scheduled Jobs) ends games that have been
+idle for the limit.
 """
 
 from datetime import UTC, datetime
@@ -18,11 +21,16 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.game.sessions import abandon_sessions, idle_condition, session_idle_limit
+from app.game.sessions import (
+    abandon_sessions,
+    expire_idle_sessions,
+    idle_condition,
+    session_idle_limit,
+)
 from app.models.enums import SessionEndReason
 from app.models.game import OPEN_SESSION_STATES, GameSession
 
-__all__ = ["end_open_sessions", "get_open_session_id"]
+__all__ = ["end_open_sessions", "expire_idle_sessions", "get_open_session_id"]
 
 
 def end_open_sessions(class_id: UUID, db: Session, student_id: UUID | None = None) -> int:
