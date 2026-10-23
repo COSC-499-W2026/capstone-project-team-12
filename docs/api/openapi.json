@@ -1140,7 +1140,7 @@
             "type": "string",
             "title": "Semester"
           },
-          "language": {
+          "target_language": {
             "$ref": "#/components/schemas/Language"
           },
           "leaderboard_enabled": {
@@ -1153,7 +1153,7 @@
           "class_id",
           "name",
           "semester",
-          "language",
+          "target_language",
           "leaderboard_enabled"
         ],
         "title": "UpdateClassResponse",

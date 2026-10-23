@@ -97,7 +97,7 @@ def test_owner_updates_both_settings(
     assert body["class_id"] == str(school_class.id)
     assert body["name"] == "Updated Classroom"
     assert body["leaderboard_enabled"] is False
-    assert body["language"] == original_language
+    assert body["target_language"] == original_language
     assert body["semester"] == original_semester
 
     db.refresh(school_class)
@@ -144,8 +144,6 @@ def test_invalid_settings_rejected(
     assert response.status_code == 422, response.text
     assert response.json()["error"]["code"] == ErrorCode.VALIDATION_ERROR.value
 
-    # Do not refresh here: the endpoint may have rolled back the
-    # transaction containing the test fixture objects.
     assert school_class.name == original_name
     assert school_class.target_language == original_language
     assert school_class.semester == original_semester
@@ -216,7 +214,6 @@ def test_archived_class_cannot_be_updated(
     assert response.status_code == 409, response.text
     assert response.json()["error"]["code"] == ErrorCode.CLASS_ARCHIVED.value
 
-    # The request is rejected before the classroom name is modified.
     assert school_class.name == original_name
 
 
@@ -230,3 +227,20 @@ def test_unauthenticated_update_rejected(
 
     assert response.status_code == 401, response.text
     assert response.json()["error"]["code"] == ErrorCode.NOT_AUTHENTICATED.value
+
+
+def test_missing_class_returns_404(
+    client: TestClient,
+    make_user: Callable[..., User],
+    auth_headers: Callable[[User], dict[str, str]],
+) -> None:
+    owner = make_user(role=UserRole.STAFF)
+
+    response = client.patch(
+        f"{URL}/{uuid4()}",
+        json={"name": "Updated Classroom"},
+        headers=auth_headers(owner),
+    )
+
+    assert response.status_code == 404, response.text
+    assert response.json()["error"]["code"] == ErrorCode.NOT_FOUND.value

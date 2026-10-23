@@ -106,7 +106,7 @@ class UpdateClassResponse(BaseModel):
     class_id: UUID
     name: str
     semester: str
-    language: Language
+    target_language: Language
     leaderboard_enabled: bool
 
 
@@ -205,7 +205,7 @@ def update_class_endpoint(
             class_id=school_class.id,
             name=school_class.name,
             semester=school_class.semester,
-            language=Language(school_class.target_language),
+            target_language=Language(school_class.target_language),
             leaderboard_enabled=school_class.leaderboard_enabled,
         )
 
