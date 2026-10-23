@@ -205,6 +205,7 @@ def test_disabled_teacher_cannot_create_class(
     assert response.json()["error"]["code"] == ErrorCode.ACCOUNT_DISABLED.value
     assert db.scalars(select(Class)).all() == []
 
+
 def test_teacher_creates_class_with_default_expiration(
     client: TestClient,
     db: Session,
@@ -225,9 +226,7 @@ def test_teacher_creates_class_with_default_expiration(
     assert response.status_code == 201, response.text
 
     class_id = UUID(response.json()["class_id"])
-    access_code = db.scalar(
-        select(AccessCode).where(AccessCode.class_id == class_id)
-    )
+    access_code = db.scalar(select(AccessCode).where(AccessCode.class_id == class_id))
 
     assert access_code is not None
     assert access_code.expires_at == datetime(2027, 1, 1, 7, tzinfo=UTC)
