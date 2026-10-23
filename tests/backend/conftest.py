@@ -10,12 +10,14 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx2 import Response
 from jwt import encode
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import DB_CONNECT_ARGS, get_db
+from app.errors import ErrorCode
 from app.main import create_app
 from app.models.accounts import ClassStaff, User
 from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
@@ -123,6 +125,17 @@ def freeze_clock(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
             monkeypatch.setattr(f"{module}.datetime", FrozenDatetime)
 
     return freeze
+
+
+@pytest.fixture
+def assert_error() -> Callable[[Response, int, ErrorCode], None]:
+    """Check an API error: the HTTP status and the code in the standard error body."""
+
+    def check(response: Response, status: int, code: ErrorCode) -> None:
+        assert response.status_code == status, response.text
+        assert response.json()["error"]["code"] == code.value
+
+    return check
 
 
 @pytest.fixture
