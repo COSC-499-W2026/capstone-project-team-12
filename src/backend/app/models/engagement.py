@@ -15,6 +15,7 @@ from sqlalchemy import (
     text,
     true,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -154,3 +155,48 @@ class UserLanguageStats(Base):
     language: Mapped[str] = mapped_column(primary_key=True)
     total_points: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     updated_at: Mapped[datetime] = updated_at()
+
+
+class Achievement(Base):
+    """Seeded definition of an unlockable achievement."""
+
+    __tablename__ = "achievements"
+    __table_args__ = (
+        UniqueConstraint("achievement_key"),
+        in_check(
+            "category",
+            ("learning", "streak", "difficulty"),
+            name="category",
+        ),
+    )
+
+    id: Mapped[UUID] = uuid_pk()
+    achievement_key: Mapped[str]
+    category: Mapped[str]
+    unlock_condition: Mapped[dict[str, object]] = mapped_column(JSONB)
+    icon_key: Mapped[str]
+    is_active: Mapped[bool] = mapped_column(
+        default=True,
+        server_default=true(),
+    )
+
+
+class UserAchievement(Base):
+    """An achievement earned by a user, optionally in a specific language."""
+
+    __tablename__ = "user_achievements"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "achievement_id",
+            "language",
+            postgresql_nulls_not_distinct=True,
+        ),
+        language_check(),
+    )
+
+    id: Mapped[UUID] = uuid_pk()
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    achievement_id: Mapped[UUID] = mapped_column(ForeignKey("achievements.id"))
+    language: Mapped[str | None]
+    unlocked_at: Mapped[datetime] = created_at()
