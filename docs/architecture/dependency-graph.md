@@ -133,9 +133,9 @@ flowchart LR
   app_game_interface --> app_game_sessions
   app_game_interface --> app_models_enums
   app_game_interface --> app_models_game
+  app_game_sessions --> app_config
   app_game_sessions --> app_models_enums
   app_game_sessions --> app_models_game
-  app_game_start --> app_config
   app_game_start --> app_content_interface
   app_game_start --> app_db
   app_game_start --> app_engagement_interface
