@@ -3,10 +3,10 @@ locations it left unfinished. Used by class closing, expiry on start, expiry on 
 expire job. `get_open_session_id` uses its idle rule too."""
 
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, update
+from sqlalchemy import ColumnElement, select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -70,3 +70,26 @@ def abandon_sessions(
             .values(status=LocationStatus.SKIPPED, skip_reason=SkipReason.SESSION_ENDED)
         )
     return ended
+
+
+def expire_idle_sessions(db: Session, *, batch_size: int) -> int:
+    """Expire up to `batch_size` open games that have been idle for the limit, and return how many
+    ended (the expire-sessions job runs it until a batch comes back short).
+
+    The games are locked in id order with SKIP LOCKED, so a game another request is changing (a
+    pause, a start that expires it) is left for the next run instead of waiting on it, and two
+    runs can't deadlock. Doesn't commit.
+    """
+    now, limit = datetime.now(UTC), session_idle_limit()
+    batch = list(
+        db.scalars(
+            select(GameSession.id)
+            .where(GameSession.state.in_(OPEN_SESSION_STATES), idle_condition(now, limit))
+            .order_by(GameSession.id)
+            .limit(batch_size)
+            .with_for_update(skip_locked=True)
+        )
+    )
+    if not batch:
+        return 0
+    return len(abandon_sessions(SessionEndReason.EXPIRED, [GameSession.id.in_(batch)], db))
