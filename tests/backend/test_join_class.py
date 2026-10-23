@@ -35,6 +35,7 @@ def assert_error(response: Any, status: int, code: ErrorCode) -> None:
     assert response.status_code == status, response.text
     assert response.json()["error"]["code"] == code.value
 
+
 def test_successful_join(
     client: TestClient,
     db: Session,
@@ -69,6 +70,7 @@ def test_successful_join(
     )
     assert enrollment.is_active
     assert enrollment.access_code_id == access_code.id
+
 
 @pytest.mark.parametrize("token", [None, "invalid-token"])
 def test_authentication_required(
