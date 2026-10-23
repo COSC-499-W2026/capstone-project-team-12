@@ -18,7 +18,7 @@ from app.db import engine
 from app.errors import ErrorCode
 from app.game.sessions import session_idle_limit
 from app.models.accounts import User
-from app.models.enums import LocationStatus, SessionEndReason, SessionState
+from app.models.enums import LocationStatus, SessionEndReason, SessionState, UserRole
 from app.models.game import GameSession, SessionLocation
 
 URL = "/api/v1/games"
@@ -93,6 +93,11 @@ def test_the_app_connects_with_the_utc_time_zone() -> None:
     # the server's own time zone would otherwise decide how the times are written
     with engine.connect() as connection:
         assert connection.scalar(text("SHOW timezone")) == "UTC"
+
+
+def test_admin_is_403(get: Callable[..., Response], make_user: Callable[..., User]) -> None:
+    # the same as starting a game: admins don't play
+    assert_error(get(make_user(role=UserRole.ADMIN), "current"), 403, ErrorCode.FORBIDDEN_ROLE)
 
 
 def test_no_open_game_is_404(get: Callable[..., Response], make_user: Callable[..., User]) -> None:
