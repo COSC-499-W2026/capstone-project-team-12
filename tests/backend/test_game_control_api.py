@@ -1,4 +1,4 @@
-"""POST /api/v1/games/{id}/pause (A8) over HTTP.
+"""POST /api/v1/games/{id}/pause and /resume (A8) over HTTP.
 
 The rules are tested in test_game_control.py. These check the status codes, the response body and
 that the route commits, also when an idle game is expired before the 409.
@@ -21,8 +21,7 @@ from app.models.enums import LocationStatus, SessionEndReason, SessionState, Use
 from app.models.game import GameSession, SessionLocation
 
 URL = "/api/v1/games"
-# resume joins this list next, so the cases below are not only for pause
-ACTIONS = ["pause"]
+ACTIONS = ["pause", "resume"]
 
 GAME_FIELDS = {
     "session_id",
@@ -105,6 +104,45 @@ def test_pausing_again_is_200(
     assert datetime.fromisoformat(body["expires_at"]) == paused_at + session_idle_limit()
     db.refresh(game)
     assert (game.paused_at, game.last_activity_at) == (paused_at, paused_at)
+
+
+def test_resume(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    transaction_calls: list[str],
+) -> None:
+    student = make_user()
+    game = make_game_session(student, state=SessionState.PAUSED, paused_at=datetime.now(UTC))
+    make_session_location(game, 1, status=LocationStatus.VERIFYING, attempts_used=2)
+    transaction_calls.clear()
+
+    response = post(student, game.id, "resume")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body) == GAME_FIELDS
+    assert (body["state"], body["paused_at"]) == (SessionState.ACTIVE.value, None)
+    assert body["locations"][0]["attempts_used"] == 2
+    assert transaction_calls.count("commit") == 1
+    db.refresh(game)
+    assert (game.state, game.resume_count) == (SessionState.ACTIVE, 1)
+
+
+def test_resuming_an_active_game_is_200(
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+) -> None:
+    student = make_user()
+    game = make_game_session(student)
+
+    response = post(student, game.id, "resume")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == SessionState.ACTIVE.value
 
 
 @pytest.mark.parametrize("action", ACTIONS)
