@@ -98,6 +98,45 @@ def upgrade() -> None:
         ),
     )
 
+    # Enforce the category-language relationship for achievement unlocks.
+    op.execute(
+        """
+        CREATE FUNCTION validate_user_achievement_language()
+        RETURNS trigger AS $$
+        DECLARE
+            achievement_category text;
+        BEGIN
+            SELECT category INTO achievement_category
+            FROM achievements
+            WHERE id = NEW.achievement_id;
+
+            IF achievement_category = 'streak' AND NEW.language IS NOT NULL THEN
+                RAISE EXCEPTION 'Streak achievements must have NULL language'
+                    USING ERRCODE = '23514';
+            END IF;
+
+            IF achievement_category IN ('learning', 'difficulty')
+               AND NEW.language IS NULL THEN
+                RAISE EXCEPTION 'Learning and difficulty achievements require a language'
+                    USING ERRCODE = '23514';
+            END IF;
+
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+        """
+    )
+
+    op.execute(
+        """
+        CREATE TRIGGER trg_user_achievement_language
+        BEFORE INSERT OR UPDATE OF achievement_id, language
+        ON user_achievements
+        FOR EACH ROW
+        EXECUTE FUNCTION validate_user_achievement_language();
+        """
+    )
+
     # Seed the seven achievements defined in the technical specification.
     achievements = sa.table(
         "achievements",
@@ -185,5 +224,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("DROP TRIGGER trg_user_achievement_language ON user_achievements")
+    op.execute("DROP FUNCTION validate_user_achievement_language()")
     op.drop_table("user_achievements")
     op.drop_table("achievements")
