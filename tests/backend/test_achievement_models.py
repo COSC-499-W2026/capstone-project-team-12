@@ -72,14 +72,13 @@ def test_duplicate_global_unlock_rejected(
     with pytest.raises(IntegrityError):
         db.flush()
 
+
 def test_same_achievement_can_unlock_in_different_languages(
     db: Session,
     make_user: Callable[..., User],
 ) -> None:
     student = make_user()
-    achievement = db.scalar(
-        select(Achievement).where(Achievement.achievement_key == "first_step")
-    )
+    achievement = db.scalar(select(Achievement).where(Achievement.achievement_key == "first_step"))
     assert achievement is not None
 
     db.add_all(
@@ -97,6 +96,7 @@ def test_same_achievement_can_unlock_in_different_languages(
         ]
     )
     db.flush()
+
 
 @pytest.mark.parametrize(
     ("achievement_key", "language"),
