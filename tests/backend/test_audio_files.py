@@ -191,6 +191,31 @@ def test_an_mp4_with_only_a_cover_picture_is_rejected() -> None:
     assert rejection(buffer.getvalue()) == UNSUPPORTED
 
 
+def test_an_m4a_with_a_cover_picture_is_accepted_without_it() -> None:
+    buffer = io.BytesIO()
+    with av.open(buffer, "w", format="mp4") as container:
+        audio = container.add_stream("aac", rate=48000, layout="mono")
+        cover = container.add_stream("mjpeg", rate=1)
+        cover.width = cover.height = 16
+        cover.pix_fmt = "yuvj420p"
+        cover.disposition = Disposition.attached_pic
+        sound = av.AudioFrame(format="fltp", layout="mono", samples=1024)
+        sound.planes[0].update(bytes(sound.planes[0].buffer_size))
+        sound.sample_rate, sound.pts = 48000, 0
+        container.mux(audio.encode(sound))
+        container.mux(audio.encode(None))
+        picture = av.VideoFrame(16, 16, "yuvj420p")
+        for plane in picture.planes:
+            plane.update(bytes(plane.buffer_size))
+        container.mux(cover.encode(picture))
+        container.mux(cover.encode(None))
+
+    checked = check(buffer.getvalue())
+
+    with av.open(io.BytesIO(checked.data), "r", format="mp4") as result:
+        assert [stream.type for stream in result.streams] == ["audio"]
+
+
 def test_an_m4a_whose_audio_does_not_decode_is_rejected(make_audio: Callable[..., bytes]) -> None:
     m4a = make_audio(1, "m4a")
     start = m4a.index(b"mdat") + 4  # the audio data, after the box's size and name
