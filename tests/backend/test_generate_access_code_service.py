@@ -305,6 +305,7 @@ def test_existing_code_collision_is_retried(
     assert result.code == "BBBBBBBB"
     assert result.code != existing.code
 
+
 @pytest.mark.parametrize(
     ("semester", "expected"),
     [
