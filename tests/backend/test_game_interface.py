@@ -3,6 +3,7 @@ student's open game."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from http import HTTPStatus
 
 import pytest
 from sqlalchemy.orm import Session
@@ -173,5 +174,15 @@ def test_refuse_if_game_open(
     with pytest.raises(AppError) as error:
         refuse_if_game_open(student.id, db)
 
+    assert error.value.status == HTTPStatus.CONFLICT
     assert error.value.code == ErrorCode.SESSION_ALREADY_OPEN
     assert error.value.details == [{"session_id": str(game.id)}]
+
+
+def test_refuse_if_game_open_ignores_a_game_idle_for_the_expiry_time(
+    db: Session, make_user: Callable[..., User], make_game_session: Callable[..., GameSession]
+) -> None:
+    student = make_user()
+    make_game_session(student, last_activity_at=datetime.now(UTC) - session_idle_limit())
+
+    refuse_if_game_open(student.id, db)
