@@ -37,6 +37,25 @@ def test_gps_radius_must_be_positive(monkeypatch: pytest.MonkeyPatch, radius: st
         Settings(_env_file=None)
 
 
+def test_upload_limits_default_to_5_mb_and_60_seconds() -> None:
+    settings = Settings(_env_file=None)
+    assert (settings.max_media_file_mb, settings.max_audio_seconds) == (5, 60)
+
+
+def test_upload_limits_can_be_changed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAX_MEDIA_FILE_MB", "8")
+    monkeypatch.setenv("MAX_AUDIO_SECONDS", "90")
+    settings = Settings(_env_file=None)
+    assert (settings.max_media_file_mb, settings.max_audio_seconds) == (8, 90)
+
+
+@pytest.mark.parametrize("variable", ["MAX_MEDIA_FILE_MB", "MAX_AUDIO_SECONDS"])
+def test_upload_limits_must_be_positive(monkeypatch: pytest.MonkeyPatch, variable: str) -> None:
+    monkeypatch.setenv(variable, "0")
+    with pytest.raises(ValidationError, match=variable.lower()):
+        Settings(_env_file=None)
+
+
 # a typo, and a directory name (ZoneInfo raises OSError for it)
 @pytest.mark.parametrize("name", ["America/Vancover", "America"])
 def test_app_timezone_must_exist(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
