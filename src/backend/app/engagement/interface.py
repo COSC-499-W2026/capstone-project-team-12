@@ -22,7 +22,7 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.engagement.classes import create_class
+from app.engagement.classes import create_class, generate_access_code
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import AccessCode, Class, ClassEnrollment
@@ -38,6 +38,7 @@ __all__ = [
     "apply_location_result",
     "create_class",
     "enrolment_ended_by_archive",
+    "generate_access_code",
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
