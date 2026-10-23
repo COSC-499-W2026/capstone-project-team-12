@@ -41,7 +41,7 @@ class UpdateProfileRequest(BaseModel):
     )
     preferred_language: Language | None = Field(
         default=None,
-        description="The language of Practice games. Null (or left out) leaves it as it is.",
+        description="The language of Practice games. Leave it out to keep it as it is.",
     )
 
     @model_validator(mode="after")
