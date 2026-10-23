@@ -658,6 +658,95 @@
         }
       }
     },
+    "/api/v1/games/{game_id}/resume": {
+      "post": {
+        "tags": [
+          "games"
+        ],
+        "summary": "Resume",
+        "description": "Resume the student's paused game where it was left.\n\nResuming an active game changes nothing and returns it. A game that has been idle for the\nexpiry limit (24 hours by default) can't be resumed: it is expired and gives 409\nSESSION_NOT_ACTIVE, the same as a completed or abandoned game. 404 NOT_FOUND for another\nstudent's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.",
+        "operationId": "resumeGame",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "game_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Game Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/media/{key}": {
       "get": {
         "tags": [
