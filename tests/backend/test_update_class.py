@@ -1,4 +1,4 @@
-"""Integration tests for PATCH /api/v1/me/classes/{class_id}."""
+"""Integration tests for PATCH /api/v1/teacher/classes/{class_id}."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -13,7 +13,7 @@ from app.models.accounts import ClassStaff, User
 from app.models.engagement import Class
 from app.models.enums import UserRole
 
-URL = "/api/v1/me/classes"
+URL = "/api/v1/teacher/classes"
 
 
 def test_owner_updates_class_name(

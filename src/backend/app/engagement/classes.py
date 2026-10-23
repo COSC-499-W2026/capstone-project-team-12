@@ -4,6 +4,7 @@ import re
 import secrets
 from datetime import UTC, datetime
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -19,6 +20,35 @@ from app.models.engagement import (
 from app.models.enums import ClassStaffRole, Language, UserRole
 
 SEMESTER_PATTERN = re.compile(r"[0-9]{4}(W1|W2|S1|S2)\Z")
+VANCOUVER_TZ = ZoneInfo("America/Vancouver")
+
+SEMESTER_END_MONTHS = {
+    "W1": 12,
+    "W2": 4,
+    "S1": 6,
+    "S2": 8,
+}
+
+
+def semester_end_expiration(semester: str) -> datetime:
+    """Return midnight after the semester's final calendar day, in UTC."""
+    match = SEMESTER_PATTERN.fullmatch(semester)
+    if match is None:
+        raise AppError(ErrorCode.VALIDATION_ERROR, "Invalid semester format")
+
+    year = int(semester[:4])
+    term = semester[4:]
+    end_month = SEMESTER_END_MONTHS[term]
+
+    if term == "W2":
+        year += 1
+
+    if end_month == 12:
+        next_month = datetime(year + 1, 1, 1, tzinfo=VANCOUVER_TZ)
+    else:
+        next_month = datetime(year, end_month + 1, 1, tzinfo=VANCOUVER_TZ)
+
+    return next_month.astimezone(UTC)
 
 
 def create_class(
@@ -96,13 +126,14 @@ def create_class(
 def generate_access_code(
     class_id: UUID,
     creator: User,
-    expires_at: datetime,
+    expires_at: datetime | None,
     db: Session,
     max_uses: int | None = None,
 ) -> AccessCode:
     """Generate an access code for a class.
 
     Class owners and assistants may generate codes.
+    When expiration is omitted, default to the end of the class's semester.
     The caller owns the transaction; this function never commits.
     """
     if not creator.is_active:
@@ -124,6 +155,9 @@ def generate_access_code(
 
     if school_class.archived_at is not None:
         raise AppError(ErrorCode.CLASS_ARCHIVED)
+
+    if expires_at is None:
+        expires_at = semester_end_expiration(school_class.semester)
 
     if expires_at.tzinfo is None or expires_at.utcoffset() is None:
         raise AppError(
