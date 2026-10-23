@@ -4,10 +4,11 @@ Implemented:
 - Issue #11: Class language, active enrolment, and archived-state lookups.
 - Issue #106: Access code validation and student enrolment.
 - Issue #84: Classroom creation service.
+- Issue #86: Location points, per-language levels, and completion badges.
 
 Implemented in part:
 - Issue #15: Location scoring and per-language levels.
-  Streaks, challenges, and badges are pending.
+  Streaks, challenges, and advanced badges are pending.
 
 Callers must check class existence and archived status before enrolment
 so archived classes produce CLASS_ARCHIVED rather than an enrolment error.
@@ -23,6 +24,7 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.engagement.badges import unlock_completion_badges
 from app.engagement.classes import create_class, generate_access_code
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
@@ -62,7 +64,7 @@ class EngagementResult:
     """Engagement information returned after processing a location result.
 
     Defines the engagement response contract for Issue #15.
-    Streaks, challenges, and achievements are pending implementation.
+    Streaks, challenges, and advanced achievements are pending implementation.
 
     Attributes:
         location_points_awarded: New location points awarded by this call.
@@ -112,13 +114,13 @@ def apply_location_result(
 ) -> EngagementResult:
     """Process a finished session location and return engagement information.
 
-    Interface contract for Issue #15. Location scoring, points persistence,
-    per-language totals, and level calculation are implemented in this PR.
+    Implements idempotent location scoring, points persistence, per-language
+    levels, and eligible completion badge unlocking.
 
     Ownership:
         student_id identifies the authenticated student making the request.
-        The implementation must resolve the student through the location's
-        game session and verify that it matches student_id.
+        The implementation resolves the student through the location's
+        game session and verifies that it matches student_id.
         A mismatch raises NOT_FOUND before any engagement changes.
 
     Preconditions:
@@ -176,6 +178,18 @@ def apply_location_result(
         - Return achievements_unlocked=().
         - Avoid duplicate location, challenge, and milestone awards.
 
+    Achievements:
+        Newly completed locations can unlock eligible completion badges.
+        The supported completion thresholds are:
+        - first_step: 1 completed location.
+        - starter: 5 completed locations.
+        - explorer: 20 completed locations.
+        Completion counts are tracked separately for each language.
+        Each badge is unlocked at most once per student and language.
+        Achievements do not award points.
+        Repeated processing does not unlock duplicate badges.
+        Other achievement types are not yet implemented.
+
     Validation:
         The implementation must verify that:
         - The session location exists.
@@ -188,14 +202,17 @@ def apply_location_result(
         Engagement may add records and flush pending database changes
         to enforce constraints or obtain generated identifiers.
         Engagement must not commit or roll back the transaction.
-        Location, session, ledger, and engagement-stat changes must
-        remain consistent within the caller's transaction.
+        Location, session, ledger, badge, and engagement-stat changes
+        must remain consistent within the caller's transaction.
 
     Pending functionality:
         Streak tracking, daily challenges, streak milestones, and
-        achievement unlocking are not implemented in this PR.
-        Until implemented, streak_days is zero and both
-        challenges_completed and achievements_unlocked are empty.
+        advanced achievements are not implemented here.
+        Until implemented, streak_days is zero and
+        challenges_completed is empty.
+        The student engagement, achievements, and statistics API
+        endpoints are not implemented by this function.
+        Integration with the game completion flow is also pending.
 
     Args:
         session_location_id: UUID of the finished session location.
@@ -203,8 +220,9 @@ def apply_location_result(
         db: SQLAlchemy session belonging to the caller's transaction.
 
     Returns:
-        EngagementResult containing newly awarded location points and
-        cumulative engagement information.
+        EngagementResult containing newly awarded location points,
+        cumulative language points, derived level, and any newly
+        unlocked completion achievements.
 
     Raises:
         AppError(ErrorCode.NOT_FOUND): Session location does not exist or
@@ -212,6 +230,7 @@ def apply_location_result(
         AppError(ErrorCode.INVALID_STAGE): Session location has not
             reached a final status.
     """
+
     location = db.get(SessionLocation, session_location_id)
     if location is None:
         raise AppError(ErrorCode.NOT_FOUND)
@@ -269,6 +288,12 @@ def apply_location_result(
             awarded = 100
             db.flush()
 
+    # Only a newly awarded completed location can trigger new badges.
+    # The student row lock above serializes concurrent badge evaluations.
+    achievements_unlocked = (
+        unlock_completion_badges(student_id, game.target_language, db) if awarded > 0 else ()
+    )
+
     total_points = stats.total_points if stats is not None else 0
     level = _level_for_points(total_points)
     return EngagementResult(
@@ -278,7 +303,7 @@ def apply_location_result(
         level_up=level > previous_level,
         streak_days=0,
         challenges_completed=(),
-        achievements_unlocked=(),
+        achievements_unlocked=achievements_unlocked,
     )
 
 
