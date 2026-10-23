@@ -12,9 +12,10 @@ browser can play (an ALAC M4A could not be played in Chrome or Firefox). The len
 from the decoded samples, which leave out the silence encoders add when the file records it (MP3
 encoder headers, most M4A files); up to 50 ms of unrecorded padding is allowed over the limit.
 
-A file with a video track is rejected (only an MP3's embedded cover picture is allowed, and
-dropped), as is a file without any audio that decodes. A recording under 5 ms is too short to
-store a length (VALIDATION_ERROR: it is MP3 or M4A audio, so not UNSUPPORTED_MEDIA_TYPE).
+A file with a video track is rejected, except for an embedded cover picture (an MP3's APIC or an
+M4A's covr), which is allowed and dropped. A file without any audio that decodes is rejected too.
+A recording under 5 ms is too short to store a length (VALIDATION_ERROR: it is MP3 or M4A audio,
+so not UNSUPPORTED_MEDIA_TYPE).
 """
 
 import io
