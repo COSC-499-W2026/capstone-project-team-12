@@ -23,6 +23,7 @@ from app.models.enums import LocationStatus, SessionEndReason, SessionState, Use
 from app.models.game import GameSession, SessionLocation
 
 URL = "/api/v1/games"
+SOME_GAME_ID = "2f6f2a52-8d1c-4a56-9f0b-5d6c1c0f7b11"
 
 GAME_FIELDS = {
     "session_id",
@@ -96,9 +97,12 @@ def test_the_app_connects_with_the_utc_time_zone() -> None:
         assert connection.scalar(text("SHOW timezone")) == "UTC"
 
 
-def test_admin_is_403(get: Callable[..., Response], make_user: Callable[..., User]) -> None:
+@pytest.mark.parametrize("path", ["current", SOME_GAME_ID])
+def test_admin_is_403(
+    get: Callable[..., Response], make_user: Callable[..., User], path: str
+) -> None:
     # the same as starting a game: admins don't play
-    assert_error(get(make_user(role=UserRole.ADMIN), "current"), 403, ErrorCode.FORBIDDEN_ROLE)
+    assert_error(get(make_user(role=UserRole.ADMIN), path), 403, ErrorCode.FORBIDDEN_ROLE)
 
 
 def test_no_open_game_is_404(get: Callable[..., Response], make_user: Callable[..., User]) -> None:
@@ -129,14 +133,28 @@ def test_own_game_by_id(
     get: Callable[..., Response],
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
 ) -> None:
     student = make_user()
     game = make_game_session(student, state=SessionState.COMPLETED, completed_at=datetime.now(UTC))
+    make_session_location(
+        game,
+        1,
+        status=LocationStatus.COMPLETED,
+        completed_at=datetime.now(UTC),
+        points_awarded=100,
+    )
 
     response = get(student, str(game.id))
 
     assert response.status_code == 200, response.text
-    assert response.json()["state"] == SessionState.COMPLETED.value
+    body = response.json()
+    assert set(body) == GAME_FIELDS
+    assert (body["session_id"], body["state"]) == (str(game.id), SessionState.COMPLETED.value)
+    assert set(body["locations"][0]) == LOCATION_FIELDS
+    assert body["locations"][0]["points_awarded"] == 100
+    # no room, answers or coordinates
+    assert "SCI333" not in response.text
 
 
 def test_expiry_while_reading_by_id_is_committed(
@@ -153,8 +171,11 @@ def test_expiry_while_reading_by_id_is_committed(
 
     response = get(student, str(game.id))
 
+    assert response.status_code == 200, response.text
     assert response.json()["end_reason"] == SessionEndReason.EXPIRED.value
     assert transaction_calls.count("commit") == 1
+    db.refresh(game)
+    assert (game.state, game.end_reason) == (SessionState.ABANDONED, SessionEndReason.EXPIRED)
 
 
 def test_another_students_game_or_an_unknown_id_is_404(
@@ -172,17 +193,17 @@ def test_another_students_game_or_an_unknown_id_is_404(
 def test_an_id_that_is_not_a_uuid_is_422(
     get: Callable[..., Response], make_user: Callable[..., User]
 ) -> None:
-    assert get(make_user(), "not-a-uuid").status_code == 422
+    assert_error(get(make_user(), "not-a-uuid"), 422, ErrorCode.VALIDATION_ERROR)
 
 
-@pytest.mark.parametrize("path", ["current", str(uuid4())])
+@pytest.mark.parametrize("path", ["current", SOME_GAME_ID])
 def test_needs_a_signed_in_user(client: TestClient, path: str) -> None:
     response = client.get(f"{URL}/{path}")
 
     assert_error(response, 401, ErrorCode.NOT_AUTHENTICATED)
 
 
-@pytest.mark.parametrize("path", ["current", str(uuid4())])
+@pytest.mark.parametrize("path", ["current", SOME_GAME_ID])
 def test_disabled_account_is_403(
     get: Callable[..., Response], make_user: Callable[..., User], path: str
 ) -> None:
