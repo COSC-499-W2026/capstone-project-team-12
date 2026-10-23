@@ -154,7 +154,7 @@
           "classes"
         ],
         "summary": "Create a classroom",
-        "description": "Create a classroom with a fixed target language and generate its initial eight-character access code. Only active staff accounts may create classrooms. The classroom, owner assignment, and initial access code are saved in one transaction.",
+        "description": "Create a classroom with a fixed target language and generate its initial eight-character access code. Only active staff accounts may create classrooms. The classroom, owner assignment, and initial access code are saved in one transaction. If no expiration is provided, the access code expires at the end of the classroom's semester.",
         "operationId": "createClass",
         "requestBody": {
           "content": {
@@ -718,10 +718,17 @@
             "description": "Fixed target language for the classroom."
           },
           "expires_at": {
-            "type": "string",
-            "format": "date-time",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Expires At",
-            "description": "Timezone-aware expiration for the initial access code."
+            "description": "Optional timezone-aware expiration for the initial access code. Defaults to the end of the classroom's semester."
           },
           "max_uses": {
             "anyOf": [
@@ -741,8 +748,7 @@
         "required": [
           "name",
           "semester",
-          "language",
-          "expires_at"
+          "language"
         ],
         "title": "CreateClassRequest",
         "description": "Details for a new classroom and its initial access code."
