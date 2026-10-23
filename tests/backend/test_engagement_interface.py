@@ -151,8 +151,18 @@ def test_require_active_enrolment_returns_the_class_language(
         (True, None, ErrorCode.NOT_FOUND),
         (True, EnrollmentEndReason.LEFT, ErrorCode.NOT_FOUND),
         (True, EnrollmentEndReason.ARCHIVED, ErrorCode.CLASS_ARCHIVED),
+        (False, EnrollmentEndReason.REMOVED, ErrorCode.NOT_FOUND),
+        (True, EnrollmentEndReason.REMOVED, ErrorCode.NOT_FOUND),
     ],
-    ids=["never-joined", "left", "archived-never-joined", "left-then-archived", "ended-by-archive"],
+    ids=[
+        "never-joined",
+        "left",
+        "archived-never-joined",
+        "left-then-archived",
+        "ended-by-archive",
+        "removed",
+        "removed-then-archived",
+    ],
 )
 def test_require_active_enrolment_errors(
     db: Session,
