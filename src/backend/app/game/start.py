@@ -64,7 +64,7 @@ def start_game(
     # taken before the class is looked up, so what is checked is what is stored once we hold it
     lock_user(user.id, db)
     if class_id is not None:
-        language = _class_language(user, class_id, db)
+        language = engagement.require_active_enrolment(user.id, class_id, db)
     assert language is not None
 
     _check_no_open_game(user.id, db)
@@ -76,24 +76,6 @@ def start_game(
     db.add_all(_session_locations(game, snapshots))
     db.flush()
     return StartedGame(game.id, SessionState(game.state), game.current_position, clue_url)
-
-
-def _class_language(user: User, class_id: UUID, db: Session) -> Language:
-    """The class language, if the user is an active student of a class that isn't archived."""
-    language = engagement.get_class_language(class_id, db)
-    # the same answer for a class that doesn't exist and one the student isn't in, so a
-    # student can't find out which classes exist
-    not_found = AppError(ErrorCode.NOT_FOUND, "Class not found")
-    if language is None:
-        raise not_found
-    if engagement.is_class_archived(class_id, db):
-        # only students who were in the class when it was archived are told why
-        if engagement.enrolment_ended_by_archive(user.id, class_id, db):
-            raise AppError(ErrorCode.CLASS_ARCHIVED)
-        raise not_found
-    if not engagement.is_actively_enrolled(user.id, class_id, db):
-        raise not_found
-    return language
 
 
 def _check_no_open_game(student_id: UUID, db: Session) -> None:

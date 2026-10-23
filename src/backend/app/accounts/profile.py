@@ -5,7 +5,6 @@ from uuid import UUID
 from sqlalchemy.orm import Session, object_session
 
 from app.engagement import interface as engagement
-from app.errors import AppError, ErrorCode
 from app.game.interface import refuse_if_game_open
 from app.models.accounts import User
 from app.models.enums import Language
@@ -32,20 +31,18 @@ def select_class(user: User, class_id: UUID | None, db: Session) -> None:
     """Make an active class of the student the current one, or None to switch to Practice.
 
     Raises 404 NOT_FOUND for any other class, so it doesn't show which classes exist, except 409
-    CLASS_ARCHIVED for a class whose archiving ended the student's enrolment (as POST /games does).
-    Only then 409 SESSION_ALREADY_OPEN if the student has an open game. Choosing the class the
-    student already sees as current always succeeds, even if the stored class is stale, since
-    nothing changes for them. It is judged after the lock, so a change another request just
-    committed isn't missed. The student must be loaded with this same db, which is how the lock
-    reloads the values compared here and saves the change. Flushes, doesn't commit.
+    CLASS_ARCHIVED for a class whose archiving ended the student's enrolment. Starting a game
+    uses the same check, engagement.require_active_enrolment. Only then 409 SESSION_ALREADY_OPEN
+    if the student has an open game. Choosing the class the student already sees as current
+    always succeeds, even if the stored class is stale, since nothing changes for them. It is
+    judged after the lock, so a change another request just committed isn't missed. The student
+    must be loaded with this same db, which is how the lock reloads the values compared here and
+    saves the change. Flushes, doesn't commit.
     """
     _lock(user, db)
     if class_id != current_class_id(user, db):
-        if class_id is not None and not engagement.is_actively_enrolled(user.id, class_id, db):
-            # only a student who was in the class when it was archived is told why
-            if engagement.enrolment_ended_by_archive(user.id, class_id, db):
-                raise AppError(ErrorCode.CLASS_ARCHIVED)
-            raise AppError(ErrorCode.NOT_FOUND, "Class not found")
+        if class_id is not None:
+            engagement.require_active_enrolment(user.id, class_id, db)
         refuse_if_game_open(user.id, db)
     # Also saves a fallback class the student chose again, since reads never write it back.
     user.current_class_id = class_id
