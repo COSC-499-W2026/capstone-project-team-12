@@ -112,8 +112,39 @@ def apply_location_result(
 ) -> EngagementResult:
     """Award completed-location points once and return language progression.
 
-    The caller must set the location's final status before calling. It owns
-    transaction commit/rollback and updates to game-session score fields.
+    Preconditions:
+        The game caller sets the location's final status before calling.
+        The location must belong to student_id; missing or mismatched
+        ownership raises NOT_FOUND. An unfinished location raises
+        INVALID_STAGE without changing engagement state.
+
+    Location scoring:
+        A newly processed COMPLETED location awards 100 points.
+        FAILED and SKIPPED locations award no points.
+        Awards belong to the session's language and class.
+        Practice sessions have class_id=None.
+
+    Session score ownership:
+        Engagement returns only points newly awarded by this call.
+        The game caller updates session_locations.points_awarded and
+        game_sessions.total_score within its transaction.
+        On repeated calls, the new award is zero, but the caller must
+        preserve previously stored location points.
+        The caller recalculates total_score from persisted location
+        scores; it must not blindly add the returned award.
+        Engagement bonuses do not contribute to the game session score.
+
+    Idempotency:
+        Each location award is uniquely identified in the points ledger.
+        Repeated calls award no additional points, preserve existing
+        awards, and return current cumulative language points and level.
+        Repeated calls must not trigger a new level_up or other rewards.
+
+    Transactions:
+        The caller owns commit and rollback. Engagement may flush but
+        must not commit or roll back. Ledger and language-stat changes
+        must remain atomic with the game caller's changes.
+
     Streaks, challenges, and achievements are not implemented in this PR.
     """
     location = db.get(SessionLocation, session_location_id)
