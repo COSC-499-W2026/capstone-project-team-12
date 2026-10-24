@@ -210,6 +210,10 @@ def leave_class_endpoint(
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """Leave a classroom and close its open games in one transaction."""
-    leave_class(user.id, class_id, db)
-    end_open_sessions(class_id, db, student_id=user.id)
-    db.commit()
+    try:
+        leave_class(user.id, class_id, db)
+        end_open_sessions(class_id, db, student_id=user.id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
