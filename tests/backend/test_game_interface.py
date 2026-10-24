@@ -1,11 +1,14 @@
-"""end_open_sessions ends the right games when a class closes."""
+"""end_open_sessions ends the right games when a class closes; get_open_session_id finds a
+student's open game."""
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, tzinfo
 
+import pytest
 from sqlalchemy.orm import Session
 
-from app.game.interface import end_open_sessions
+from app.game.interface import end_open_sessions, get_open_session_id
+from app.game.sessions import session_idle_limit
 from app.models.accounts import User
 from app.models.engagement import Class
 from app.models.enums import LocationStatus, SessionEndReason, SessionState, SkipReason
@@ -101,3 +104,74 @@ def test_unfinished_locations_are_skipped_and_points_kept(
     assert game.total_score == 100
     # closing the class isn't student activity, so this stays (now() would be today)
     assert game.last_activity_at == last_played
+
+
+def test_open_game_is_found_whether_active_or_paused(
+    db: Session, make_user: Callable[..., User], make_game_session: Callable[..., GameSession]
+) -> None:
+    playing, paused = make_user(), make_user()
+    active_game = make_game_session(playing)
+    paused_game = make_game_session(paused, state=SessionState.PAUSED, paused_at=datetime.now(UTC))
+
+    assert get_open_session_id(playing.id, db) == active_game.id
+    assert get_open_session_id(paused.id, db) == paused_game.id
+
+
+def test_no_open_game_gives_none(
+    db: Session, make_user: Callable[..., User], make_game_session: Callable[..., GameSession]
+) -> None:
+    student, never_played, someone_else = make_user(), make_user(), make_user()
+    make_game_session(student, state=SessionState.COMPLETED, completed_at=datetime.now(UTC))
+    make_game_session(student, state=SessionState.ABANDONED, end_reason=SessionEndReason.QUIT)
+    make_game_session(someone_else)
+
+    assert get_open_session_id(student.id, db) is None
+    assert get_open_session_id(never_played.id, db) is None
+
+
+def _freeze_clock(monkeypatch: pytest.MonkeyPatch, frozen: datetime) -> None:
+    """Make datetime.now() in app.game.interface return `frozen`, so a test can hit the cutoff."""
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> "FrozenDatetime":
+            return cls.fromtimestamp(frozen.timestamp(), tz)
+
+    monkeypatch.setattr("app.game.interface.datetime", FrozenDatetime)
+
+
+def test_a_game_idle_for_the_expiry_time_does_not_count(
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    limit = session_idle_limit()
+    now = datetime.now(UTC)
+    _freeze_clock(monkeypatch, now)
+    just_inside, at_the_limit, long_idle = make_user(), make_user(), make_user()
+    inside_game = make_game_session(
+        just_inside, last_activity_at=now - limit + timedelta(minutes=1)
+    )
+    # exactly the limit counts as idle, the same boundary as is_idle (<=)
+    make_game_session(at_the_limit, last_activity_at=now - limit)
+    make_game_session(long_idle, last_activity_at=now - limit - timedelta(hours=1))
+
+    assert get_open_session_id(just_inside.id, db) == inside_game.id
+    assert get_open_session_id(at_the_limit.id, db) is None
+    assert get_open_session_id(long_idle.id, db) is None
+
+
+def test_looking_for_an_open_game_only_reads(
+    db: Session,
+    transaction_calls: list[str],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+) -> None:
+    student = make_user()
+    make_game_session(student)
+    transaction_calls.clear()
+
+    get_open_session_id(student.id, db)
+
+    assert transaction_calls == []
