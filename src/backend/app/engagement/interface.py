@@ -4,6 +4,7 @@ Implemented:
 - Issue #11: Class language, active enrolment, and archived-state lookups.
 - Issue #106: Access code validation and student enrolment.
 - Issue #84: Classroom creation service.
+- Issue #85: Student leave-class service and current-class reassignment.
 
 Interface stub:
 - Issue #15: Location result to engagement.
@@ -44,6 +45,7 @@ __all__ = [
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
+    "leave_class",
     "validate_code_and_enrol",
 ]
 
@@ -197,7 +199,7 @@ def apply_location_result(
         The 30-day milestone awards 300 points.
 
         Each milestone is awarded once per student using a separate,
-        uniquely identifiable points ledger entry.
+        uniquely identifiable ledger entry.
 
     Achievements:
         Achievements award zero points. Eligibility is checked after
@@ -459,3 +461,53 @@ def validate_code_and_enrol(
 
     db.flush()
     return school_class.id
+
+
+def leave_class(student_id: UUID, class_id: UUID, db: Session) -> None:
+    """Leave an active classroom without committing the transaction.
+
+    Preserve the enrolment record so the student can rejoin later.
+    If the current class is being left, select another active class
+    or clear the current selection.
+    """
+    student = lock_user(student_id, db)
+
+    if student is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    if not student.is_active:
+        raise AppError(ErrorCode.ACCOUNT_DISABLED)
+
+    if student.role != UserRole.STUDENT:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE)
+
+    enrollment = db.scalar(
+        select(ClassEnrollment).where(
+            ClassEnrollment.student_id == student_id,
+            ClassEnrollment.class_id == class_id,
+            ClassEnrollment.is_active.is_(True),
+        )
+    )
+
+    if enrollment is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    enrollment.is_active = False
+    enrollment.end_reason = EnrollmentEndReason.LEFT
+    enrollment.left_at = datetime.now(UTC)
+
+    if student.current_class_id == class_id:
+        student.current_class_id = db.scalar(
+            select(ClassEnrollment.class_id)
+            .join(Class, Class.id == ClassEnrollment.class_id)
+            .where(
+                ClassEnrollment.student_id == student_id,
+                ClassEnrollment.class_id != class_id,
+                ClassEnrollment.is_active.is_(True),
+                Class.archived_at.is_(None),
+            )
+            .order_by(ClassEnrollment.joined_at.desc(), ClassEnrollment.class_id)
+            .limit(1)
+        )
+
+    db.flush()

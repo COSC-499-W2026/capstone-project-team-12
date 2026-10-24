@@ -15,9 +15,11 @@ from app.engagement.interface import (
     create_class,
     generate_access_code,
     get_class_language,
+    leave_class,
     validate_code_and_enrol,
 )
 from app.errors import AppError, ErrorCode, error_responses
+from app.game.interface import end_open_sessions
 from app.models.accounts import User
 from app.models.enums import Language
 
@@ -182,3 +184,36 @@ def join_class(
         class_id=class_id,
         language=language,
     )
+
+
+@classes_router.post(
+    "/{class_id}/leave",
+    status_code=HTTPStatus.NO_CONTENT,
+    operation_id="leaveClass",
+    summary="Leave a classroom",
+    description=(
+        "Leave an actively enrolled classroom. "
+        "The student may rejoin later using a valid access code. "
+        "If this was the student's current class, another active class "
+        "is selected when available; otherwise, the selection is cleared. "
+        "Leaving ends any open (active or paused) class game sessions."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+    ),
+)
+def leave_class_endpoint(
+    class_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Leave a classroom and close its open games in one transaction."""
+    try:
+        leave_class(user.id, class_id, db)
+        end_open_sessions(class_id, db, student_id=user.id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
