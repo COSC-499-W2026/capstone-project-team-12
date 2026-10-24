@@ -23,6 +23,10 @@ from app.models.accounts import User
 from app.models.enums import Language
 
 classes_router = APIRouter(prefix="/me/classes", tags=["classes"])
+teacher_classes_router = APIRouter(
+    prefix="/teacher/classes",
+    tags=["classes"],
+)
 
 
 class JoinClassRequest(BaseModel):
@@ -60,8 +64,12 @@ class CreateClassRequest(BaseModel):
     language: Language = Field(
         description="Fixed target language for the classroom.",
     )
-    expires_at: datetime = Field(
-        description="Timezone-aware expiration for the initial access code.",
+    expires_at: datetime | None = Field(
+        default=None,
+        description=(
+            "Optional timezone-aware expiration for the initial access code. "
+            "Defaults to the end of the classroom's semester."
+        ),
     )
     max_uses: int | None = Field(
         default=None,
@@ -110,7 +118,7 @@ class UpdateClassResponse(BaseModel):
     leaderboard_enabled: bool
 
 
-@classes_router.post(
+@teacher_classes_router.post(
     "",
     response_model=CreateClassResponse,
     status_code=HTTPStatus.CREATED,
@@ -120,7 +128,9 @@ class UpdateClassResponse(BaseModel):
         "Create a classroom with a fixed target language and generate "
         "its initial eight-character access code. Only active staff "
         "accounts may create classrooms. The classroom, owner assignment, "
-        "and initial access code are saved in one transaction."
+        "and initial access code are saved in one transaction. "
+        "If no expiration is provided, the access code expires at the "
+        "end of the classroom's semester."
     ),
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
@@ -166,7 +176,7 @@ def create_class_endpoint(
         raise
 
 
-@classes_router.patch(
+@teacher_classes_router.patch(
     "/{class_id}",
     response_model=UpdateClassResponse,
     operation_id="updateClass",

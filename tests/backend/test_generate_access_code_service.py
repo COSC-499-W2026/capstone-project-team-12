@@ -3,11 +3,13 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.engagement.interface import generate_access_code
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
@@ -304,3 +306,62 @@ def test_existing_code_collision_is_retried(
 
     assert result.code == "BBBBBBBB"
     assert result.code != existing.code
+
+
+@pytest.mark.parametrize(
+    ("term", "end_month"),
+    [
+        ("W1", 1),
+        ("W2", 5),
+        ("S1", 7),
+        ("S2", 9),
+    ],
+)
+def test_default_expiration_is_semester_end(
+    term: str,
+    end_month: int,
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., object],
+) -> None:
+    year = datetime.now(UTC).year + 1
+    semester = f"{year}{term}"
+    expected_year = year + 1 if term in ("W1", "W2") else year
+    expected = datetime(
+        expected_year,
+        end_month,
+        1,
+        tzinfo=ZoneInfo(get_settings().app_timezone),
+    ).astimezone(UTC)
+
+    owner = make_user(role=UserRole.STAFF)
+    school_class = make_class(semester=semester)
+    make_class_staff(school_class, owner)
+
+    result = generate_access_code(school_class.id, owner, None, db)
+
+    assert result.expires_at == expected
+
+
+def test_default_expiration_rejects_ended_semester(
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., object],
+) -> None:
+    owner = make_user(role=UserRole.STAFF)
+    school_class = make_class(semester="2020W1")
+    make_class_staff(school_class, owner)
+
+    with pytest.raises(AppError) as exc:
+        generate_access_code(school_class.id, owner, None, db)
+
+    assert exc.value.code == ErrorCode.VALIDATION_ERROR
+    assert exc.value.details == [
+        {
+            "in": "body",
+            "field": "semester",
+            "message": "Cannot generate a default access code for an ended semester",
+        }
+    ]
