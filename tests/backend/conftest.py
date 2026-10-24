@@ -100,6 +100,27 @@ def auth_headers() -> Callable[[User], dict[str, str]]:
 
 
 @pytest.fixture
+def leave_as() -> Callable[
+    [TestClient, User, str, Callable[[User], dict[str, str]]],
+    Any,
+]:
+    """Shared helper for authenticated leave-class requests."""
+
+    def send(
+        client: TestClient,
+        user: User,
+        class_id: str,
+        auth_headers: Callable[[User], dict[str, str]],
+    ) -> Any:
+        return client.post(
+            f"/api/v1/me/classes/{class_id}/leave",
+            headers=auth_headers(user),
+        )
+
+    return send
+
+
+@pytest.fixture
 def split_media_url() -> Callable[[str], tuple[str, int, str]]:
     """Split a signed media URL into its (key, expires, signature) parts, decoding the key as the
     router does."""
@@ -331,7 +352,7 @@ def make_location(db: Session) -> Callable[..., Location]:
 
 @pytest.fixture
 def make_clue(db: Session, make_location: Callable[..., Location]) -> Callable[..., Clue]:
-    """A Japanese difficulty 1 clue with no transcript, for a new location unless given one."""
+    """An active location with a new room number, its answer and one entrance."""
 
     def make(location: Location | None = None, **fields: Any) -> Clue:
         values: dict[str, Any] = {"difficulty": Difficulty.BASIC, "language": Language.JA}

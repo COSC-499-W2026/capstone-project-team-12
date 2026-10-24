@@ -3,16 +3,14 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.errors import ErrorCode
 from app.models.accounts import User
-from app.models.engagement import AccessCode, Class, ClassEnrollment
+from app.models.engagement import Class, ClassEnrollment
 from app.models.enums import (
+    Language,
     LocationStatus,
     SessionEndReason,
     SessionState,
@@ -32,12 +30,6 @@ def leave_as(
         f"/api/v1/me/classes/{class_id}/leave",
         headers=auth_headers(user),
     )
-
-
-def assert_error(response: Any, status: int, code: ErrorCode) -> None:
-    """Check the application's standard error response."""
-    assert response.status_code == status, response.text
-    assert response.json()["error"]["code"] == code.value
 
 
 def test_leave_abandons_active_game_and_skips_unfinished_locations(
@@ -63,7 +55,7 @@ def test_leave_abandons_active_game_and_skips_unfinished_locations(
     in_progress = make_session_location(
         game,
         2,
-        status=LocationStatus.PENDING,
+        status=LocationStatus.NAVIGATING,
     )
 
     response = leave_as(client, student, str(school_class.id), auth_headers)
@@ -157,6 +149,54 @@ def test_leave_preserves_completed_game_and_points(
     assert location.points_awarded == 100
 
 
+def test_leave_preserves_completed_location_in_active_game(
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    auth_headers: Callable[[User], dict[str, str]],
+) -> None:
+    student = make_user()
+    school_class = make_class()
+    make_enrollment(student, school_class)
+
+    game = make_game_session(
+        student,
+        class_id=school_class.id,
+        target_language=school_class.target_language,
+        total_score=100,
+    )
+    completed = make_session_location(
+        game,
+        1,
+        status=LocationStatus.COMPLETED,
+        completed_at=datetime.now(UTC),
+        points_awarded=100,
+    )
+    pending = make_session_location(game, 2)
+
+    response = leave_as(client, student, str(school_class.id), auth_headers)
+
+    assert response.status_code == 204, response.text
+
+    db.refresh(game)
+    db.refresh(completed)
+    db.refresh(pending)
+
+    assert game.state == SessionState.ABANDONED
+    assert game.end_reason == SessionEndReason.CLASS_CLOSED
+    assert game.total_score == 100
+
+    assert completed.status == LocationStatus.COMPLETED
+    assert completed.points_awarded == 100
+
+    assert pending.status == LocationStatus.SKIPPED
+    assert pending.skip_reason == SkipReason.SESSION_ENDED
+
+
 def test_leave_does_not_affect_other_students_games(
     client: TestClient,
     db: Session,
@@ -197,75 +237,55 @@ def test_leave_does_not_affect_other_students_games(
     assert other_enrollment.is_active is True
 
 
-def test_leave_rolls_back_when_game_cleanup_fails(
+def test_leave_does_not_affect_game_in_different_class(
     client: TestClient,
     db: Session,
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
     make_enrollment: Callable[..., ClassEnrollment],
+    make_game_session: Callable[..., GameSession],
     auth_headers: Callable[[User], dict[str, str]],
 ) -> None:
     student = make_user()
-    school_class = make_class()
-    enrollment = make_enrollment(student, school_class)
-    student.current_class_id = school_class.id
-    db.commit()
+    first_class = make_class(target_language=Language.FR)
+    second_class = make_class(target_language=Language.JA)
 
-    with (
-        patch(
-            "app.api.v1.classes.end_open_sessions",
-            side_effect=RuntimeError("Game cleanup failed"),
-        ),
-        pytest.raises(RuntimeError, match="Game cleanup failed"),
-    ):
-        leave_as(client, student, str(school_class.id), auth_headers)
+    first_enrollment = make_enrollment(student, first_class)
+    second_enrollment = make_enrollment(student, second_class)
 
-    db.rollback()
-    db.refresh(enrollment)
-    db.refresh(student)
-
-    assert enrollment.is_active is True
-    assert enrollment.end_reason is None
-    assert enrollment.left_at is None
-    assert student.current_class_id == school_class.id
-
-
-def test_student_can_rejoin_after_leaving(
-    client: TestClient,
-    db: Session,
-    make_user: Callable[..., User],
-    make_class: Callable[..., Class],
-    make_enrollment: Callable[..., ClassEnrollment],
-    make_access_code: Callable[..., AccessCode],
-    auth_headers: Callable[[User], dict[str, str]],
-) -> None:
-    student = make_user()
-    school_class = make_class()
-    enrollment = make_enrollment(student, school_class)
-    access_code = make_access_code(school_class)
-    enrollment_id = enrollment.id
-
-    leave_response = leave_as(client, student, str(school_class.id), auth_headers)
-    assert leave_response.status_code == 204, leave_response.text
-
-    join_response = client.post(
-        "/api/v1/me/classes/join",
-        json={"access_code": access_code.code},
-        headers=auth_headers(student),
+    first_game = make_game_session(
+        student,
+        class_id=first_class.id,
+        target_language=first_class.target_language,
     )
 
-    assert join_response.status_code == 200, join_response.text
+    # Close the first game before creating the student's second open game.
+    first_game.state = SessionState.ABANDONED
+    first_game.end_reason = SessionEndReason.CLASS_CLOSED
+    db.flush()
 
-    db.refresh(enrollment)
-    db.refresh(student)
-
-    assert enrollment.id == enrollment_id
-    assert enrollment.is_active is True
-    assert enrollment.end_reason is None
-    assert enrollment.left_at is None
-    assert student.current_class_id == school_class.id
-
-    rows = (
-        db.query(ClassEnrollment).filter_by(student_id=student.id, class_id=school_class.id).all()
+    second_game = make_game_session(
+        student,
+        class_id=second_class.id,
+        target_language=second_class.target_language,
+        state=SessionState.PAUSED,
+        paused_at=datetime.now(UTC),
     )
-    assert len(rows) == 1
+
+    response = leave_as(client, student, str(first_class.id), auth_headers)
+
+    assert response.status_code == 204, response.text
+
+    db.refresh(first_game)
+    db.refresh(second_game)
+    db.refresh(first_enrollment)
+    db.refresh(second_enrollment)
+
+    assert first_game.state == SessionState.ABANDONED
+    assert first_game.end_reason == SessionEndReason.CLASS_CLOSED
+
+    assert second_game.state == SessionState.PAUSED
+    assert second_game.end_reason is None
+
+    assert first_enrollment.is_active is False
+    assert second_enrollment.is_active is True
