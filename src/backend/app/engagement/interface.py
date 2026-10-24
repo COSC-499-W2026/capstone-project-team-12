@@ -198,7 +198,7 @@ def apply_location_result(
         The 30-day milestone awards 300 points.
 
         Each milestone is awarded once per student using a separate,
-        uniquely identifiable points ledger entry.
+        uniquely identifiable ledger entry.
 
     Achievements:
         Achievements award zero points. Eligibility is checked after
@@ -469,7 +469,7 @@ def leave_class(student_id: UUID, class_id: UUID, db: Session) -> None:
     If the current class is being left, select another active class
     or clear the current selection.
     """
-    student = db.scalar(select(User).where(User.id == student_id).with_for_update())
+    student = lock_user(student_id, db)
 
     if student is None:
         raise AppError(ErrorCode.NOT_FOUND)
@@ -493,7 +493,7 @@ def leave_class(student_id: UUID, class_id: UUID, db: Session) -> None:
 
     enrollment.is_active = False
     enrollment.end_reason = EnrollmentEndReason.LEFT
-    enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
+    enrollment.left_at = datetime.now(UTC)
 
     if student.current_class_id == class_id:
         student.current_class_id = db.scalar(

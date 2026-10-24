@@ -195,8 +195,9 @@ def join_class(
     description=(
         "Leave an actively enrolled classroom. "
         "The student may rejoin later using a valid access code. "
-        "Leaving clears the current class selection if it references "
-        "this classroom and ends any active class game sessions."
+        "If this was the student's current class, another active class "
+        "is selected when available; otherwise, the selection is cleared. "
+        "Leaving ends any open (active or paused) class game sessions."
     ),
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,

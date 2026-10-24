@@ -221,7 +221,7 @@
           "classes"
         ],
         "summary": "Leave a classroom",
-        "description": "Leave an actively enrolled classroom. The student may rejoin later using a valid access code. Leaving clears the current class selection if it references this classroom and ends any active class game sessions.",
+        "description": "Leave an actively enrolled classroom. The student may rejoin later using a valid access code. If this was the student's current class, another active class is selected when available; otherwise, the selection is cleared. Leaving ends any open (active or paused) class game sessions.",
         "operationId": "leaveClass",
         "security": [
           {
