@@ -2,20 +2,19 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
 from app.content.interface import LocationSnapshot
 from app.db import violated_constraint
 from app.engagement import interface as engagement
 from app.errors import AppError, ErrorCode
 from app.game.draw import draw_locations
-from app.game.sessions import abandon_sessions, is_idle
+from app.game.sessions import abandon_sessions, is_idle, session_idle_limit
 from app.models.accounts import User
 from app.models.enums import (
     Difficulty,
@@ -27,6 +26,7 @@ from app.models.enums import (
 )
 from app.models.game import OPEN_SESSION_STATES, GameSession, SessionLocation
 from app.services.audio import get_audio_service
+from app.services.locks import lock_user
 
 _ONE_OPEN_GAME = "uq_game_sessions_one_open_per_student"
 
@@ -60,6 +60,9 @@ def start_game(
         raise ValueError("pass either class_id or language")
     if user.role == UserRole.ADMIN:
         raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
+    # the same lock as a class or language switch, so the two can't both pass their open-game check;
+    # taken before the class is looked up, so what is checked is what is stored once we hold it
+    lock_user(user.id, db)
     if class_id is not None:
         language = _class_language(user, class_id, db)
     assert language is not None
@@ -103,8 +106,7 @@ def _check_no_open_game(student_id: UUID, db: Session) -> None:
     )
     if game is None:
         return
-    idle_limit = timedelta(hours=get_settings().session_idle_expiry_hours)
-    if not is_idle(game, datetime.now(UTC), idle_limit):
+    if not is_idle(game, datetime.now(UTC), session_idle_limit()):
         raise AppError(
             ErrorCode.SESSION_ALREADY_OPEN,
             "Finish or quit your current game first",
