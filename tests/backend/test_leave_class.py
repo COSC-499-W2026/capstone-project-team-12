@@ -224,6 +224,7 @@ def test_leave_rolls_back_when_game_cleanup_fails(
     make_enrollment: Callable[..., ClassEnrollment],
     auth_headers: Callable[[User], dict[str, str]],
     transaction_calls: list[str],
+    leave_as: Callable[..., Any],
 ) -> None:
     """A game cleanup failure must not persist the student's departure."""
     school_class = make_class()

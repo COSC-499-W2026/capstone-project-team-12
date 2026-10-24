@@ -19,19 +19,6 @@ from app.models.enums import (
 from app.models.game import GameSession, SessionLocation
 
 
-def leave_as(
-    client: TestClient,
-    user: User,
-    class_id: str,
-    auth_headers: Callable[[User], dict[str, str]],
-) -> Any:
-    """Send an authenticated leave-class request."""
-    return client.post(
-        f"/api/v1/me/classes/{class_id}/leave",
-        headers=auth_headers(user),
-    )
-
-
 def test_leave_abandons_active_game_and_skips_unfinished_locations(
     client: TestClient,
     db: Session,
@@ -41,6 +28,7 @@ def test_leave_abandons_active_game_and_skips_unfinished_locations(
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     student = make_user()
     school_class = make_class()
@@ -82,6 +70,7 @@ def test_leave_abandons_paused_game(
     make_enrollment: Callable[..., ClassEnrollment],
     make_game_session: Callable[..., GameSession],
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     student = make_user()
     school_class = make_class()
@@ -114,6 +103,7 @@ def test_leave_preserves_completed_game_and_points(
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     student = make_user()
     school_class = make_class()
@@ -158,6 +148,7 @@ def test_leave_preserves_completed_location_in_active_game(
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     student = make_user()
     school_class = make_class()
@@ -205,6 +196,7 @@ def test_leave_does_not_affect_other_students_games(
     make_enrollment: Callable[..., ClassEnrollment],
     make_game_session: Callable[..., GameSession],
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     leaving_student = make_user()
     other_student = make_user()
@@ -245,6 +237,7 @@ def test_leave_does_not_affect_game_in_different_class(
     make_enrollment: Callable[..., ClassEnrollment],
     make_game_session: Callable[..., GameSession],
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     student = make_user()
     first_class = make_class(target_language=Language.FR)
