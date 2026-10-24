@@ -173,3 +173,74 @@ def generate_access_code(
         ErrorCode.INTERNAL_ERROR,
         "Unable to generate a unique access code",
     )
+
+
+def update_class_settings(
+    class_id: UUID,
+    actor: User,
+    db: Session,
+    *,
+    name: str | None = None,
+    leaderboard_enabled: bool | None = None,
+) -> Class:
+    """Update owner-editable classroom settings without changing its language.
+
+    The caller owns the transaction. This function never commits.
+    """
+    if not actor.is_active:
+        raise AppError(ErrorCode.ACCOUNT_DISABLED)
+
+    school_class = db.get(Class, class_id)
+
+    if school_class is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    role = db.execute(
+        select(ClassStaff.role).where(
+            ClassStaff.class_id == class_id,
+            ClassStaff.user_id == actor.id,
+        )
+    ).scalar_one_or_none()
+
+    if role != ClassStaffRole.OWNER:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE)
+
+    if school_class.archived_at is not None:
+        raise AppError(ErrorCode.CLASS_ARCHIVED)
+
+    if name is not None:
+        cleaned_name = name.strip()
+
+        if not cleaned_name:
+            raise AppError(
+                ErrorCode.VALIDATION_ERROR,
+                "Class name cannot be empty",
+                details=[
+                    {
+                        "in": "body",
+                        "field": "name",
+                        "message": "Class name cannot be empty",
+                    }
+                ],
+            )
+
+        if "\x00" in cleaned_name:
+            raise AppError(
+                ErrorCode.VALIDATION_ERROR,
+                "Class name contains a NUL character",
+                details=[
+                    {
+                        "in": "body",
+                        "field": "name",
+                        "message": "Class name cannot contain NUL characters",
+                    }
+                ],
+            )
+
+        school_class.name = cleaned_name
+
+    if leaderboard_enabled is not None:
+        school_class.leaderboard_enabled = leaderboard_enabled
+
+    db.flush()
+    return school_class
