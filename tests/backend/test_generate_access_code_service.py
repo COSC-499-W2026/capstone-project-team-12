@@ -307,22 +307,27 @@ def test_existing_code_collision_is_retried(
 
 
 @pytest.mark.parametrize(
-    ("semester", "expected"),
+    ("term", "end_month"),
     [
-        ("2026W1", datetime(2027, 1, 1, 7, tzinfo=UTC)),
-        ("2026W2", datetime(2027, 5, 1, 7, tzinfo=UTC)),
-        ("2027S1", datetime(2027, 7, 1, 7, tzinfo=UTC)),
-        ("2027S2", datetime(2027, 9, 1, 7, tzinfo=UTC)),
+        ("W1", 1),
+        ("W2", 5),
+        ("S1", 7),
+        ("S2", 9),
     ],
 )
 def test_default_expiration_is_semester_end(
-    semester: str,
-    expected: datetime,
+    term: str,
+    end_month: int,
     db: Session,
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
     make_class_staff: Callable[..., object],
 ) -> None:
+    year = datetime.now(UTC).year + 1
+    semester = f"{year}{term}"
+    expected_year = year + 1 if term in ("W1", "W2") else year
+    expected = datetime(expected_year, end_month, 1, 7, tzinfo=UTC)
+
     owner = make_user(role=UserRole.STAFF)
     school_class = make_class(semester=semester)
     make_class_staff(school_class, owner)

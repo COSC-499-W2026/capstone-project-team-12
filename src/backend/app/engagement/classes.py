@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import (
@@ -20,7 +21,6 @@ from app.models.engagement import (
 from app.models.enums import ClassStaffRole, Language, UserRole
 
 SEMESTER_PATTERN = re.compile(r"[0-9]{4}(W1|W2|S1|S2)\Z")
-VANCOUVER_TZ = ZoneInfo("America/Vancouver")
 
 SEMESTER_END_MONTHS = {
     "W1": 12,
@@ -34,7 +34,19 @@ def semester_end_expiration(semester: str) -> datetime:
     """Return midnight after the semester's final calendar day, in UTC."""
     match = SEMESTER_PATTERN.fullmatch(semester)
     if match is None:
-        raise AppError(ErrorCode.VALIDATION_ERROR, "Invalid semester format")
+        raise AppError(
+            ErrorCode.VALIDATION_ERROR,
+            "Invalid semester format",
+            details=[
+                {
+                    "in": "body",
+                    "field": "semester",
+                    "message": "Expected YYYYW1, YYYYW2, YYYYS1, or YYYYS2",
+                }
+            ],
+        )
+
+    local_tz = ZoneInfo(get_settings().app_timezone)
 
     year = int(semester[:4])
     term = semester[4:]
@@ -44,9 +56,9 @@ def semester_end_expiration(semester: str) -> datetime:
         year += 1
 
     if end_month == 12:
-        next_month = datetime(year + 1, 1, 1, tzinfo=VANCOUVER_TZ)
+        next_month = datetime(year + 1, 1, 1, tzinfo=local_tz)
     else:
-        next_month = datetime(year, end_month + 1, 1, tzinfo=VANCOUVER_TZ)
+        next_month = datetime(year, end_month + 1, 1, tzinfo=local_tz)
 
     return next_month.astimezone(UTC)
 
@@ -169,6 +181,13 @@ def generate_access_code(
         raise AppError(
             ErrorCode.VALIDATION_ERROR,
             "Expiration must be in the future",
+            details=[
+                {
+                    "in": "body",
+                    "field": "expires_at",
+                    "message": "Expiration must be in the future",
+                }
+            ],
         )
 
     if max_uses is not None and max_uses <= 0:
