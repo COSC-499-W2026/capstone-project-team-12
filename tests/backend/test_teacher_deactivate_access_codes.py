@@ -64,18 +64,27 @@ def test_unrelated_user_cannot_deactivate_code(
     auth_headers: Callable[[User], dict[str, str]],
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
+    make_class_staff: Callable[..., object],
     make_access_code: Callable[..., AccessCode],
 ) -> None:
     outsider = make_user(role=UserRole.STAFF)
+    other_class = make_class()
+    make_class_staff(other_class, outsider)
+
     school_class = make_class()
     code = make_access_code(school_class)
     code_id = code.id
 
     db.commit()
 
-    response = client.patch(f"{ROUTE}/{code_id}", headers=auth_headers(outsider))
+    response = client.patch(
+        f"{ROUTE}/{code_id}",
+        headers=auth_headers(outsider),
+    )
 
     assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN_ROLE"
+
     persisted_code = db.get(AccessCode, code_id)
     assert persisted_code is not None
     assert persisted_code.is_active is True
@@ -221,3 +230,70 @@ def test_service_does_not_commit(
     assert result.is_active is False
     assert "commit" not in transaction_calls
     assert "rollback" not in transaction_calls
+
+
+def test_disabled_owner_cannot_deactivate_code(
+    client: TestClient,
+    db: Session,
+    auth_headers: Callable[[User], dict[str, str]],
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., object],
+    make_access_code: Callable[..., AccessCode],
+) -> None:
+    owner = make_user(role=UserRole.STAFF)
+    school_class = make_class()
+    make_class_staff(school_class, owner)
+    code = make_access_code(school_class)
+    code_id = code.id
+
+    headers = auth_headers(owner)
+    owner.is_active = False
+    db.commit()
+
+    response = client.patch(
+        f"{ROUTE}/{code_id}",
+        headers=headers,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "ACCOUNT_DISABLED"
+
+    persisted_code = db.get(AccessCode, code_id)
+    assert persisted_code is not None
+    assert persisted_code.is_active is True
+
+
+def test_deactivated_code_cannot_be_used_to_join(
+    client: TestClient,
+    db: Session,
+    auth_headers: Callable[[User], dict[str, str]],
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., object],
+    make_access_code: Callable[..., AccessCode],
+) -> None:
+    owner = make_user(role=UserRole.STAFF)
+    student = make_user(role=UserRole.STUDENT)
+    school_class = make_class()
+    make_class_staff(school_class, owner)
+    code = make_access_code(school_class)
+
+    deactivate_response = client.patch(
+        f"{ROUTE}/{code.id}",
+        headers=auth_headers(owner),
+    )
+
+    assert deactivate_response.status_code == 204
+
+    db.refresh(code)
+    assert code.is_active is False
+
+    join_response = client.post(
+        "/api/v1/me/classes/join",
+        json={"access_code": code.code},
+        headers=auth_headers(student),
+    )
+
+    assert join_response.status_code == 400
+    assert join_response.json()["error"]["code"] == "INVALID_ACCESS_CODE"
