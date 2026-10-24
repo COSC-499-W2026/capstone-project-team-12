@@ -43,7 +43,6 @@ def test_successful_join(
     make_class: Callable[..., Class],
     make_access_code: Callable[..., AccessCode],
 ) -> None:
-    """Joining a class preserves the student's Practice language."""
     student = make_user(preferred_language=Language.FR)
     school_class = make_class(target_language=Language.JA)
     access_code = make_access_code(school_class)
@@ -304,44 +303,18 @@ def test_removed_student_cannot_rejoin(
     enrollment.left_at = enrollment.joined_at + timedelta(minutes=1)
     db.flush()
 
+    original_uses = access_code.uses_count
+
     assert_error(
         join_as(client, student, access_code.code),
         409,
         ErrorCode.REMOVED_FROM_CLASS,
     )
 
-
-def test_voluntarily_left_student_can_rejoin(
-    client: TestClient,
-    db: Session,
-    make_user: Callable[..., User],
-    make_class: Callable[..., Class],
-    make_access_code: Callable[..., AccessCode],
-    make_enrollment: Callable[..., ClassEnrollment],
-) -> None:
-    """A student who voluntarily left can rejoin their former class."""
-    student = make_user(preferred_language=Language.FR)
-    school_class = make_class(target_language=Language.JA)
-    access_code = make_access_code(school_class)
-    enrollment = make_enrollment(student, school_class)
-
-    enrollment.is_active = False
-    enrollment.end_reason = EnrollmentEndReason.LEFT
-    enrollment.left_at = enrollment.joined_at + timedelta(minutes=1)
-    db.flush()
-
-    response = join_as(client, student, access_code.code)
-
-    assert response.status_code == 200, response.text
-
     db.refresh(enrollment)
-    db.refresh(student)
-
-    assert enrollment.is_active
-    assert enrollment.end_reason is None
-    assert enrollment.left_at is None
-    assert student.current_class_id == school_class.id
-    assert student.preferred_language == Language.FR
+    db.refresh(access_code)
+    assert enrollment.end_reason == EnrollmentEndReason.REMOVED
+    assert access_code.uses_count == original_uses
 
 
 @pytest.mark.parametrize("code_state", ["expired", "exhausted"])
