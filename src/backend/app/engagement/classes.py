@@ -170,6 +170,18 @@ def generate_access_code(
 
     if expires_at is None:
         expires_at = semester_end_expiration(school_class.semester)
+        if expires_at <= datetime.now(UTC):
+            raise AppError(
+                ErrorCode.VALIDATION_ERROR,
+                "The classroom semester has ended",
+                details=[
+                    {
+                        "in": "body",
+                        "field": "semester",
+                        "message": "Cannot generate a default access code for an ended semester",
+                    }
+                ],
+            )
 
     if expires_at.tzinfo is None or expires_at.utcoffset() is None:
         raise AppError(
