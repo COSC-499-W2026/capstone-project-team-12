@@ -3,7 +3,7 @@
 Implemented:
 - Issue #11: Class language, active enrolment, and archived-state lookups.
 - Issue #106: Access code validation and student enrolment.
-- Issue #84: Classroom creation service.
+- Issue #84: Classroom creation and settings update services (update_class_settings).
 
 Interface stub:
 - Issue #15: Location result to engagement.
@@ -22,7 +22,11 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.engagement.classes import create_class, generate_access_code
+from app.engagement.classes import (
+    create_class,
+    generate_access_code,
+    update_class_settings,
+)
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff
 from app.models.engagement import AccessCode, Class, ClassEnrollment
@@ -44,6 +48,7 @@ __all__ = [
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
+    "update_class_settings",
     "validate_code_and_enrol",
 ]
 
