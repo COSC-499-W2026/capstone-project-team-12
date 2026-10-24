@@ -199,7 +199,7 @@ def apply_location_result(
         The 30-day milestone awards 300 points.
 
         Each milestone is awarded once per student using a separate,
-        uniquely identifiable ledger entry.
+        uniquely identifiable points ledger entry.
 
     Achievements:
         Achievements award zero points. Eligibility is checked after
