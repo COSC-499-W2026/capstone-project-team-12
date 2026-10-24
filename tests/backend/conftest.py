@@ -352,7 +352,7 @@ def make_location(db: Session) -> Callable[..., Location]:
 
 @pytest.fixture
 def make_clue(db: Session, make_location: Callable[..., Location]) -> Callable[..., Clue]:
-    """An active location with a new room number, its answer and one entrance."""
+    """A Japanese difficulty 1 clue with no transcript, for a new location unless given one."""
 
     def make(location: Location | None = None, **fields: Any) -> Clue:
         values: dict[str, Any] = {"difficulty": Difficulty.BASIC, "language": Language.JA}
