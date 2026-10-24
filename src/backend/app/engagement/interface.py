@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.engagement.classes import (
     create_class,
+    deactivate_access_code,
     generate_access_code,
     update_class_settings,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "EngagementResult",
     "apply_location_result",
     "create_class",
+    "deactivate_access_code",
     "enrolment_ended_by_archive",
     "generate_access_code",
     "get_active_class_ids",
