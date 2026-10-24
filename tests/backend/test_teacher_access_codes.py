@@ -7,10 +7,10 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.engagement.classes import semester_end_expiration
 from app.models.accounts import User
 from app.models.engagement import AccessCode, Class
 from app.models.enums import ClassStaffRole, UserRole
-from app.engagement.classes import semester_end_expiration
 
 URL = "/api/v1/teacher/classes"
 
