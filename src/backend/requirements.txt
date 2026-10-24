@@ -37,6 +37,7 @@ pydantic_core==2.46.5
 pyjwt==2.15.1
 python-bidi==0.6.11
 python-dotenv==1.2.4
+python-multipart==0.0.32
 PyYAML==6.0.3
 scikit-image==0.26.0
 scipy==1.17.1
