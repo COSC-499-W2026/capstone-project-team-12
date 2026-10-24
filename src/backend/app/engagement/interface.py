@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.engagement.classes import (
     create_class,
     generate_access_code,
+    list_staff_classes,
     update_class_settings,
 )
 from app.errors import AppError, ErrorCode
@@ -48,6 +49,7 @@ __all__ = [
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
+    "list_staff_classes",
     "update_class_settings",
     "validate_code_and_enrol",
 ]
