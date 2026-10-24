@@ -79,7 +79,8 @@ def test_code_defaults_to_semester_end(
     make_class_staff: Callable[..., object],
 ) -> None:
     teacher = make_user(role=UserRole.STAFF)
-    school_class = make_class(semester="2026W1")
+    semester = f"{datetime.now(UTC).year + 1}W1"
+    school_class = make_class(semester=semester)
     make_class_staff(school_class, teacher)
 
     response = client.post(
@@ -90,7 +91,7 @@ def test_code_defaults_to_semester_end(
 
     assert response.status_code == 201
     assert datetime.fromisoformat(response.json()["expires_at"]) == semester_end_expiration(
-        "2026W1"
+        semester
     )
 
 
@@ -110,6 +111,7 @@ def test_unassigned_student_cannot_generate_code(
     )
 
     assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN_ROLE"
 
 
 def test_archived_class_rejects_new_code(
@@ -147,6 +149,7 @@ def test_missing_class_returns_not_found(
     )
 
     assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
 
 
 def test_invalid_max_uses_is_rejected(
@@ -167,6 +170,32 @@ def test_invalid_max_uses_is_rejected(
     )
 
     assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_past_expiration_is_rejected(
+    client: TestClient,
+    auth_headers: Callable[[User], dict[str, str]],
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., object],
+) -> None:
+    teacher = make_user(role=UserRole.STAFF)
+    school_class = make_class()
+    make_class_staff(school_class, teacher)
+
+    response = client.post(
+        f"{URL}/{school_class.id}/access-codes",
+        json={"expires_at": (datetime.now(UTC) - timedelta(days=1)).isoformat()},
+        headers=auth_headers(teacher),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert any(
+        detail["in"] == "body" and detail["field"] == "expires_at"
+        for detail in response.json()["error"]["details"]
+    )
 
 
 def test_code_generation_requires_authentication(

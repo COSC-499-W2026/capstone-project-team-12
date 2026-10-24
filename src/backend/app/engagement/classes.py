@@ -169,6 +169,13 @@ def generate_access_code(
         raise AppError(
             ErrorCode.VALIDATION_ERROR,
             "Expiration must be in the future",
+            details=[
+                {
+                    "in": "body",
+                    "field": "expires_at",
+                    "message": "Expiration must be in the future",
+                }
+            ],
         )
 
     if max_uses is not None and max_uses <= 0:
