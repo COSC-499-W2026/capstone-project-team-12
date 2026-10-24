@@ -18,7 +18,6 @@ from app.engagement.interface import (
     leave_class,
     validate_code_and_enrol,
 )
-
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.interface import end_open_sessions
 from app.models.accounts import User
