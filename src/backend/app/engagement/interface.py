@@ -3,6 +3,7 @@
 Implemented:
 - Issue #11: Class language, active enrolment, and archived-state lookups.
 - Issue #106: Access code validation and student enrolment.
+- Issue #84: Classroom creation service.
 
 Interface stub:
 - Issue #15: Location result to engagement.
@@ -21,8 +22,9 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.engagement.classes import create_class, generate_access_code
 from app.errors import AppError, ErrorCode
-from app.models.accounts import ClassStaff, User
+from app.models.accounts import ClassStaff
 from app.models.engagement import AccessCode, Class, ClassEnrollment
 from app.models.enums import (
     ClassStaffRole,
@@ -30,11 +32,15 @@ from app.models.enums import (
     Language,
     UserRole,
 )
+from app.services.locks import lock_user
 
 __all__ = [
     "EngagementResult",
     "apply_location_result",
+    "create_class",
     "enrolment_ended_by_archive",
+    "generate_access_code",
+    "get_active_class_ids",
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
@@ -260,6 +266,20 @@ def get_class_language(class_id: UUID, db: Session) -> Language | None:
     return Language(school_class.target_language)
 
 
+def get_active_class_ids(student_id: UUID, db: Session) -> list[UUID]:
+    """Return the classes the student is actively enrolled in, most recently joined first.
+
+    An archived class has no active enrolments, so it is never listed. A class the student left
+    and rejoined keeps its first `joined_at`, so it can rank lower than "most recent" suggests.
+    """
+    statement = (
+        select(ClassEnrollment.class_id)
+        .where(ClassEnrollment.student_id == student_id, ClassEnrollment.is_active.is_(True))
+        .order_by(ClassEnrollment.joined_at.desc(), ClassEnrollment.class_id)
+    )
+    return list(db.scalars(statement))
+
+
 def is_actively_enrolled(student_id: UUID, class_id: UUID, db: Session) -> bool:
     """Return whether a student has an active enrolment in the class.
 
@@ -330,7 +350,7 @@ def validate_code_and_enrol(
     normalized_code = "".join(code.upper().split()).replace("-", "")
     now = datetime.now(UTC)
 
-    user = db.scalar(select(User).where(User.id == student_id).with_for_update())
+    user = lock_user(student_id, db)
 
     if user is None:
         raise AppError(ErrorCode.FORBIDDEN_ROLE)
