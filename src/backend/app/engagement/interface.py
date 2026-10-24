@@ -3,7 +3,7 @@
 Implemented:
 - Issue #11: Class language, active enrolment, and archived-state lookups.
 - Issue #106: Access code validation and student enrolment.
-- Issue #84: Classroom creation service.
+- Issue #84: Classroom creation, access code generation, class settings, and classroom listing via list_staff_classes.
 
 Interface stub:
 - Issue #15: Location result to engagement.
