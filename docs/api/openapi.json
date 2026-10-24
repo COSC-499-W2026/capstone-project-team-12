@@ -61,73 +61,6 @@
         }
       }
     },
-    "/api/v1/me/classes": {
-      "post": {
-        "tags": [
-          "classes"
-        ],
-        "summary": "Create a classroom",
-        "description": "Create a classroom with a fixed target language and generate its initial eight-character access code. Only active staff accounts may create classrooms. The classroom, owner assignment, and initial access code are saved in one transaction.",
-        "operationId": "createClass",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateClassRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreateClassResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "OAuth2PasswordBearer": []
-          }
-        ]
-      }
-    },
     "/api/v1/me/classes/join": {
       "post": {
         "tags": [
@@ -213,6 +146,172 @@
             "OAuth2PasswordBearer": []
           }
         ]
+      }
+    },
+    "/api/v1/teacher/classes": {
+      "post": {
+        "tags": [
+          "classes"
+        ],
+        "summary": "Create a classroom",
+        "description": "Create a classroom with a fixed target language and generate its initial eight-character access code. Only active staff accounts may create classrooms. The classroom, owner assignment, and initial access code are saved in one transaction. If no expiration is provided, the access code expires at the end of the classroom's semester.",
+        "operationId": "createClass",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClassRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateClassResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/teacher/classes/{class_id}": {
+      "patch": {
+        "tags": [
+          "classes"
+        ],
+        "summary": "Update classroom settings",
+        "description": "Allow the classroom owner to update its name and leaderboard setting. The target language and semester are fixed and cannot be changed. Teaching assistants and students cannot update classroom settings. Archived classrooms are read-only.",
+        "operationId": "updateClass",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "class_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Class Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateClassRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateClassResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/auth/verify-email": {
@@ -706,10 +805,17 @@
             "description": "Fixed target language for the classroom."
           },
           "expires_at": {
-            "type": "string",
-            "format": "date-time",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Expires At",
-            "description": "Timezone-aware expiration for the initial access code."
+            "description": "Optional timezone-aware expiration for the initial access code. Defaults to the end of the classroom's semester."
           },
           "max_uses": {
             "anyOf": [
@@ -729,8 +835,7 @@
         "required": [
           "name",
           "semester",
-          "language",
-          "expires_at"
+          "language"
         ],
         "title": "CreateClassRequest",
         "description": "Details for a new classroom and its initial access code."
@@ -1126,6 +1231,76 @@
           "token"
         ],
         "title": "TokenRequest"
+      },
+      "UpdateClassRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "Optional new classroom name.",
+            "examples": [
+              "JAPN 101 - Updated"
+            ]
+          },
+          "leaderboard_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leaderboard Enabled",
+            "description": "Whether the classroom leaderboard is enabled."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "UpdateClassRequest",
+        "description": "Owner-editable classroom settings.\n\nReject unsupported fields, including target language and semester."
+      },
+      "UpdateClassResponse": {
+        "properties": {
+          "class_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Class Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "semester": {
+            "type": "string",
+            "title": "Semester"
+          },
+          "target_language": {
+            "$ref": "#/components/schemas/Language"
+          },
+          "leaderboard_enabled": {
+            "type": "boolean",
+            "title": "Leaderboard Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "class_id",
+          "name",
+          "semester",
+          "target_language",
+          "leaderboard_enabled"
+        ],
+        "title": "UpdateClassResponse",
+        "description": "Classroom settings after an update."
       },
       "UpdateProfileRequest": {
         "properties": {
