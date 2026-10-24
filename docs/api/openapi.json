@@ -61,7 +61,6 @@
         }
       }
     },
-<<<<<<< HEAD
     "/api/v1/auth/login": {
       "post": {
         "tags": [
@@ -75,41 +74,18 @@
             "application/x-www-form-urlencoded": {
               "schema": {
                 "$ref": "#/components/schemas/Body_loginUser"
-=======
-    "/api/v1/me/classes": {
-      "post": {
-        "tags": [
-          "classes"
-        ],
-        "summary": "Create a classroom",
-        "description": "Create a classroom with a fixed target language and generate its initial eight-character access code. Only active staff accounts may create classrooms. The classroom, owner assignment, and initial access code are saved in one transaction.",
-        "operationId": "createClass",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateClassRequest"
->>>>>>> main
               }
             }
           },
           "required": true
         },
         "responses": {
-<<<<<<< HEAD
           "200": {
-=======
-          "201": {
->>>>>>> main
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-<<<<<<< HEAD
                   "$ref": "#/components/schemas/TokenResponse"
-=======
-                  "$ref": "#/components/schemas/CreateClassResponse"
->>>>>>> main
                 }
               }
             }
@@ -133,7 +109,6 @@
                 }
               }
             }
-<<<<<<< HEAD
           }
         }
       }
@@ -196,7 +171,56 @@
             }
           }
         }
-=======
+      }
+    },
+    "/api/v1/me/classes": {
+      "post": {
+        "tags": [
+          "classes"
+        ],
+        "summary": "Create a classroom",
+        "description": "Create a classroom with a fixed target language and generate its initial eight-character access code. Only active staff accounts may create classrooms. The classroom, owner assignment, and initial access code are saved in one transaction.",
+        "operationId": "createClass",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClassRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateClassResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "403": {
             "description": "Forbidden",
@@ -214,7 +238,6 @@
             "OAuth2PasswordBearer": []
           }
         ]
->>>>>>> main
       }
     },
     "/api/v1/me/classes/join": {
@@ -682,7 +705,6 @@
   },
   "components": {
     "schemas": {
-<<<<<<< HEAD
       "Body_loginUser": {
         "properties": {
           "grant_type": {
@@ -690,50 +712,11 @@
               {
                 "type": "string",
                 "pattern": "^password$"
-=======
-      "CreateClassRequest": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Name",
-            "description": "Classroom name.",
-            "examples": [
-              "JAPN 101 - Fall 2026"
-            ]
-          },
-          "semester": {
-            "type": "string",
-            "pattern": "^[0-9]{4}(W1|W2|S1|S2)$",
-            "title": "Semester",
-            "description": "Academic semester identifier.",
-            "examples": [
-              "2026W1"
-            ]
-          },
-          "language": {
-            "$ref": "#/components/schemas/Language",
-            "description": "Fixed target language for the classroom."
-          },
-          "expires_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Expires At",
-            "description": "Timezone-aware expiration for the initial access code."
-          },
-          "max_uses": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "exclusiveMinimum": 0.0
->>>>>>> main
               },
               {
                 "type": "null"
               }
             ],
-<<<<<<< HEAD
             "title": "Grant Type"
           },
           "username": {
@@ -772,20 +755,62 @@
             ],
             "format": "password",
             "title": "Client Secret"
-=======
-            "title": "Max Uses",
-            "description": "Optional maximum number of uses for the initial access code."
->>>>>>> main
           }
         },
         "type": "object",
         "required": [
-<<<<<<< HEAD
           "username",
           "password"
         ],
         "title": "Body_loginUser"
-=======
+      },
+      "CreateClassRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "description": "Classroom name.",
+            "examples": [
+              "JAPN 101 - Fall 2026"
+            ]
+          },
+          "semester": {
+            "type": "string",
+            "pattern": "^[0-9]{4}(W1|W2|S1|S2)$",
+            "title": "Semester",
+            "description": "Academic semester identifier.",
+            "examples": [
+              "2026W1"
+            ]
+          },
+          "language": {
+            "$ref": "#/components/schemas/Language",
+            "description": "Fixed target language for the classroom."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At",
+            "description": "Timezone-aware expiration for the initial access code."
+          },
+          "max_uses": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Uses",
+            "description": "Optional maximum number of uses for the initial access code."
+          }
+        },
+        "type": "object",
+        "required": [
           "name",
           "semester",
           "language",
@@ -827,7 +852,6 @@
         ],
         "title": "CreateClassResponse",
         "description": "Created classroom and its initial enrolment code."
->>>>>>> main
       },
       "Difficulty": {
         "type": "integer",
