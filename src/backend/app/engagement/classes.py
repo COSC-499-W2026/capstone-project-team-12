@@ -348,6 +348,8 @@ def deactivate_access_code(
     access_code.is_active = False
     db.flush()
     return access_code
+
+
 def list_staff_classes(
     user_id: UUID,
     db: Session,
