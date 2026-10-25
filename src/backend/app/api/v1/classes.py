@@ -13,6 +13,7 @@ from app.accounts.interface import get_current_user
 from app.db import get_db
 from app.engagement.interface import (
     create_class,
+    deactivate_access_code,
     generate_access_code,
     get_class_language,
     list_staff_classes,
@@ -26,6 +27,10 @@ from app.models.enums import ClassStaffRole, Language
 classes_router = APIRouter(prefix="/me/classes", tags=["classes"])
 teacher_classes_router = APIRouter(
     prefix="/teacher/classes",
+    tags=["classes"],
+)
+teacher_access_codes_router = APIRouter(
+    prefix="/teacher/access-codes",
     tags=["classes"],
 )
 
@@ -341,6 +346,41 @@ def update_class_endpoint(
         db.commit()
         return response
 
+    except Exception:
+        db.rollback()
+        raise
+
+
+@teacher_access_codes_router.patch(
+    "/{code_id}",
+    status_code=HTTPStatus.NO_CONTENT,
+    operation_id="deactivateClassAccessCode",
+    summary="Deactivate a classroom access code",
+    description=(
+        "Allow classroom owners and teaching assistants to deactivate "
+        "an access code without deleting it. Existing enrolments are preserved. "
+        "Archived classrooms cannot be modified."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.CONFLICT,
+    ),
+)
+def deactivate_class_access_code(
+    code_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Deactivate an access code in the caller-owned transaction."""
+    try:
+        deactivate_access_code(
+            code_id=code_id,
+            actor=user,
+            db=db,
+        )
+        db.commit()
     except Exception:
         db.rollback()
         raise
