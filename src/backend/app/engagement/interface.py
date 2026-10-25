@@ -3,7 +3,8 @@
 Implemented:
 - Issue #11: Class language, active enrolment, and archived-state lookups.
 - Issue #106: Access code validation and student enrolment.
-- Issue #84: Classroom creation and settings update services (update_class_settings).
+- Issue #84: Classroom creation, access code generation, class settings,
+  and classroom listing via list_staff_classes.
 
 Interface stub:
 - Issue #15: Location result to engagement.
@@ -25,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.engagement.classes import (
     create_class,
     generate_access_code,
+    list_staff_classes,
     update_class_settings,
 )
 from app.errors import AppError, ErrorCode
@@ -48,6 +50,7 @@ __all__ = [
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
+    "list_staff_classes",
     "update_class_settings",
     "validate_code_and_enrol",
 ]
