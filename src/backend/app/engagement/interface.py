@@ -4,7 +4,8 @@ Implemented:
 - Issue #11: Class language, active enrolment, and archived-state lookups.
 - Issue #106: Access code validation and student enrolment.
 - Issue #84: Classroom creation, access code generation, settings update
- services (update_class_settings), and code deactivation.
+ services (update_class_settings), classroom listing via list_staff_classes,
+ and code deactivation.
 
 Interface stub:
 - Issue #15: Location result to engagement.
@@ -27,6 +28,7 @@ from app.engagement.classes import (
     create_class,
     deactivate_access_code,
     generate_access_code,
+    list_staff_classes,
     update_class_settings,
 )
 from app.errors import AppError, ErrorCode
@@ -51,6 +53,7 @@ __all__ = [
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
+    "list_staff_classes",
     "update_class_settings",
     "validate_code_and_enrol",
 ]

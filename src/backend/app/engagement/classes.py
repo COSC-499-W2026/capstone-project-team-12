@@ -348,3 +348,20 @@ def deactivate_access_code(
     access_code.is_active = False
     db.flush()
     return access_code
+def list_staff_classes(
+    user_id: UUID,
+    db: Session,
+) -> list[tuple[Class, ClassStaffRole]]:
+    """Return classes owned or assisted by the user, including archived classes.
+
+    This operation is read-only and does not commit or flush.
+    """
+    statement = (
+        select(Class, ClassStaff.role)
+        .join(ClassStaff, ClassStaff.class_id == Class.id)
+        .where(ClassStaff.user_id == user_id)
+        .order_by(Class.created_at.desc(), Class.id)
+    )
+    return [
+        (school_class, ClassStaffRole(role)) for school_class, role in db.execute(statement).all()
+    ]
