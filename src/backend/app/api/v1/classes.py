@@ -119,6 +119,81 @@ class UpdateClassResponse(BaseModel):
     leaderboard_enabled: bool
 
 
+class CreateAccessCodeRequest(BaseModel):
+    """Settings for an additional classroom access code."""
+
+    expires_at: datetime | None = Field(
+        default=None,
+        description="Timezone-aware expiration; defaults to semester end.",
+    )
+    max_uses: int | None = Field(
+        default=None,
+        gt=0,
+        description="Optional maximum number of uses.",
+    )
+
+
+class CreateAccessCodeResponse(BaseModel):
+    """Newly generated classroom access code."""
+
+    id: UUID
+    class_id: UUID
+    code: str
+    expires_at: datetime
+    max_uses: int | None
+
+
+@teacher_classes_router.post(
+    "/{class_id}/access-codes",
+    response_model=CreateAccessCodeResponse,
+    status_code=HTTPStatus.CREATED,
+    operation_id="createClassAccessCode",
+    summary="Generate an additional classroom access code",
+    description=(
+        "Class owners and teaching assistants may generate additional "
+        "access codes. Archived classrooms cannot be modified. "
+        "Expiration defaults to the end of the semester."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.CONFLICT,
+        HTTPStatus.UNPROCESSABLE_ENTITY,
+    ),
+)
+def create_class_access_code(
+    class_id: UUID,
+    request: CreateAccessCodeRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> CreateAccessCodeResponse:
+    """Generate and persist an additional classroom access code."""
+    try:
+        access_code = generate_access_code(
+            class_id=class_id,
+            creator=user,
+            expires_at=request.expires_at,
+            db=db,
+            max_uses=request.max_uses,
+        )
+
+        response = CreateAccessCodeResponse(
+            id=access_code.id,
+            class_id=access_code.class_id,
+            code=access_code.code,
+            expires_at=access_code.expires_at,
+            max_uses=access_code.max_uses,
+        )
+
+        db.commit()
+        return response
+
+    except Exception:
+        db.rollback()
+        raise
+
+
 class ClassListItem(BaseModel):
     """Classroom visible to its owner or teaching assistant."""
 
