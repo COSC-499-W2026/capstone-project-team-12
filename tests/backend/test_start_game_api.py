@@ -156,18 +156,17 @@ def test_class_the_student_is_not_in_returns_404(
 
 def test_archived_class_returns_409(
     start: StartGame,
+    db: Session,
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
     make_enrollment: Callable[..., ClassEnrollment],
 ) -> None:
     student, school_class = make_user(), make_class(archived_at=datetime.now(UTC))
-    make_enrollment(
-        student,
-        school_class,
-        is_active=False,
-        end_reason=EnrollmentEndReason.ARCHIVED,
-        left_at=datetime.now(UTC),
-    )
+    enrollment = make_enrollment(student, school_class)
+    enrollment.is_active = False
+    enrollment.end_reason = EnrollmentEndReason.ARCHIVED
+    enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
+    db.flush()
 
     response = start(student, difficulty=1, class_id=str(school_class.id))
 
