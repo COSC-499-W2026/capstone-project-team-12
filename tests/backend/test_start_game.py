@@ -5,6 +5,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import cast
+from urllib.parse import parse_qs, urlsplit
 from uuid import UUID, uuid4
 
 import pytest
@@ -29,7 +30,7 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.game import GameSession, SessionLocation
-from app.services.audio import MediaNotFoundError, UploadedAudioService, get_audio_service
+from app.services.audio import MediaNotFoundError, UploadedAudioService
 
 
 class _WithoutRecordings(UploadedAudioService):
@@ -72,7 +73,11 @@ def test_practice_game_starts_with_five_locations(
     first, *rest = locations
     assert first.status == LocationStatus.NAVIGATING and first.started_at is not None
     assert all(loc.status == LocationStatus.PENDING and loc.started_at is None for loc in rest)
-    assert started.clue_audio_url == get_audio_service().clue_audio_url(first.audio_asset_id, db)
+
+    actual = urlsplit(started.clue_audio_url)
+    expected = urlsplit(UploadedAudioService().clue_audio_url(first.audio_asset_id, db))
+    assert actual.path == expected.path
+    assert set(parse_qs(actual.query)) == {"expires", "sig"}
 
     snapshot = content.location_snapshot(first.location_id, Language.KO, Difficulty.ADVANCING, db)
     assert first.clue_id == snapshot.clue_id
@@ -230,13 +235,11 @@ def test_archived_class(
 ) -> None:
     student, school_class = make_user(), make_class(archived_at=datetime.now(UTC))
     # what archiving does to an enrolment
-    make_enrollment(
-        student,
-        school_class,
-        is_active=False,
-        end_reason=EnrollmentEndReason.ARCHIVED,
-        left_at=datetime.now(UTC),
-    )
+    enrollment = make_enrollment(student, school_class)
+    enrollment.is_active = False
+    enrollment.end_reason = EnrollmentEndReason.ARCHIVED
+    enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
+    db.flush()
 
     with pytest.raises(AppError) as raised:
         start_game(student, Difficulty.BASIC, db, class_id=school_class.id)
@@ -267,15 +270,13 @@ def test_class_the_user_is_not_in(
     )
     user = make_user(role=UserRole.STAFF) if case == "staff" else make_user()
     if case in ("left", "removed", "archived_but_left_before"):
-        make_enrollment(
-            user,
-            school_class,
-            is_active=False,
-            end_reason=(
-                EnrollmentEndReason.REMOVED if case == "removed" else EnrollmentEndReason.LEFT
-            ),
-            left_at=datetime.now(UTC),
+        enrollment = make_enrollment(user, school_class)
+        enrollment.is_active = False
+        enrollment.end_reason = (
+            EnrollmentEndReason.REMOVED if case == "removed" else EnrollmentEndReason.LEFT
         )
+        enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
+        db.flush()
     class_id = uuid4() if case == "unknown" else school_class.id
 
     with pytest.raises(AppError) as raised:

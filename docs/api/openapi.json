@@ -148,6 +148,78 @@
         ]
       }
     },
+    "/api/v1/me/classes/{class_id}/leave": {
+      "post": {
+        "tags": [
+          "classes"
+        ],
+        "summary": "Leave a classroom",
+        "description": "Leave an actively enrolled classroom. The student may rejoin later using a valid access code. If this was the student's current class, another active class is selected when available; otherwise, the selection is cleared. Leaving ends any open (active or paused) class game sessions.",
+        "operationId": "leaveClass",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "class_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Class Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/teacher/classes/{class_id}/access-codes": {
       "post": {
         "tags": [
