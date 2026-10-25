@@ -15,12 +15,13 @@ from app.engagement.interface import (
     create_class,
     generate_access_code,
     get_class_language,
+    list_staff_classes,
     update_class_settings,
     validate_code_and_enrol,
 )
 from app.errors import AppError, ErrorCode, error_responses
 from app.models.accounts import User
-from app.models.enums import Language
+from app.models.enums import ClassStaffRole, Language
 
 classes_router = APIRouter(prefix="/me/classes", tags=["classes"])
 teacher_classes_router = APIRouter(
@@ -191,6 +192,49 @@ def create_class_access_code(
     except Exception:
         db.rollback()
         raise
+
+
+class ClassListItem(BaseModel):
+    """Classroom visible to its owner or teaching assistant."""
+
+    class_id: UUID
+    name: str
+    semester: str
+    target_language: Language
+    leaderboard_enabled: bool
+    archived_at: datetime | None
+    staff_role: ClassStaffRole
+
+
+@teacher_classes_router.get(
+    "",
+    response_model=list[ClassListItem],
+    operation_id="listTeacherClasses",
+    summary="List classrooms for a teacher or teaching assistant",
+    description=(
+        "Return classrooms owned or assisted by the authenticated user, "
+        "including archived classrooms. Other classrooms are not visible."
+    ),
+    responses=error_responses(HTTPStatus.UNAUTHORIZED),
+)
+def list_teacher_classes(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ClassListItem]:
+    """List classrooms without modifying them."""
+    rows = list_staff_classes(user.id, db)
+    return [
+        ClassListItem(
+            class_id=school_class.id,
+            name=school_class.name,
+            semester=school_class.semester,
+            target_language=Language(school_class.target_language),
+            leaderboard_enabled=school_class.leaderboard_enabled,
+            archived_at=school_class.archived_at,
+            staff_role=role,
+        )
+        for school_class, role in rows
+    ]
 
 
 @teacher_classes_router.post(
