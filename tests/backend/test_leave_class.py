@@ -20,19 +20,6 @@ from app.models.enums import (
 )
 
 
-def leave_as(
-    client: TestClient,
-    user: User,
-    class_id: str,
-    auth_headers: Callable[[User], dict[str, str]],
-) -> Any:
-    """Send an authenticated leave-class request."""
-    return client.post(
-        f"/api/v1/me/classes/{class_id}/leave",
-        headers=auth_headers(user),
-    )
-
-
 def assert_error(response: Any, status: int, code: ErrorCode) -> None:
     """Check the application's standard error response."""
     assert response.status_code == status, response.text
@@ -46,6 +33,7 @@ def test_leave_active_class(
     make_class: Callable[..., Class],
     make_enrollment: Callable[..., ClassEnrollment],
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     student = make_user()
     school_class = make_class()
@@ -71,6 +59,7 @@ def test_leave_preserves_other_selected_class(
     make_class: Callable[..., Class],
     make_enrollment: Callable[..., ClassEnrollment],
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     student = make_user()
     first_class = make_class(target_language=Language.FR)
@@ -95,6 +84,7 @@ def test_leave_selects_another_active_class(
     db: Session,
     two_class_student: Any,
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     student = two_class_student.student
     first_class = two_class_student.japanese
@@ -112,6 +102,7 @@ def test_cannot_leave_class_without_enrollment(
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     student = make_user()
     school_class = make_class()
@@ -123,6 +114,7 @@ def test_cannot_leave_unknown_class(
     client: TestClient,
     make_user: Callable[..., User],
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     student = make_user()
     response = leave_as(client, student, str(uuid4()), auth_headers)
@@ -135,6 +127,7 @@ def test_cannot_leave_twice(
     make_class: Callable[..., Class],
     make_enrollment: Callable[..., ClassEnrollment],
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     student = make_user()
     school_class = make_class()
@@ -151,6 +144,7 @@ def test_cannot_leave_another_students_class(
     make_class: Callable[..., Class],
     make_enrollment: Callable[..., ClassEnrollment],
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     enrolled_student = make_user()
     other_student = make_user()
@@ -165,6 +159,7 @@ def test_staff_cannot_leave_as_student(
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     teacher = make_user(role=UserRole.STAFF)
     school_class = make_class()
@@ -177,6 +172,7 @@ def test_disabled_student_cannot_leave(
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     student = make_user(is_active=False)
     school_class = make_class()
@@ -198,6 +194,7 @@ def test_leave_rejects_invalid_class_id(
     client: TestClient,
     make_user: Callable[..., User],
     auth_headers: Callable[[User], dict[str, str]],
+    leave_as: Callable[..., Any],
 ) -> None:
     student = make_user()
     response = leave_as(client, student, "not-a-uuid", auth_headers)
@@ -227,6 +224,7 @@ def test_leave_rolls_back_when_game_cleanup_fails(
     make_enrollment: Callable[..., ClassEnrollment],
     auth_headers: Callable[[User], dict[str, str]],
     transaction_calls: list[str],
+    leave_as: Callable[..., Any],
 ) -> None:
     """A game cleanup failure must not persist the student's departure."""
     school_class = make_class()
