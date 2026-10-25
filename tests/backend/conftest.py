@@ -4,7 +4,7 @@ import random
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from itertools import count
-from typing import Any, TypeVar
+from typing import Any, NamedTuple, TypeVar
 from urllib.parse import parse_qs, unquote, urlsplit
 from uuid import uuid4
 
@@ -20,7 +20,15 @@ from app.main import create_app
 from app.models.accounts import ClassStaff, User
 from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
 from app.models.engagement import ACCESS_CODE_ALPHABET, AccessCode, Class, ClassEnrollment
-from app.models.enums import ClassStaffRole, Difficulty, FeedbackCode, Language, UserRole
+from app.models.enums import (
+    ClassStaffRole,
+    Difficulty,
+    EnrollmentEndReason,
+    FeedbackCode,
+    Language,
+    SessionState,
+    UserRole,
+)
 from app.models.game import GameSession, SessionLocation
 from app.services.storage import MEDIA_URL_PREFIX
 
@@ -89,6 +97,27 @@ def auth_headers() -> Callable[[User], dict[str, str]]:
         return {"Authorization": f"Bearer {token}"}
 
     return headers
+
+
+@pytest.fixture
+def leave_as() -> Callable[
+    [TestClient, User, str, Callable[[User], dict[str, str]]],
+    Any,
+]:
+    """Shared helper for authenticated leave-class requests."""
+
+    def send(
+        client: TestClient,
+        user: User,
+        class_id: str,
+        auth_headers: Callable[[User], dict[str, str]],
+    ) -> Any:
+        return client.post(
+            f"/api/v1/me/classes/{class_id}/leave",
+            headers=auth_headers(user),
+        )
+
+    return send
 
 
 @pytest.fixture
@@ -214,6 +243,66 @@ def make_game_session(db: Session, make_user: Callable[..., User]) -> Callable[.
             "difficulty": Difficulty.BASIC,
         }
         return _add(db, GameSession(**(values | fields)))
+
+    return make
+
+
+class TwoClassStudent(NamedTuple):
+    student: User
+    japanese: Class
+    french: Class
+    japanese_enrolment: ClassEnrollment
+    french_enrolment: ClassEnrollment
+
+
+@pytest.fixture
+def two_class_student(
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> TwoClassStudent:
+    """A student in a Japanese and a French class (joined in that order). The current class is
+    the Japanese one and the Practice language is Japanese."""
+    joined = datetime(2026, 10, 1, 12, tzinfo=UTC)
+    japanese, french = (
+        make_class(target_language=Language.JA),
+        make_class(target_language=Language.FR),
+    )
+    student = make_user(current_class_id=japanese.id, preferred_language=Language.JA)
+    return TwoClassStudent(
+        student,
+        japanese,
+        french,
+        make_enrollment(student, japanese, joined_at=joined),
+        make_enrollment(student, french, joined_at=joined + timedelta(days=1)),
+    )
+
+
+@pytest.fixture
+def end_enrolment(db: Session) -> Callable[..., None]:
+    """Ends an enrolment the way leaving does (left by default)."""
+
+    def end(
+        enrolment: ClassEnrollment, reason: EnrollmentEndReason = EnrollmentEndReason.LEFT
+    ) -> None:
+        enrolment.is_active = False
+        enrolment.end_reason = reason
+        enrolment.left_at = datetime.now(UTC)
+        db.flush()
+
+    return end
+
+
+@pytest.fixture
+def open_game(make_game_session: Callable[..., GameSession]) -> Callable[..., GameSession]:
+    """An open game of the student: active, or paused with state=SessionState.PAUSED."""
+
+    def make(
+        student: User, state: SessionState = SessionState.ACTIVE, **fields: Any
+    ) -> GameSession:
+        if state == SessionState.PAUSED:
+            fields.setdefault("paused_at", datetime.now(UTC))
+        return make_game_session(student, state=state, **fields)
 
     return make
 
