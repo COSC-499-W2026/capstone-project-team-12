@@ -6,24 +6,35 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
 from app.db import get_db
 from app.engagement.interface import (
     create_class,
+    deactivate_access_code,
     generate_access_code,
     get_class_language,
     leave_class,
+    list_staff_classes,
+    update_class_settings,
     validate_code_and_enrol,
 )
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.interface import end_open_sessions
 from app.models.accounts import User
-from app.models.enums import Language
+from app.models.enums import ClassStaffRole, Language
 
 classes_router = APIRouter(prefix="/me/classes", tags=["classes"])
+teacher_classes_router = APIRouter(
+    prefix="/teacher/classes",
+    tags=["classes"],
+)
+teacher_access_codes_router = APIRouter(
+    prefix="/teacher/access-codes",
+    tags=["classes"],
+)
 
 
 class JoinClassRequest(BaseModel):
@@ -61,8 +72,12 @@ class CreateClassRequest(BaseModel):
     language: Language = Field(
         description="Fixed target language for the classroom.",
     )
-    expires_at: datetime = Field(
-        description="Timezone-aware expiration for the initial access code.",
+    expires_at: datetime | None = Field(
+        default=None,
+        description=(
+            "Optional timezone-aware expiration for the initial access code. "
+            "Defaults to the end of the classroom's semester."
+        ),
     )
     max_uses: int | None = Field(
         default=None,
@@ -81,7 +96,155 @@ class CreateClassResponse(BaseModel):
     access_code: str
 
 
-@classes_router.post(
+class UpdateClassRequest(BaseModel):
+    """Owner-editable classroom settings.
+
+    Reject unsupported fields, including target language and semester.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(
+        default=None,
+        max_length=255,
+        description="Optional new classroom name.",
+        examples=["JAPN 101 - Updated"],
+    )
+    leaderboard_enabled: bool | None = Field(
+        default=None,
+        description="Whether the classroom leaderboard is enabled.",
+    )
+
+
+class UpdateClassResponse(BaseModel):
+    """Classroom settings after an update."""
+
+    class_id: UUID
+    name: str
+    semester: str
+    target_language: Language
+    leaderboard_enabled: bool
+
+
+class CreateAccessCodeRequest(BaseModel):
+    """Settings for an additional classroom access code."""
+
+    expires_at: datetime | None = Field(
+        default=None,
+        description="Timezone-aware expiration; defaults to semester end.",
+    )
+    max_uses: int | None = Field(
+        default=None,
+        gt=0,
+        description="Optional maximum number of uses.",
+    )
+
+
+class CreateAccessCodeResponse(BaseModel):
+    """Newly generated classroom access code."""
+
+    id: UUID
+    class_id: UUID
+    code: str
+    expires_at: datetime
+    max_uses: int | None
+
+
+@teacher_classes_router.post(
+    "/{class_id}/access-codes",
+    response_model=CreateAccessCodeResponse,
+    status_code=HTTPStatus.CREATED,
+    operation_id="createClassAccessCode",
+    summary="Generate an additional classroom access code",
+    description=(
+        "Class owners and teaching assistants may generate additional "
+        "access codes. Archived classrooms cannot be modified. "
+        "Expiration defaults to the end of the semester."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.CONFLICT,
+        HTTPStatus.UNPROCESSABLE_ENTITY,
+    ),
+)
+def create_class_access_code(
+    class_id: UUID,
+    request: CreateAccessCodeRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> CreateAccessCodeResponse:
+    """Generate and persist an additional classroom access code."""
+    try:
+        access_code = generate_access_code(
+            class_id=class_id,
+            creator=user,
+            expires_at=request.expires_at,
+            db=db,
+            max_uses=request.max_uses,
+        )
+
+        response = CreateAccessCodeResponse(
+            id=access_code.id,
+            class_id=access_code.class_id,
+            code=access_code.code,
+            expires_at=access_code.expires_at,
+            max_uses=access_code.max_uses,
+        )
+
+        db.commit()
+        return response
+
+    except Exception:
+        db.rollback()
+        raise
+
+
+class ClassListItem(BaseModel):
+    """Classroom visible to its owner or teaching assistant."""
+
+    class_id: UUID
+    name: str
+    semester: str
+    target_language: Language
+    leaderboard_enabled: bool
+    archived_at: datetime | None
+    staff_role: ClassStaffRole
+
+
+@teacher_classes_router.get(
+    "",
+    response_model=list[ClassListItem],
+    operation_id="listTeacherClasses",
+    summary="List classrooms for a teacher or teaching assistant",
+    description=(
+        "Return classrooms owned or assisted by the authenticated user, "
+        "including archived classrooms. Other classrooms are not visible."
+    ),
+    responses=error_responses(HTTPStatus.UNAUTHORIZED),
+)
+def list_teacher_classes(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ClassListItem]:
+    """List classrooms without modifying them."""
+    rows = list_staff_classes(user.id, db)
+    return [
+        ClassListItem(
+            class_id=school_class.id,
+            name=school_class.name,
+            semester=school_class.semester,
+            target_language=Language(school_class.target_language),
+            leaderboard_enabled=school_class.leaderboard_enabled,
+            archived_at=school_class.archived_at,
+            staff_role=role,
+        )
+        for school_class, role in rows
+    ]
+
+
+@teacher_classes_router.post(
     "",
     response_model=CreateClassResponse,
     status_code=HTTPStatus.CREATED,
@@ -91,7 +254,9 @@ class CreateClassResponse(BaseModel):
         "Create a classroom with a fixed target language and generate "
         "its initial eight-character access code. Only active staff "
         "accounts may create classrooms. The classroom, owner assignment, "
-        "and initial access code are saved in one transaction."
+        "and initial access code are saved in one transaction. "
+        "If no expiration is provided, the access code expires at the "
+        "end of the classroom's semester."
     ),
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
@@ -132,6 +297,92 @@ def create_class_endpoint(
         db.commit()
         return response
 
+    except Exception:
+        db.rollback()
+        raise
+
+
+@teacher_classes_router.patch(
+    "/{class_id}",
+    response_model=UpdateClassResponse,
+    operation_id="updateClass",
+    summary="Update classroom settings",
+    description=(
+        "Allow the classroom owner to update its name and leaderboard "
+        "setting. The target language and semester are fixed and cannot "
+        "be changed. Teaching assistants and students cannot update "
+        "classroom settings. Archived classrooms are read-only."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.CONFLICT,
+        HTTPStatus.UNPROCESSABLE_ENTITY,
+    ),
+)
+def update_class_endpoint(
+    class_id: UUID,
+    request: UpdateClassRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> UpdateClassResponse:
+    """Update owner-editable classroom settings in one transaction."""
+    try:
+        school_class = update_class_settings(
+            class_id=class_id,
+            actor=user,
+            db=db,
+            name=request.name,
+            leaderboard_enabled=request.leaderboard_enabled,
+        )
+
+        response = UpdateClassResponse(
+            class_id=school_class.id,
+            name=school_class.name,
+            semester=school_class.semester,
+            target_language=Language(school_class.target_language),
+            leaderboard_enabled=school_class.leaderboard_enabled,
+        )
+
+        db.commit()
+        return response
+
+    except Exception:
+        db.rollback()
+        raise
+
+
+@teacher_access_codes_router.patch(
+    "/{code_id}",
+    status_code=HTTPStatus.NO_CONTENT,
+    operation_id="deactivateClassAccessCode",
+    summary="Deactivate a classroom access code",
+    description=(
+        "Allow classroom owners and teaching assistants to deactivate "
+        "an access code without deleting it. Existing enrolments are preserved. "
+        "Archived classrooms cannot be modified."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.CONFLICT,
+    ),
+)
+def deactivate_class_access_code(
+    code_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Deactivate an access code in the caller-owned transaction."""
+    try:
+        deactivate_access_code(
+            code_id=code_id,
+            actor=user,
+            db=db,
+        )
+        db.commit()
     except Exception:
         db.rollback()
         raise
