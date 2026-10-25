@@ -1,4 +1,4 @@
-"""Integration tests for POST /api/v1/me/classes."""
+"""Integration tests for POST /api/v1/teacher/classes."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.engagement.classes import semester_end_expiration
 from app.errors import ErrorCode
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import (
@@ -20,7 +21,7 @@ from app.models.engagement import (
 )
 from app.models.enums import ClassStaffRole, UserRole
 
-URL = "/api/v1/me/classes"
+URL = "/api/v1/teacher/classes"
 
 
 def payload(**overrides: Any) -> dict[str, Any]:
@@ -204,3 +205,32 @@ def test_disabled_teacher_cannot_create_class(
     assert response.status_code == 403, response.text
     assert response.json()["error"]["code"] == ErrorCode.ACCOUNT_DISABLED.value
     assert db.scalars(select(Class)).all() == []
+
+
+def test_teacher_creates_class_with_default_expiration(
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    auth_headers: Callable[[User], dict[str, str]],
+) -> None:
+    teacher = make_user(role=UserRole.STAFF)
+
+    request = payload()
+    request.pop("expires_at")
+
+    # Use a future W1 semester so this test remains valid after 2026.
+    request["semester"] = f"{datetime.now(UTC).year + 1}W1"
+
+    response = client.post(
+        URL,
+        json=request,
+        headers=auth_headers(teacher),
+    )
+
+    assert response.status_code == 201, response.text
+
+    class_id = UUID(response.json()["class_id"])
+    access_code = db.scalar(select(AccessCode).where(AccessCode.class_id == class_id))
+
+    assert access_code is not None
+    assert access_code.expires_at == semester_end_expiration(request["semester"])
