@@ -42,7 +42,7 @@ def create_location(fields: LocationFields, db: Session) -> Location:
 def replace_location(location_id: UUID, fields: LocationFields, db: Session) -> Location:
     """Replace every field of the location, `is_active` included; VALIDATION_ERROR if another
     location has the room number."""
-    location = _get_location(location_id, db)
+    location = get_location(location_id, db)
     with _saving_room_number(fields.room_number, db):
         for name, value in fields.model_dump().items():
             setattr(location, name, value)
@@ -51,7 +51,7 @@ def replace_location(location_id: UUID, fields: LocationFields, db: Session) -> 
 
 def deactivate_location(location_id: UUID, db: Session) -> None:
     """Soft delete: new games stop drawing the location. Deactivating it again does nothing."""
-    _get_location(location_id, db).is_active = False
+    get_location(location_id, db).is_active = False
     db.flush()
 
 
@@ -62,7 +62,7 @@ def set_clue_text(
     null (no transcript yet)."""
     if text and "\x00" in text:  # PostgreSQL text cannot hold it
         raise _invalid_field("text", "The clue text contains an invalid character")
-    _get_location(location_id, db)
+    get_location(location_id, db)
     clue = get_or_create_clue(location_id, difficulty, language, db)
     clue.text = (text or "").strip() or None
     db.flush()
@@ -70,18 +70,24 @@ def set_clue_text(
 
 
 def get_or_create_clue(
-    location_id: UUID, difficulty: Difficulty, language: Language, db: Session
+    location_id: UUID, difficulty: Difficulty, language: Language, db: Session, lock: bool = False
 ) -> Clue:
     """The clue of an existing location for `difficulty` and `language`, created if missing.
 
     The insert skips an existing clue, so two requests creating the same clue both get it.
+    `lock` holds the clue row until the transaction ends (FOR NO KEY UPDATE: other changes to
+    the clue wait, inserts of rows that point at it do not).
     """
     key = {"location_id": location_id, "difficulty": difficulty, "language": language}
     db.execute(insert(Clue).values(key).on_conflict_do_nothing(index_elements=list(key)))
-    return db.scalars(select(Clue).filter_by(**key)).one()
+    query = select(Clue).filter_by(**key)
+    if lock:
+        query = query.with_for_update(key_share=True)
+    return db.scalars(query).one()
 
 
-def _get_location(location_id: UUID, db: Session) -> Location:
+def get_location(location_id: UUID, db: Session) -> Location:
+    """The location, active or not; NOT_FOUND if there is none."""
     location = db.get(Location, location_id)
     if location is None:
         raise AppError(ErrorCode.NOT_FOUND, "Location not found")

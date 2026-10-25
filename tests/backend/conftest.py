@@ -5,6 +5,7 @@ import random
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from itertools import count
+from pathlib import Path
 from typing import Any, NamedTuple, TypeVar
 from urllib.parse import parse_qs, unquote, urlsplit
 from uuid import uuid4
@@ -17,6 +18,7 @@ from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.content.clue_audio import UPLOAD_PROVIDER
 from app.db import get_db
 from app.main import create_app
 from app.models.accounts import ClassStaff, User
@@ -32,7 +34,7 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.game import GameSession, SessionLocation
-from app.services.storage import MEDIA_URL_PREFIX
+from app.services.storage import MEDIA_URL_PREFIX, get_storage_service
 
 
 @pytest.fixture(scope="session")
@@ -372,7 +374,7 @@ def make_audio_asset(db: Session, make_clue: Callable[..., Clue]) -> Callable[..
     def make(clue: Clue | None = None, **fields: Any) -> AudioAsset:
         values: dict[str, Any] = {
             "file_path": f"{uuid4()}.mp3",
-            "provider": "teacher",
+            "provider": UPLOAD_PROVIDER,
             "duration_seconds": 5.0,
             "file_size_kb": 80,
         }
@@ -441,3 +443,15 @@ def make_audio() -> Callable[..., bytes]:
         return buffer.getvalue()
 
     return make
+
+
+@pytest.fixture
+def stored_media_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """An empty folder that StorageService saves into for this test (MEDIA_DIR)."""
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    get_storage_service.cache_clear()
+    yield tmp_path
+    # the next caller builds both again from the restored environment
+    get_settings.cache_clear()
+    get_storage_service.cache_clear()
