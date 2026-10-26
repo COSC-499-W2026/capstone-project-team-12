@@ -85,7 +85,6 @@ flowchart LR
   app_accounts_interface --> app_models_enums
   app_accounts_password --> app_errors
   app_accounts_profile --> app_engagement_interface
-  app_accounts_profile --> app_errors
   app_accounts_profile --> app_game_interface
   app_accounts_profile --> app_models_accounts
   app_accounts_profile --> app_models_enums
@@ -171,6 +170,7 @@ flowchart LR
   app_game_interface --> app_models_enums
   app_game_interface --> app_models_game
   app_game_sessions --> app_config
+  app_game_sessions --> app_errors
   app_game_sessions --> app_models_enums
   app_game_sessions --> app_models_game
   app_game_start --> app_content_interface

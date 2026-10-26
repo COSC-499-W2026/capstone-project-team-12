@@ -107,6 +107,8 @@ API error responses must not expose stack traces, database errors, internal host
 
 *All request validation errors (body, path and query parameters) return 422 with code `VALIDATION_ERROR` and the invalid fields in `details`. FastAPI sends 422 with `{"detail":[...]}` by default, so one exception handler converts it to the `{"error":{...}}` format.
 
+`SESSION_ALREADY_OPEN` (409) puts the open game in `details` as `[{"session_id": "..."}]`, so the app can resume that game. If two starts race and the winner's game has already ended again, there is no game left to report, so `details` is empty and the app can just retry.
+
 ### Application Error Code Naming
 - Error codes should be written in UPPER_SNAKE_CASE.
 - Error codes must be stable. Changes to human-readable messages must not require changes to error codes.
