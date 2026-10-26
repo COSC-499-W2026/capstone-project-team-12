@@ -4,7 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.accounts.register import RegisterRequest, register_account
+from app.accounts.register import RegisterRequest, RegisterResponse, register_account
 from app.db import get_db
 from app.errors import error_responses
 
@@ -16,10 +16,11 @@ auth_router = APIRouter(prefix="/auth")
     tags=["register"],
     status_code=201,
     operation_id="registerUser",
-    responses=error_responses(HTTPStatus.CONFLICT),  # EMAIL_TAKEN, USERNAME_TAKEN
+    # EMAIL_TAKEN, USERNAME_TAKEN, INVALID_ACCESS_CODE
+    responses=error_responses(HTTPStatus.CONFLICT, HTTPStatus.BAD_REQUEST),
 )
-def register(request: RegisterRequest, db: Annotated[Session, Depends(get_db)]) -> dict[str, str]:
+def register(request: RegisterRequest, db: Annotated[Session, Depends(get_db)]) -> RegisterResponse:
     """Student sign-up: email, username, password, optional access code."""
-    register_account(request, db)
+    user = register_account(request, db)
     db.commit()
-    return {"status": "ok"}
+    return RegisterResponse(id=user.id, username=user.username, email=user.email, role=user.role)
