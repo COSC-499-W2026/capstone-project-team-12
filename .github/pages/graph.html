@@ -12,12 +12,13 @@
   <pre id="rules"></pre>
   <script type="module">
     import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@12.2.0/dist/mermaid.esm.min.mjs";
+    // turn off auto-render before the first await
+    mermaid.initialize({ startOnLoad: false, maxTextSize: 200000 });
     try {
       const md = await (await fetch("dependency-graph.md")).text();
       // the page holds one mermaid block, then the "Rule check" section
       document.getElementById("chart").textContent = md.match(/```mermaid\n([\s\S]*?)```/)[1];
       document.getElementById("rules").textContent = md.split("## Rule check")[1].trim();
-      mermaid.initialize({ startOnLoad: false, maxTextSize: 200000 });
       await mermaid.run({ nodes: [document.getElementById("chart")] });
     } catch (error) {
       // show the reason instead of staying on "Loading..."
