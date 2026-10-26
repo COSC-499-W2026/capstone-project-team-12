@@ -15,7 +15,9 @@ from app.engagement.interface import (
     get_class_language,
     is_actively_enrolled,
     is_class_archived,
+    require_active_enrolment,
 )
+from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.engagement import Class, ClassEnrollment
 from app.models.enums import EnrollmentEndReason, Language, LocationStatus
@@ -68,7 +70,7 @@ def test_inactive_enrolment(
 
     enrollment.is_active = False
     enrollment.end_reason = EnrollmentEndReason.LEFT
-    enrollment.left_at = datetime.now(UTC)
+    enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
     db.flush()
 
     assert is_actively_enrolled(student.id, school_class.id, db) is False
@@ -117,7 +119,7 @@ def test_enrolment_ended_by_archive(
         db.refresh(enrollment)
         enrollment.is_active = False
         enrollment.end_reason = end_reason
-        enrollment.left_at = datetime.now(UTC)
+        enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
         db.flush()
 
     assert enrolment_ended_by_archive(student.id, school_class.id, db) is expected
@@ -127,6 +129,73 @@ def test_never_enrolled_student_did_not_end_by_archive(
     db: Session, make_user: Callable[..., User], make_class: Callable[..., Class]
 ) -> None:
     assert enrolment_ended_by_archive(make_user().id, make_class().id, db) is False
+
+
+def test_require_active_enrolment_returns_the_class_language(
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> None:
+    student, school_class = make_user(), make_class(target_language=Language.KO)
+    make_enrollment(student, school_class)
+
+    assert require_active_enrolment(student.id, school_class.id, db) == Language.KO
+
+
+@pytest.mark.parametrize(
+    ("archived", "ended_by", "expected"),
+    [
+        (False, None, ErrorCode.NOT_FOUND),
+        (False, EnrollmentEndReason.LEFT, ErrorCode.NOT_FOUND),
+        (True, None, ErrorCode.NOT_FOUND),
+        (True, EnrollmentEndReason.LEFT, ErrorCode.NOT_FOUND),
+        (True, EnrollmentEndReason.ARCHIVED, ErrorCode.CLASS_ARCHIVED),
+        (False, EnrollmentEndReason.REMOVED, ErrorCode.NOT_FOUND),
+        (True, EnrollmentEndReason.REMOVED, ErrorCode.NOT_FOUND),
+    ],
+    ids=[
+        "never-joined",
+        "left",
+        "archived-never-joined",
+        "left-then-archived",
+        "ended-by-archive",
+        "removed",
+        "removed-then-archived",
+    ],
+)
+def test_require_active_enrolment_errors(
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_enrollment: Callable[..., ClassEnrollment],
+    archived: bool,
+    ended_by: EnrollmentEndReason | None,
+    expected: ErrorCode,
+) -> None:
+    student, school_class = make_user(), make_class()
+    if ended_by is not None:
+        enrollment = make_enrollment(student, school_class)
+        enrollment.is_active = False
+        enrollment.end_reason = ended_by
+        enrollment.left_at = datetime.now(UTC)
+    if archived:
+        school_class.archived_at = datetime.now(UTC)
+    db.flush()
+
+    with pytest.raises(AppError) as error:
+        require_active_enrolment(student.id, school_class.id, db)
+
+    assert error.value.code == expected
+
+
+def test_require_active_enrolment_unknown_class(
+    db: Session, make_user: Callable[..., User]
+) -> None:
+    with pytest.raises(AppError) as error:
+        require_active_enrolment(make_user().id, uuid4(), db)
+
+    assert error.value.code == ErrorCode.NOT_FOUND
 
 
 def test_engagement_result_fields() -> None:

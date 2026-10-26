@@ -11,6 +11,7 @@ from app.accounts.register import RegisterRequest, register_account
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.email import EmailOutbox
+from app.models.engagement import AccessCode, Class, ClassEnrollment
 from app.models.enums import EmailKind
 from app.services.email import EmailService
 
@@ -62,7 +63,33 @@ def test_valid_hash(db: Session):
         assert checkpw(input_bytes, stored_bytes)
 
 
-def test_201(client: TestClient, db: Session):
+def test_201_with_code(
+    client: TestClient, make_class: Class, make_access_code: AccessCode, db: Session
+):
+    request = {
+        "email": "test@email.com",
+        "username": "JohnLanguage",
+        "password": "ValidPassword1",
+        "access_code": "ABCDEFGH",
+    }
+    test_class = make_class()
+    make_access_code(school_class=test_class, code="ABCDEFGH")
+    response_201 = client.post("/api/v1/auth/register", json=request)
+    assert response_201.status_code == 201
+
+    query = select(User).where(User.email == "test@email.com")
+
+    user = db.execute(query).scalar_one_or_none()
+    assert user is not None
+    assert user.email == request["email"]
+    assert user.username == request["username"]
+    class_query = select(ClassEnrollment).where(ClassEnrollment.student_id == user.id)
+    result = db.execute(class_query).scalar_one_or_none()
+    assert result is not None
+    assert user.current_class_id == result.class_id
+
+
+def test_201_no_code(client: TestClient, db: Session):
     request = {
         "email": "test@email.com",
         "username": "JohnLanguage",
@@ -70,13 +97,29 @@ def test_201(client: TestClient, db: Session):
     }
     response_201 = client.post("/api/v1/auth/register", json=request)
     assert response_201.status_code == 201
-    query = select(User.email, User.username, User.password_hash).where(
-        User.email == "test@email.com"
-    )
-    result = db.execute(query)
-    assert result
-    for row in result:
-        assert row[0] and row[1] and row[2]
+
+    query = select(User).where(User.email == "test@email.com")
+
+    user = db.execute(query).scalar_one_or_none()
+    assert user is not None
+    assert user.email == request["email"]
+    assert user.username == request["username"]
+
+
+def test_invalid_access_code(client: TestClient, db: Session, transaction_calls: list[str]):
+    request = {
+        "email": "invalid@code.com",
+        "username": "JohnLanguage",
+        "password": "ValidPassword1",
+        "access_code": "abc",
+    }
+    response = client.post("/api/v1/auth/register", json=request)
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == ErrorCode.INVALID_ACCESS_CODE
+    assert "commit" not in transaction_calls
+    db.rollback()
+    assert db.scalars(select(User).where(User.email == request["email"])).first() is None
+    assert db.scalars(select(EmailOutbox)).first() is None
 
 
 def test_409(client: TestClient):

@@ -28,35 +28,57 @@ def student(make_user: Callable[..., User]) -> User:
 
 
 def login(client: TestClient, email: str = VALID_EMAIL, password: str = VALID_PASSWORD) -> Response:
-    return client.post("/api/v1/auth/login", data={"username": email, "password": password})
+    response = client.post("/api/v1/auth/login", data={"username": email, "password": password})
+    client.cookies.clear()  # tests send the refresh cookie themselves, so none leaks between calls
+    return response
 
 
 def refresh(client: TestClient, refresh_token: str) -> Response:
-    # a header, not the client's cookie jar, so no cookie leaks into the next request
-    return client.post("/api/v1/auth/refresh", headers={"Cookie": f"refresh_token={refresh_token}"})
+    response = client.post(
+        "/api/v1/auth/refresh", headers={"Cookie": f"refresh_token={refresh_token}"}
+    )
+    client.cookies.clear()
+    return response
 
 
-def test_valid_login(client: TestClient):
-    register = {"email": VALID_EMAIL, "username": VALID_USERNAME, "password": VALID_PASSWORD}
-    client.post("api/v1/auth/register", json=register)
-    login = {"username": VALID_EMAIL, "password": VALID_PASSWORD}
-    response = client.post("api/v1/auth/login", data=login)
-    tokens = response.json()
-    assert tokens["access_token"]
-    assert tokens["refresh_token"]
+def test_login_returns_working_tokens(client: TestClient, student: User):
+    response = login(client)
     assert response.status_code == 200
+    body = response.json()
+    assert body["token_type"] == "bearer"
+    assert response.cookies["refresh_token"]
+    # the access token must work on a protected route: a bad access code gives 400, not 401
+    joined = client.post(
+        "/api/v1/me/classes/join",
+        json={"access_code": "abc"},
+        headers={"Authorization": f"Bearer {body['access_token']}"},
+    )
+    assert joined.status_code == 400
+    assert joined.json()["error"]["code"] == ErrorCode.INVALID_ACCESS_CODE
 
-    cookies = client.cookies
-    cookies.set("refresh_token", tokens["refresh_token"])
-    client.cookies = cookies
 
-    sleep(1)  # Must sleep briefly so the timestamp on JWT is different
+def test_access_token_expires_in_60_minutes(client: TestClient, student: User):
+    access_token = login(client).json()["access_token"]
+    key = str(get_settings().access_token_secret_key)
+    claims = decode(access_token, key, ["HS256"])
+    expected = datetime.now(UTC) + timedelta(minutes=60)
+    assert abs(claims["exp"] - expected.timestamp()) < 60
 
-    client.headers = {"Authorization": f"Bearer {tokens['access_token']}"}
-    new_tokens = client.post("api/v1/auth/refresh")
-    refresh_json = new_tokens.json()
-    assert refresh_json["access_token"] != tokens["access_token"]
-    assert new_tokens.status_code == 200
+
+def test_refresh_rotates_tokens(client: TestClient, student: User):
+    old_refresh_token = login(client).cookies["refresh_token"]
+    response = refresh(client, old_refresh_token)
+    assert response.status_code == 200
+    assert response.json()["access_token"]
+    assert response.cookies["refresh_token"] != old_refresh_token
+
+
+def test_rotated_refresh_token_is_rejected(client: TestClient, student: User):
+    old_refresh_token = login(client).cookies["refresh_token"]
+    assert refresh(client, old_refresh_token).status_code == 200
+    reused = refresh(client, old_refresh_token)
+    assert reused.status_code == 401
+    assert reused.json()["error"]["code"] == ErrorCode.NOT_AUTHENTICATED
 
 
 def test_invalid_email(client: TestClient, student: User):
@@ -72,7 +94,7 @@ def test_invalid_password(client: TestClient, student: User):
 
 
 def test_revoke_tokens(client: TestClient, db: Session, student: User):
-    refresh_token = login(client).json()["refresh_token"]
+    refresh_token = login(client).cookies["refresh_token"]
 
     revoke_all_refresh_tokens(student.id, db)
 
@@ -91,7 +113,7 @@ def test_refresh_with_no_refresh_token(client: TestClient):
 
 
 def test_expired_refresh_token_is_rejected(client: TestClient, db: Session, student: User):
-    refresh_token = login(client).json()["refresh_token"]
+    refresh_token = login(client).cookies["refresh_token"]
     db.execute(
         update(RefreshToken)
         .where(RefreshToken.user_id == student.id)
@@ -109,7 +131,7 @@ def test_disabled_account_cannot_login(client: TestClient, db: Session, student:
 
 
 def test_disabled_account_cannot_refresh(client: TestClient, db: Session, student: User):
-    refresh_token = login(client).json()["refresh_token"]
+    refresh_token = login(client).cookies["refresh_token"]
     student.is_active = False
     db.flush()
     response = refresh(client, refresh_token)

@@ -14,7 +14,7 @@ from app.db import violated_constraint
 from app.engagement import interface as engagement
 from app.errors import AppError, ErrorCode
 from app.game.draw import draw_locations
-from app.game.sessions import abandon_sessions, is_idle, session_idle_limit
+from app.game.sessions import abandon_sessions, game_already_open, is_idle, session_idle_limit
 from app.models.accounts import User
 from app.models.enums import (
     Difficulty,
@@ -64,7 +64,7 @@ def start_game(
     # taken before the class is looked up, so what is checked is what is stored once we hold it
     lock_user(user.id, db)
     if class_id is not None:
-        language = _class_language(user, class_id, db)
+        language = engagement.require_active_enrolment(user.id, class_id, db)
     assert language is not None
 
     _check_no_open_game(user.id, db)
@@ -78,24 +78,6 @@ def start_game(
     return StartedGame(game.id, SessionState(game.state), game.current_position, clue_url)
 
 
-def _class_language(user: User, class_id: UUID, db: Session) -> Language:
-    """The class language, if the user is an active student of a class that isn't archived."""
-    language = engagement.get_class_language(class_id, db)
-    # the same answer for a class that doesn't exist and one the student isn't in, so a
-    # student can't find out which classes exist
-    not_found = AppError(ErrorCode.NOT_FOUND, "Class not found")
-    if language is None:
-        raise not_found
-    if engagement.is_class_archived(class_id, db):
-        # only students who were in the class when it was archived are told why
-        if engagement.enrolment_ended_by_archive(user.id, class_id, db):
-            raise AppError(ErrorCode.CLASS_ARCHIVED)
-        raise not_found
-    if not engagement.is_actively_enrolled(user.id, class_id, db):
-        raise not_found
-    return language
-
-
 def _check_no_open_game(student_id: UUID, db: Session) -> None:
     """Raise SESSION_ALREADY_OPEN if the student has an open game, after expiring it if it has
     been idle too long (spec: expiry is also checked when a new game is started)."""
@@ -107,11 +89,7 @@ def _check_no_open_game(student_id: UUID, db: Session) -> None:
     if game is None:
         return
     if not is_idle(game, datetime.now(UTC), session_idle_limit()):
-        raise AppError(
-            ErrorCode.SESSION_ALREADY_OPEN,
-            "Finish or quit your current game first",
-            details=[{"session_id": str(game.id)}],
-        )
+        raise game_already_open(game.id)
     abandon_sessions(SessionEndReason.EXPIRED, [GameSession.id == game.id], db)
 
 

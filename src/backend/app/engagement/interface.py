@@ -3,7 +3,10 @@
 Implemented:
 - Issue #11: Class language, active enrolment, and archived-state lookups.
 - Issue #106: Access code validation and student enrolment.
-- Issue #84: Classroom creation service.
+- Issue #84: Classroom creation, access code generation, settings update
+ services (update_class_settings), classroom listing via list_staff_classes,
+ and code deactivation.
+- Issue #85: Student leave-class service and current-class reassignment.
 
 Interface stub:
 - Issue #15: Location result to engagement.
@@ -22,7 +25,13 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.engagement.classes import create_class, generate_access_code
+from app.engagement.classes import (
+    create_class,
+    deactivate_access_code,
+    generate_access_code,
+    list_staff_classes,
+    update_class_settings,
+)
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff
 from app.models.engagement import AccessCode, Class, ClassEnrollment
@@ -38,12 +47,17 @@ __all__ = [
     "EngagementResult",
     "apply_location_result",
     "create_class",
+    "deactivate_access_code",
     "enrolment_ended_by_archive",
     "generate_access_code",
     "get_active_class_ids",
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
+    "leave_class",
+    "list_staff_classes",
+    "require_active_enrolment",
+    "update_class_settings",
     "validate_code_and_enrol",
 ]
 
@@ -315,6 +329,27 @@ def is_class_archived(class_id: UUID, db: Session) -> bool:
     return school_class is not None and school_class.archived_at is not None
 
 
+def require_active_enrolment(student_id: UUID, class_id: UUID, db: Session) -> Language:
+    """Return the class language if the student is actively enrolled in a class that isn't archived.
+
+    Raises 404 NOT_FOUND, the same for a class that doesn't exist and one the student isn't in, so
+    a student can't find out which classes exist. Raises 409 CLASS_ARCHIVED, but only for a student
+    whose enrolment ended when the class was archived. Starting a game and selecting a class both
+    use it.
+    """
+    language = get_class_language(class_id, db)
+    not_found = AppError(ErrorCode.NOT_FOUND, "Class not found")
+    if language is None:
+        raise not_found
+    if is_class_archived(class_id, db):
+        if enrolment_ended_by_archive(student_id, class_id, db):
+            raise AppError(ErrorCode.CLASS_ARCHIVED)
+        raise not_found
+    if not is_actively_enrolled(student_id, class_id, db):
+        raise not_found
+    return language
+
+
 def validate_code_and_enrol(
     student_id: UUID,
     code: str,
@@ -459,3 +494,53 @@ def validate_code_and_enrol(
 
     db.flush()
     return school_class.id
+
+
+def leave_class(student_id: UUID, class_id: UUID, db: Session) -> None:
+    """Leave an active classroom without committing the transaction.
+
+    Preserve the enrolment record so the student can rejoin later.
+    If the current class is being left, select another active class
+    or clear the current selection.
+    """
+    student = lock_user(student_id, db)
+
+    if student is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    if not student.is_active:
+        raise AppError(ErrorCode.ACCOUNT_DISABLED)
+
+    if student.role != UserRole.STUDENT:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE)
+
+    enrollment = db.scalar(
+        select(ClassEnrollment).where(
+            ClassEnrollment.student_id == student_id,
+            ClassEnrollment.class_id == class_id,
+            ClassEnrollment.is_active.is_(True),
+        )
+    )
+
+    if enrollment is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    enrollment.is_active = False
+    enrollment.end_reason = EnrollmentEndReason.LEFT
+    enrollment.left_at = datetime.now(UTC)
+
+    if student.current_class_id == class_id:
+        student.current_class_id = db.scalar(
+            select(ClassEnrollment.class_id)
+            .join(Class, Class.id == ClassEnrollment.class_id)
+            .where(
+                ClassEnrollment.student_id == student_id,
+                ClassEnrollment.class_id != class_id,
+                ClassEnrollment.is_active.is_(True),
+                Class.archived_at.is_(None),
+            )
+            .order_by(ClassEnrollment.joined_at.desc(), ClassEnrollment.class_id)
+            .limit(1)
+        )
+
+    db.flush()

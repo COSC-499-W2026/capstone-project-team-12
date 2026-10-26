@@ -1,6 +1,6 @@
 """Ending games (spec Session Lifecycle): the one place that abandons a game and skips the
-locations it left unfinished. Used by class closing, expiry on start and the expire job.
-`get_open_session_id` uses its idle rule too."""
+locations it left unfinished. Used by class closing, expiry on start, expiry on read and the
+expire job. `get_open_session_id` uses its idle rule too."""
 
 from collections.abc import Sequence
 from datetime import datetime, timedelta
@@ -10,6 +10,7 @@ from sqlalchemy import ColumnElement, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.errors import AppError, ErrorCode
 from app.models.enums import LocationStatus, SessionEndReason, SessionState, SkipReason
 from app.models.game import OPEN_SESSION_STATES, GameSession, SessionLocation
 
@@ -19,6 +20,15 @@ _UNFINISHED = (LocationStatus.PENDING, LocationStatus.NAVIGATING, LocationStatus
 def session_idle_limit() -> timedelta:
     """How long a game may be idle before it expires (SESSION_IDLE_EXPIRY_HOURS, 24 by default)."""
     return timedelta(hours=get_settings().session_idle_expiry_hours)
+
+
+def game_already_open(game_id: UUID) -> AppError:
+    """The 409 SESSION_ALREADY_OPEN for a student who has an open game, with its id in details."""
+    return AppError(
+        ErrorCode.SESSION_ALREADY_OPEN,
+        "Finish or quit your current game first",
+        details=[{"session_id": str(game_id)}],
+    )
 
 
 def idle_cutoff(now: datetime, idle_limit: timedelta) -> datetime:
