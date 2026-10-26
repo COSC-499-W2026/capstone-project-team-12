@@ -26,5 +26,5 @@ Tests live in `tests/backend/`.
 
 Each component package has an `interface.py`: the only module other components may import.
 Agree on a function signature with its users before adding it there, and check the rules with
-`python utils/dep_graph.py --check` from the repo root.
+`python utils/dep_graph.py --graph --check` from the repo root.
 
