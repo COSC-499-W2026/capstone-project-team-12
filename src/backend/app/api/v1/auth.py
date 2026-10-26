@@ -48,7 +48,7 @@ def login(
     """
     tokens = login_account(form_data, db)
     response.set_cookie("refresh_token", tokens["refresh_token"])
-    return TokenResponse(token=tokens["access_token"], token_type="bearer")
+    return TokenResponse(access_token=tokens["access_token"])
 
 
 @auth_router.post(
@@ -69,4 +69,4 @@ def refresh(
     else:
         tokens = rotate_tokens(refresh_token, db)
         response.set_cookie("refresh_token", tokens["refresh_token"])
-        return TokenResponse(token=tokens["access_token"], token_type="bearer")
+        return TokenResponse(access_token=tokens["access_token"])

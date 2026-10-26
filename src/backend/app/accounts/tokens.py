@@ -23,8 +23,8 @@ REFRESH_TOKEN_EXPIRES_DAYS = 14
 
 
 class TokenResponse(BaseModel):
-    token: str
-    token_type: str
+    access_token: str
+    token_type: str = "bearer"
 
 
 def encode_jwt(data: dict[str, Any], expires_at: timedelta, key: str) -> str:
