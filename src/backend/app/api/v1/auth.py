@@ -5,13 +5,9 @@ from fastapi import APIRouter, Cookie, Depends, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-<<<<<<< HEAD
 from app.accounts.login import login_account
-from app.accounts.register import RegisterRequest, register_account
-from app.accounts.tokens import TokenResponse, rotate_tokens
-=======
 from app.accounts.register import RegisterRequest, RegisterResponse, register_account
->>>>>>> main
+from app.accounts.tokens import TokenResponse, rotate_tokens
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
 
