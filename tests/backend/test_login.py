@@ -59,23 +59,15 @@ def test_valid_login(client: TestClient):
     assert new_tokens.status_code == 200
 
 
-def test_invalid_email(client: TestClient, db: Session):
-    register_request = RegisterRequest(
-        email=VALID_EMAIL, username=VALID_USERNAME, password=VALID_PASSWORD
-    )
-    register_account(register_request, db)
-    login = {"username": INVALID_EMAIL, "password": VALID_PASSWORD}
-    response = client.post("/api/v1/auth/login", data=login)
+def test_invalid_email(client: TestClient, student: User):
+    response = login(client, email=INVALID_EMAIL)
+    assert response.status_code == 401
     assert response.json()["error"]["code"] == ErrorCode.INVALID_CREDENTIALS
 
 
-def test_invalid_password(client: TestClient, db: Session):
-    register_request = RegisterRequest(
-        email=VALID_EMAIL, username=VALID_USERNAME, password=VALID_PASSWORD
-    )
-    register_account(register_request, db)
-    login = {"username": VALID_EMAIL, "password": INVALID_PASSWORD}
-    response = client.post("/api/v1/auth/login", data=login)
+def test_invalid_password(client: TestClient, student: User):
+    response = login(client, password=INVALID_PASSWORD)
+    assert response.status_code == 401
     assert response.json()["error"]["code"] == ErrorCode.INVALID_CREDENTIALS
 
 
