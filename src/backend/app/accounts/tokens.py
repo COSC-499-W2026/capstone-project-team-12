@@ -1,15 +1,8 @@
-<<<<<<< HEAD
-import hashlib
-import os
-import zoneinfo
-from datetime import datetime, timedelta
-=======
 """Module used for creation, rotation, and revocation of access tokens and refresh tokens."""
 
 import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
->>>>>>> origin/main
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -18,19 +11,11 @@ from pydantic import BaseModel
 from sqlalchemy import desc, insert, select, update
 from sqlalchemy.orm import Session
 
-<<<<<<< HEAD
-from app.errors import AppError, ErrorCode
-from app.models.accounts import RefreshToken
-
-ACCESS_TOKEN_KEY = os.getenv("ACCESS_TOKEN_KEY")
-REFRESH_TOKEN_KEY = os.getenv("REFRESH_TOKEN_KEY")
-=======
 from app.config import get_settings
 from app.errors import AppError, ErrorCode
 from app.models.accounts import RefreshToken, User
 
 ACCESS_TOKEN_KEY = get_settings().access_token_secret_key
->>>>>>> origin/main
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRES_MINUTES = 60
 REFRESH_TOKEN_EXPIRES_DAYS = 14
@@ -38,11 +23,7 @@ REFRESH_TOKEN_EXPIRES_DAYS = 14
 
 class TokenResponse(BaseModel):
     access_token: str
-<<<<<<< HEAD
-    refresh_token: str
-=======
     token_type: str = "bearer"
->>>>>>> origin/main
 
 
 def encode_jwt(data: dict[str, Any], expires_at: timedelta, key: str) -> str:
@@ -61,15 +42,9 @@ def decode_jwt(jwt: str, key: str) -> dict[str, Any]:
 
 def create_access_token(data: dict[str, Any]) -> str:
     """Creates a new access token with the provided data."""
-<<<<<<< HEAD
-    expire = now() + timedelta(ACCESS_TOKEN_EXPIRES_MINUTES)
-    data.update({"exp": expire})
-    return encode_jwt(data, timedelta(ACCESS_TOKEN_EXPIRES_MINUTES), str(ACCESS_TOKEN_KEY))
-=======
     expire = now() + timedelta(minutes=ACCESS_TOKEN_EXPIRES_MINUTES)
     data.update({"exp": expire})
     return encode_jwt(data, timedelta(minutes=ACCESS_TOKEN_EXPIRES_MINUTES), str(ACCESS_TOKEN_KEY))
->>>>>>> origin/main
 
 
 def create_refresh_token(user_id: UUID, db: Session, family_id: UUID | None = None) -> str:
@@ -79,61 +54,28 @@ def create_refresh_token(user_id: UUID, db: Session, family_id: UUID | None = No
     created = now()
     expires = now() + timedelta(days=REFRESH_TOKEN_EXPIRES_DAYS)
     new_family_id = family_id or uuid4()
-<<<<<<< HEAD
-    jwt = encode_jwt(
-        {"sub": str(user_id)}, timedelta(days=REFRESH_TOKEN_EXPIRES_DAYS), str(REFRESH_TOKEN_KEY)
-    )
-    jwt_hash = hashlib.sha256(jwt.encode()).hexdigest()
-=======
     # Opaque random value: it is only ever looked up by its hash, never decoded, so it needs no key
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
->>>>>>> origin/main
     stmt = insert(RefreshToken).values(
         id=token_id,
         user_id=user_id,
         family_id=new_family_id,
-<<<<<<< HEAD
-        token_hash=jwt_hash,
-=======
         token_hash=token_hash,
->>>>>>> origin/main
         created_at=created,
         expires_at=expires,
     )
     db.execute(stmt)
     db.commit()
-<<<<<<< HEAD
-    return jwt
-
-
-def rotate_tokens(token: str, db: Session) -> TokenResponse:
-=======
     return token
 
 
 def rotate_tokens(token: str, db: Session) -> dict[str, str]:
->>>>>>> origin/main
     """Rotates the provided token represented by token_id, then creates and returns a new
     JWT access code and refresh token in the same family."""
     valid_token_id = validate_refresh_token(token, db)
     if valid_token_id is None:
         raise AppError(ErrorCode.NOT_AUTHENTICATED)
-<<<<<<< HEAD
-    result = db.execute(
-        select(RefreshToken.user_id, RefreshToken.family_id).where(
-            RefreshToken.id == valid_token_id
-        )
-    )
-
-    user_id: UUID
-    family_id: UUID
-    if result:
-        for row in result:
-            user_id = row[0]
-            family_id = row[1]
-
-=======
     user_id, family_id = db.execute(
         select(RefreshToken.user_id, RefreshToken.family_id).where(
             RefreshToken.id == valid_token_id
@@ -142,7 +84,6 @@ def rotate_tokens(token: str, db: Session) -> dict[str, str]:
     user = db.get(User, user_id)
     if user is None or not user.is_active:
         raise AppError(ErrorCode.ACCOUNT_DISABLED, "Your account has been disabled.")
->>>>>>> origin/main
     db.execute(
         update(RefreshToken).where(RefreshToken.id == valid_token_id).values(rotated_at=now())
     )
@@ -152,11 +93,7 @@ def rotate_tokens(token: str, db: Session) -> dict[str, str]:
     new_access_token = create_access_token({"sub": str(user_id)})
     new_refresh_token = create_refresh_token(user_id, db, family_id)
 
-<<<<<<< HEAD
-    return TokenResponse(access_token=new_access_token, refresh_token=new_refresh_token)
-=======
     return {"access_token": new_access_token, "refresh_token": new_refresh_token}
->>>>>>> origin/main
 
 
 def validate_refresh_token(token: str, db: Session) -> UUID | None:
@@ -189,9 +126,4 @@ def revoke_refresh_tokens(user_id: UUID, db: Session) -> None:
 
 
 def now() -> datetime:
-<<<<<<< HEAD
-    """Returns current datetime in Pacific Timezone"""
-    return datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles"))
-=======
     return datetime.now(UTC)
->>>>>>> origin/main
