@@ -1636,6 +1636,15 @@
         ],
         "title": "UpdateClassResponse",
         "description": "Classroom settings after an update."
+      },
+      "UserRole": {
+        "type": "string",
+        "enum": [
+          "student",
+          "staff",
+          "admin"
+        ],
+        "title": "UserRole"
       }
     },
     "securitySchemes": {
