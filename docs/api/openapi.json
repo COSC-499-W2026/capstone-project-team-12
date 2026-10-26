@@ -810,7 +810,7 @@
           "games"
         ],
         "summary": "Start New Game",
-        "description": "Start a class game (`class_id`) or a Practice game (`language`).\n\nSend exactly one of them. The game gets 5 different locations in the language. Locations the\nstudent has not completed yet come first. After a quit the same day, the locations that were\nnot played carry over to the new game, but not after a reset. Names, rooms and coordinates\nare never sent, only the first clue's audio link.\n\n409 SESSION_ALREADY_OPEN if the student has an active or paused game (its id is in `details`),\nunless it has been idle for 24 hours, then it is expired and the new game starts. If the new\ngame then fails (e.g. NOT_ENOUGH_CONTENT), nothing is committed, so the expiry is rolled back\nand the old game stays open until the next start or the expiry job.\n409 NOT_ENOUGH_CONTENT if the language has fewer than 5 locations to draw.\n409 CLASS_ARCHIVED for a student whose enrolment ended when the class was archived.\n404 NOT_FOUND for a class the student is not in, or if the first clue has no recording (also\nin a Practice game). 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.",
+        "description": "Start a class game (`class_id`) or a Practice game (`language`).\n\nSend exactly one of them. The game gets 5 different locations in the language. Locations the\nstudent has not completed yet come first. After a quit the same day, the locations that were\nnot played carry over to the new game, but not after a reset. Names, rooms and coordinates\nare never sent, only the first clue's audio link.\n\n409 SESSION_ALREADY_OPEN if the student has an active or paused game (its id is in `details`),\nunless it has been idle for the expiry limit (24 hours by default), then it is expired and the\nnew game starts. If the new game then fails (e.g. NOT_ENOUGH_CONTENT), nothing is committed,\nso the expiry is rolled back and the old game stays open until the next start or the expiry\njob.\n409 NOT_ENOUGH_CONTENT if the language has fewer than 5 locations to draw.\n409 CLASS_ARCHIVED for a student whose enrolment ended when the class was archived.\n404 NOT_FOUND for a class the student is not in, or if the first clue has no recording (also\nin a Practice game). 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.",
         "operationId": "startGame",
         "requestBody": {
           "content": {
@@ -875,6 +875,73 @@
           },
           "409": {
             "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/games/current": {
+      "get": {
+        "tags": [
+          "games"
+        ],
+        "summary": "Current Game",
+        "description": "The student's open (active or paused) game, with the status of each location.\n\n404 NOT_FOUND if there is none. A game that has been idle for the expiry limit (24 hours by\ndefault) is expired when it is read, so it gives 404 too. 403 FORBIDDEN_ROLE for an admin,\nACCOUNT_DISABLED for a disabled account.",
+        "operationId": "getCurrentGame",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
             "content": {
               "application/json": {
                 "schema": {
@@ -1416,6 +1483,99 @@
         "title": "ErrorResponse",
         "description": "The body of every error response, the same shape as AppError.body() (for OpenAPI)."
       },
+      "GameStatusResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SessionState"
+          },
+          "end_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionEndReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "class_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Id"
+          },
+          "language": {
+            "$ref": "#/components/schemas/Language"
+          },
+          "difficulty": {
+            "$ref": "#/components/schemas/Difficulty"
+          },
+          "current_position": {
+            "type": "integer",
+            "title": "Current Position"
+          },
+          "shuffles_used": {
+            "type": "integer",
+            "title": "Shuffles Used"
+          },
+          "total_score": {
+            "type": "integer",
+            "title": "Total Score"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "paused_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused At"
+          },
+          "locations": {
+            "items": {
+              "$ref": "#/components/schemas/LocationProgressResponse"
+            },
+            "type": "array",
+            "title": "Locations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "state",
+          "end_reason",
+          "class_id",
+          "language",
+          "difficulty",
+          "current_position",
+          "shuffles_used",
+          "total_score",
+          "started_at",
+          "paused_at",
+          "locations"
+        ],
+        "title": "GameStatusResponse",
+        "description": "A game's state and how each location went. Never a location's name, room or\ncoordinates."
+      },
       "JoinClassRequest": {
         "properties": {
           "access_code": {
@@ -1466,6 +1626,56 @@
           "es"
         ],
         "title": "Language"
+      },
+      "LocationProgressResponse": {
+        "properties": {
+          "position": {
+            "type": "integer",
+            "title": "Position"
+          },
+          "status": {
+            "$ref": "#/components/schemas/LocationStatus"
+          },
+          "skip_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SkipReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attempts_used": {
+            "type": "integer",
+            "title": "Attempts Used"
+          },
+          "points_awarded": {
+            "type": "integer",
+            "title": "Points Awarded"
+          }
+        },
+        "type": "object",
+        "required": [
+          "position",
+          "status",
+          "skip_reason",
+          "attempts_used",
+          "points_awarded"
+        ],
+        "title": "LocationProgressResponse"
+      },
+      "LocationStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "navigating",
+          "verifying",
+          "completed",
+          "failed",
+          "skipped"
+        ],
+        "title": "LocationStatus"
       },
       "ProfileResponse": {
         "properties": {
@@ -1572,6 +1782,16 @@
         ],
         "title": "ResetPasswordRequest"
       },
+      "SessionEndReason": {
+        "type": "string",
+        "enum": [
+          "quit",
+          "reset",
+          "expired",
+          "class_closed"
+        ],
+        "title": "SessionEndReason"
+      },
       "SessionState": {
         "type": "string",
         "enum": [
@@ -1581,6 +1801,14 @@
           "abandoned"
         ],
         "title": "SessionState"
+      },
+      "SkipReason": {
+        "type": "string",
+        "enum": [
+          "session_ended",
+          "deactivated"
+        ],
+        "title": "SkipReason"
       },
       "StartGameRequest": {
         "properties": {

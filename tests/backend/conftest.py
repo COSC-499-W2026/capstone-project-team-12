@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.content.clue_audio import UPLOAD_PROVIDER
-from app.db import get_db
+from app.db import DB_CONNECT_ARGS, get_db
 from app.main import create_app
 from app.models.accounts import ClassStaff, User
 from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
@@ -39,7 +39,9 @@ from app.services.storage import MEDIA_URL_PREFIX, get_storage_service
 
 @pytest.fixture(scope="session")
 def test_engine() -> Iterator[Engine]:
-    engine = create_engine(get_settings().database_url, pool_pre_ping=True)
+    engine = create_engine(
+        get_settings().database_url, pool_pre_ping=True, connect_args=DB_CONNECT_ARGS
+    )
     yield engine
     engine.dispose()
 
