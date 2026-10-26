@@ -125,6 +125,8 @@ python utils/dep_graph.py --graph   # redraw docs/architecture/dependency-graph.
 
 The current graph is in [docs/architecture/dependency-graph.md](docs/architecture/dependency-graph.md). It is generated from the imports, so if your PR adds, removes or moves a module or an import, run `--graph` and commit the file with your change. CI fails with "out of date" if you forget.
 
+The graph is also published at [https://cosc-499-w2026.github.io/capstone-project-team-12/graph.html](https://cosc-499-w2026.github.io/capstone-project-team-12/graph.html), and the API reference at [https://cosc-499-w2026.github.io/capstone-project-team-12/api.html](https://cosc-499-w2026.github.io/capstone-project-team-12/api.html), after each merge to main.
+
 ## Team Contract
 
 Our team contract can be found [here](docs/contract/team-contract.docx).
