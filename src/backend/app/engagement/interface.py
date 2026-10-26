@@ -3,7 +3,10 @@
 Implemented:
 - Issue #11: Class language, active enrolment, and archived-state lookups.
 - Issue #106: Access code validation and student enrolment.
-- Issue #84: Classroom creation service.
+- Issue #84: Classroom creation, access code generation, settings update
+ services (update_class_settings), classroom listing via list_staff_classes,
+ and code deactivation.
+- Issue #85: Student leave-class service and current-class reassignment.
 
 Interface stub:
 - Issue #15: Location result to engagement.
@@ -22,7 +25,13 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.engagement.classes import create_class, generate_access_code
+from app.engagement.classes import (
+    create_class,
+    deactivate_access_code,
+    generate_access_code,
+    list_staff_classes,
+    update_class_settings,
+)
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff
 from app.models.engagement import AccessCode, Class, ClassEnrollment
@@ -38,12 +47,16 @@ __all__ = [
     "EngagementResult",
     "apply_location_result",
     "create_class",
+    "deactivate_access_code",
     "enrolment_ended_by_archive",
     "generate_access_code",
     "get_active_class_ids",
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
+    "leave_class",
+    "list_staff_classes",
+    "update_class_settings",
     "validate_code_and_enrol",
 ]
 
@@ -459,3 +472,53 @@ def validate_code_and_enrol(
 
     db.flush()
     return school_class.id
+
+
+def leave_class(student_id: UUID, class_id: UUID, db: Session) -> None:
+    """Leave an active classroom without committing the transaction.
+
+    Preserve the enrolment record so the student can rejoin later.
+    If the current class is being left, select another active class
+    or clear the current selection.
+    """
+    student = lock_user(student_id, db)
+
+    if student is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    if not student.is_active:
+        raise AppError(ErrorCode.ACCOUNT_DISABLED)
+
+    if student.role != UserRole.STUDENT:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE)
+
+    enrollment = db.scalar(
+        select(ClassEnrollment).where(
+            ClassEnrollment.student_id == student_id,
+            ClassEnrollment.class_id == class_id,
+            ClassEnrollment.is_active.is_(True),
+        )
+    )
+
+    if enrollment is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    enrollment.is_active = False
+    enrollment.end_reason = EnrollmentEndReason.LEFT
+    enrollment.left_at = datetime.now(UTC)
+
+    if student.current_class_id == class_id:
+        student.current_class_id = db.scalar(
+            select(ClassEnrollment.class_id)
+            .join(Class, Class.id == ClassEnrollment.class_id)
+            .where(
+                ClassEnrollment.student_id == student_id,
+                ClassEnrollment.class_id != class_id,
+                ClassEnrollment.is_active.is_(True),
+                Class.archived_at.is_(None),
+            )
+            .order_by(ClassEnrollment.joined_at.desc(), ClassEnrollment.class_id)
+            .limit(1)
+        )
+
+    db.flush()
