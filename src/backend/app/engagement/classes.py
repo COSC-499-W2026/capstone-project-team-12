@@ -309,3 +309,61 @@ def update_class_settings(
 
     db.flush()
     return school_class
+
+
+def deactivate_access_code(
+    code_id: UUID,
+    actor: User,
+    db: Session,
+) -> AccessCode:
+    """Deactivate a classroom access code without deleting it.
+
+    Classroom owners and assistants may deactivate codes.
+    The caller owns the transaction; this function never commits.
+    """
+    if not actor.is_active:
+        raise AppError(ErrorCode.ACCOUNT_DISABLED)
+
+    access_code = db.get(AccessCode, code_id)
+    if access_code is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    school_class = db.get(Class, access_code.class_id)
+    if school_class is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    role = db.execute(
+        select(ClassStaff.role).where(
+            ClassStaff.class_id == school_class.id,
+            ClassStaff.user_id == actor.id,
+        )
+    ).scalar_one_or_none()
+
+    if role not in (ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT):
+        raise AppError(ErrorCode.FORBIDDEN_ROLE)
+
+    if school_class.archived_at is not None:
+        raise AppError(ErrorCode.CLASS_ARCHIVED)
+
+    access_code.is_active = False
+    db.flush()
+    return access_code
+
+
+def list_staff_classes(
+    user_id: UUID,
+    db: Session,
+) -> list[tuple[Class, ClassStaffRole]]:
+    """Return classes owned or assisted by the user, including archived classes.
+
+    This operation is read-only and does not commit or flush.
+    """
+    statement = (
+        select(Class, ClassStaff.role)
+        .join(ClassStaff, ClassStaff.class_id == Class.id)
+        .where(ClassStaff.user_id == user_id)
+        .order_by(Class.created_at.desc(), Class.id)
+    )
+    return [
+        (school_class, ClassStaffRole(role)) for school_class, role in db.execute(statement).all()
+    ]
