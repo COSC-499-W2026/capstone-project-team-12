@@ -85,6 +85,7 @@ def test_201_with_code(
     assert user.username == request["username"]
     class_query = select(ClassEnrollment).where(ClassEnrollment.student_id == user.id)
     result = db.execute(class_query).scalar_one_or_none()
+    assert result is not None
     assert user.current_class_id == result.class_id
 
 
@@ -105,7 +106,7 @@ def test_201_no_code(client: TestClient, db: Session):
     assert user.username == request["username"]
 
 
-def test_invalid_access_code(client: TestClient, db: Session):
+def test_invalid_access_code(client: TestClient, db: Session, transaction_calls: list[str]):
     request = {
         "email": "invalid@code.com",
         "username": "JohnLanguage",
@@ -115,12 +116,10 @@ def test_invalid_access_code(client: TestClient, db: Session):
     response = client.post("/api/v1/auth/register", json=request)
     assert response.status_code == 400
     assert response.json()["error"]["code"] == ErrorCode.INVALID_ACCESS_CODE
-    user = db.scalars(select(User).where(User.email == request["email"])).one()
-    assert user is None
-    enrollment = db.execute(
-        select(ClassEnrollment).where(ClassEnrollment.student_id == user.id)
-    ).scalar_one_or_none()
-    assert enrollment is None
+    assert "commit" not in transaction_calls
+    db.rollback()
+    assert db.scalars(select(User).where(User.email == request["email"])).first() is None
+    assert db.scalars(select(EmailOutbox)).first() is None
 
 
 def test_409(client: TestClient):
