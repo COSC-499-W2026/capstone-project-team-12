@@ -76,7 +76,7 @@ class RefreshToken(Base):
     id: Mapped[UUID] = uuid_pk()
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
     family_id: Mapped[UUID]
-    token_hash: Mapped[str]
+    token_hash: Mapped[str] = mapped_column(unique=True)
     replaced_by: Mapped[UUID | None] = mapped_column(ForeignKey("refresh_tokens.id"))
     rotated_at: Mapped[datetime | None]
     expires_at: Mapped[datetime]
