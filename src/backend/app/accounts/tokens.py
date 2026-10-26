@@ -1,6 +1,5 @@
 """Module used for creation, rotation, and revocation of access tokens and refresh tokens."""
 
-
 import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta

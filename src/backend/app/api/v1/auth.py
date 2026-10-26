@@ -30,6 +30,7 @@ def register(request: RegisterRequest, db: Annotated[Session, Depends(get_db)]) 
     db.commit()
     return RegisterResponse(id=user.id, username=user.username, email=user.email, role=user.role)
 
+
 @auth_router.post(
     "/login",
     tags=["login"],
