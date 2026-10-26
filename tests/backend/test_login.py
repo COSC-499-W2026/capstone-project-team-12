@@ -1,20 +1,39 @@
-from time import sleep
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from httpx2 import Response
+from jwt import decode
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import revoke_all_refresh_tokens
-from app.accounts.register import RegisterRequest, register_account
+from app.accounts.password import hash_password
+from app.config import get_settings
 from app.errors import ErrorCode
 from app.models.accounts import RefreshToken, User
 
 VALID_EMAIL = "test@email.com"
-VALID_USERNAME = "JohnLanguage"
 VALID_PASSWORD = "ValidPassword1"
 
 INVALID_EMAIL = "invalidemail"
 INVALID_PASSWORD = "NotValidPassword1"
+
+
+@pytest.fixture
+def student(make_user: Callable[..., User]) -> User:
+    """An active student who can sign in with VALID_EMAIL and VALID_PASSWORD."""
+    return make_user(email=VALID_EMAIL, password_hash=hash_password(VALID_PASSWORD))
+
+
+def login(client: TestClient, email: str = VALID_EMAIL, password: str = VALID_PASSWORD) -> Response:
+    return client.post("/api/v1/auth/login", data={"username": email, "password": password})
+
+
+def refresh(client: TestClient, refresh_token: str) -> Response:
+    # a header, not the client's cookie jar, so no cookie leaks into the next request
+    return client.post("/api/v1/auth/refresh", headers={"Cookie": f"refresh_token={refresh_token}"})
 
 
 def test_valid_login(client: TestClient):
