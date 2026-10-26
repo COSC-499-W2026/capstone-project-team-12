@@ -68,3 +68,17 @@ class ClassStaff(Base):
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), primary_key=True, index=True)
     role: Mapped[str]
     added_at: Mapped[datetime] = created_at()
+
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+
+    id: Mapped[UUID] = uuid_pk()
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    family_id: Mapped[UUID]
+    token_hash: Mapped[str] = mapped_column(unique=True)
+    replaced_by: Mapped[UUID | None] = mapped_column(ForeignKey("refresh_tokens.id"))
+    rotated_at: Mapped[datetime | None]
+    expires_at: Mapped[datetime]
+    revoked_at: Mapped[datetime | None]
+    created_at: Mapped[datetime]

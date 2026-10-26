@@ -1,8 +1,11 @@
 """Module used for the verification and hashing of passwords."""
 
-from bcrypt import gensalt, hashpw
+from bcrypt import checkpw, gensalt, hashpw
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.errors import AppError, ErrorCode
+from app.models.accounts import User
 
 
 def validate_password_security(password: str) -> None:
@@ -32,3 +35,20 @@ def hash_password(password: str) -> str:
     salt = gensalt(12)
     hashed = hashpw(bytes, salt)
     return hashed.decode("utf-8")
+
+
+def check_password_hash(email: str, password: str, db: Session) -> bool:
+    """Takes a plaintext password and checks it agaist the stored hash for the user"""
+    pw_bytes = password.encode("utf-8")
+    stmt = select(User.email, User.password_hash).where(User.email == email)
+    result = db.execute(stmt)
+    for row in result:
+        hash: str = "" + str(row[1])
+        if row[0] == email and checkpw(pw_bytes, hash.encode("utf-8")):
+            return True
+        else:
+            raise AppError(
+                ErrorCode.INVALID_CREDENTIALS,
+                "The email or password you entered are incorrect.",
+            )
+    return False
