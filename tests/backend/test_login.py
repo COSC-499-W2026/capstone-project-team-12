@@ -71,27 +71,17 @@ def test_invalid_password(client: TestClient, student: User):
     assert response.json()["error"]["code"] == ErrorCode.INVALID_CREDENTIALS
 
 
-def test_revoke_tokens(client: TestClient, db: Session):
+def test_revoke_tokens(client: TestClient, db: Session, student: User):
+    refresh_token = login(client).json()["refresh_token"]
 
-    register_request = RegisterRequest(
-        email=VALID_EMAIL, username=VALID_USERNAME, password=VALID_PASSWORD
-    )
+    revoke_all_refresh_tokens(student.id, db)
 
-    register_account(register_request, db)
-    login = {"username": VALID_EMAIL, "password": VALID_PASSWORD}
-    client.post("/api/v1/auth/login", data=login)
-
-    stmt = select(User.id).where(User.email == VALID_EMAIL)
-    result = db.execute(stmt)
-    if result:
-        for row in result:
-            user_id = row[0]
-
-    revoke_all_refresh_tokens(user_id, db)
-    token_select = select(RefreshToken.revoked_at).where(RefreshToken.user_id == user_id)
-    revoked_result = db.execute(token_select)
-    for row in revoked_result:
-        assert row[0] is not None
+    revoked = db.scalars(
+        select(RefreshToken.revoked_at).where(RefreshToken.user_id == student.id)
+    ).all()
+    assert revoked  # the login really made a token
+    assert all(revoked_at is not None for revoked_at in revoked)
+    assert refresh(client, refresh_token).status_code == 401
 
 
 def test_refresh_with_no_refresh_token(client: TestClient):
