@@ -1,9 +1,9 @@
-# Week 6 Individual Log
+# Week 7 Individual Log
 ### Kaedyn Hindley
 
-For PR #215:
+### For PR #215:
 As part of requirement A1 (#68), the system must allow a user to create an account with an email address, a username and a password, optionally joining a class with an access code.
-Therefore, I implemented/generated code so that users are able to supply an optional class access code when registering an account, enrolling them alongside sign-up.
+Therefore, I implemented code so that users are able to supply an optional class access code when registering an account, enrolling them alongside sign-up.
 
 The PR does not contain any temporary workaround because it utilizes the final implementation of access code validation and enrollment. No workaround function or data is used.
 
@@ -35,3 +35,33 @@ Among these tests, all new tests are integration tests. They all focus on testin
 These tests are included in the directory `tests/backend/register.py`.
 
 This new test PR did not break anything else in the system because the entire test suite passed, showing that no previous tests failed due to the newly implemented feature.
+
+### For PR #254
+As part of requirement A4, the system shall "allow a user to sign in to a created account with email and password and stay signed in with rotating refresh tokens".
+
+Therefore, I implemented code so that users are able to log in to the `login` endpoint using their credentials to receive a pair of tokens, and are able to refresh their tokens at the `refresh` endpoint.
+
+The PR does not contain any temporary workaround because it strictly uses database and user-provided values. No hardcoded values exist, and no code must be implemented later that changes its structure or logic flow.
+
+The PR pushes a little over the limit at 520 lines, but this is in part due to the alembic migration and openapi files.
+
+
+No hardcoded values exist: all values are taken from the database or form values. Repeated code and logic are placed in their own functions to avoid duplicate code. Code with different responsibilities are separated into different modules; access and refresh tokens in `tokens.py`, and login validation in `login.py` and `password.py`.
+
+I can confirm that my feature contribution does not contain any of the following:
+- hardcoded values
+- duplicate code
+- dead code
+- unnecessary function calls
+- excessive conditional logic
+- deep nesting
+- high cyclomatic complexity
+- classes/modules/functions with many unrelated responsibilities
+
+The review by Eddy identified issues with refresh tokens and their original implementation as JWTs, noting it was unnecessary and potentially insecure. Now they are returned as cookies in the response, and are instead random values hashed with sha256 instead of being hashed in a similar method to the access tokens.
+
+Eddy also identified important missing checks on users being deeactivated and accessing the login or refresh endpoints, and so checks for that were implemented.
+
+This work is primarily written in `app/accounts/login.py`, `app/accounts/password.py`, and `app/accounts/tokens.py`. This splits all the responsibilities into different modules, while still all keeping them under the shared responsibility of account-based modules.
+
+Due to the large line diff size, the tests for this feature are included in a separate PR.
