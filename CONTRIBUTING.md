@@ -54,20 +54,20 @@ CI automatically checks:
 - Ruff formatting
 - mypy type checking
 - Alembic migrations
-- the committed OpenAPI document (`docs/api/openapi.json`) matches the code
+- the dependency rules and that the OpenAPI document can be generated
 - pytest
 - test coverage
 
 ## API changes
 
-`docs/api/openapi.json` is generated from the FastAPI routes, so reviewers can see every API change in the PR diff. If your PR adds or changes a route, a request or response model, or an error response, run this from `src/backend` and commit the updated file with your change:
+The API reference is generated from the FastAPI routes and published on GitHub Pages after each merge to main (https://cosc-499-w2026.github.io/capstone-project-team-12/api.html). The file (`docs/api/openapi.json`) is git-ignored, so do not commit it. To see your changes locally, run this from `src/backend`:
 
 ```
 pip install -r requirements-dev.txt   # pinned versions; use Python 3.11 like CI (3.13 names 422 differently)
 python ../../utils/export_openapi.py
 ```
 
-CI fails with "out of date" if you forget. When you add a route:
+When you add a route:
 
 - **Required:** set `operation_id` in camelCase, following the Operation IDs table in `docs/api-conventions.md` (for example `operation_id="pauseGame"`). FastAPI's default names don't follow it, and a test fails if one is missing.
 - **Recommended:** if the route can return other errors (e.g. 404, 409), list them with `responses=error_responses(...)` from `app.errors`, for example `error_responses(HTTPStatus.CONFLICT)`, so they show up in the spec. Errors raised as `AppError` in a service are invisible to FastAPI otherwise. Reviewers can point out missing ones, but it isn't a blocker. 422 is already added for every route under `/api/v1`.

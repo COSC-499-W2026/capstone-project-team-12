@@ -56,11 +56,12 @@ jobs:
       - name: Mypy
         run: mypy  # files come from pyproject.toml
 
-      - name: Dependency rules and graph are up to date
-        run: python ../../utils/dep_graph.py --check
+      # --graph redraws the (git-ignored) file first, so --check only fails on a broken rule
+      - name: Dependency rules
+        run: python ../../utils/dep_graph.py --graph --check
 
-      - name: OpenAPI spec is up to date
-        run: python ../../utils/export_openapi.py --check
+      - name: OpenAPI document can be generated
+        run: python ../../utils/export_openapi.py
 
       - name: Alembic upgrade
         run: alembic upgrade head

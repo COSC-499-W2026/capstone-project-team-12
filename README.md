@@ -119,13 +119,13 @@ use another component only through its `interface.py`; when two components need 
 other, the router or CLI command calls both.
 
 ```bash
-python utils/dep_graph.py --check   # fail if a dependency rule is broken or the graph is stale
-python utils/dep_graph.py --graph   # redraw docs/architecture/dependency-graph.md
+python utils/dep_graph.py --graph --check   # draw the graph and fail if a rule is broken (as in CI)
+python utils/dep_graph.py --graph           # only draw docs/architecture/dependency-graph.md
 ```
 
-The current graph is in [docs/architecture/dependency-graph.md](docs/architecture/dependency-graph.md). It is generated from the imports, so if your PR adds, removes or moves a module or an import, run `--graph` and commit the file with your change. CI fails with "out of date" if you forget.
+The graph is generated from the imports and published on GitHub Pages after each merge to main, at [https://cosc-499-w2026.github.io/capstone-project-team-12/graph.html](https://cosc-499-w2026.github.io/capstone-project-team-12/graph.html). `docs/architecture/dependency-graph.md` is git-ignored, so there is no file to commit.
 
-The graph is also published at [https://cosc-499-w2026.github.io/capstone-project-team-12/graph.html](https://cosc-499-w2026.github.io/capstone-project-team-12/graph.html), and the API reference at [https://cosc-499-w2026.github.io/capstone-project-team-12/api.html](https://cosc-499-w2026.github.io/capstone-project-team-12/api.html), after each merge to main.
+The API reference is generated from the FastAPI routes in the same way and published at [https://cosc-499-w2026.github.io/capstone-project-team-12/api.html](https://cosc-499-w2026.github.io/capstone-project-team-12/api.html).
 
 ## Team Contract
 

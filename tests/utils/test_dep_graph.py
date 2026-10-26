@@ -164,12 +164,6 @@ def use_fake_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, files: dict[st
     return graph_file
 
 
-def test_committed_graph_is_up_to_date() -> None:
-    modules, edges = dep_graph.collect(dep_graph.APP_DIR)
-    text = dep_graph.report(modules, edges, dep_graph.check(modules, edges))
-    assert dep_graph.graph_is_up_to_date(dep_graph.GRAPH_FILE, text)
-
-
 def test_check_passes_when_the_graph_was_just_drawn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
