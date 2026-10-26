@@ -1,13 +1,16 @@
 """Shared fixtures for backend tests."""
 
+import io
 import random
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from itertools import count
+from pathlib import Path
 from typing import Any, NamedTuple, TypeVar
 from urllib.parse import parse_qs, unquote, urlsplit
 from uuid import uuid4
 
+import av
 import pytest
 from fastapi.testclient import TestClient
 from jwt import encode
@@ -15,6 +18,7 @@ from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.content.clue_audio import UPLOAD_PROVIDER
 from app.db import get_db
 from app.main import create_app
 from app.models.accounts import ClassStaff, User
@@ -30,7 +34,7 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.game import GameSession, SessionLocation
-from app.services.storage import MEDIA_URL_PREFIX
+from app.services.storage import MEDIA_URL_PREFIX, get_storage_service
 
 
 @pytest.fixture(scope="session")
@@ -97,6 +101,27 @@ def auth_headers() -> Callable[[User], dict[str, str]]:
         return {"Authorization": f"Bearer {token}"}
 
     return headers
+
+
+@pytest.fixture
+def leave_as() -> Callable[
+    [TestClient, User, str, Callable[[User], dict[str, str]]],
+    Any,
+]:
+    """Shared helper for authenticated leave-class requests."""
+
+    def send(
+        client: TestClient,
+        user: User,
+        class_id: str,
+        auth_headers: Callable[[User], dict[str, str]],
+    ) -> Any:
+        return client.post(
+            f"/api/v1/me/classes/{class_id}/leave",
+            headers=auth_headers(user),
+        )
+
+    return send
 
 
 @pytest.fixture
@@ -349,7 +374,7 @@ def make_audio_asset(db: Session, make_clue: Callable[..., Clue]) -> Callable[..
     def make(clue: Clue | None = None, **fields: Any) -> AudioAsset:
         values: dict[str, Any] = {
             "file_path": f"{uuid4()}.mp3",
-            "provider": "teacher",
+            "provider": UPLOAD_PROVIDER,
             "duration_seconds": 5.0,
             "file_size_kb": 80,
         }
@@ -371,3 +396,62 @@ def make_feedback_audio(db: Session) -> Callable[..., FeedbackAudio]:
         return _add(db, FeedbackAudio(**(values | fields)))
 
     return make
+
+
+# Uploaded recordings for the audio checks: (FFmpeg container format, encoder) per kind of file.
+# "adts" is raw AAC, "mp2" MPEG layer II and the "*-in-mp4" kinds FLAC or Opus in MP4: none of them
+# is MP3 or M4A. "alac" is an M4A holding lossless audio, which is accepted and re-encoded.
+_AUDIO_FILE_FORMATS = {
+    "mp3": ("mp3", "libmp3lame"),
+    "m4a": ("ipod", "aac"),
+    "adts": ("adts", "aac"),
+    "alac": ("ipod", "alac"),
+    "flac-in-mp4": ("mp4", "flac"),
+    "opus-in-mp4": ("mp4", "libopus"),
+    "mp2": ("mp2", "mp2"),
+}
+_SAMPLE_RATE = 48000  # one rate every encoder above accepts (Opus needs 48 kHz)
+
+
+@pytest.fixture
+def make_audio() -> Callable[..., bytes]:
+    """A silent mono recording `seconds` long, made with PyAV: make(seconds, kind, title=...),
+    `kind` one of _AUDIO_FILE_FORMATS (default "mp3"). A title is written as a tag on the file and
+    on the stream, as in a real upload."""
+
+    def make(seconds: float, kind: str = "mp3", title: str | None = None) -> bytes:
+        container_format, encoder = _AUDIO_FILE_FORMATS[kind]
+        buffer = io.BytesIO()
+        with av.open(buffer, "w", format=container_format) as container:
+            stream = container.add_stream(encoder, rate=_SAMPLE_RATE, layout="mono")
+            if title:
+                container.metadata["title"] = title
+                stream.metadata["title"] = title
+            frame_size = stream.codec_context.frame_size or 1024
+            total = round(seconds * _SAMPLE_RATE)
+            for start in range(0, total, frame_size):
+                frame = av.AudioFrame(
+                    format=stream.codec_context.format.name,
+                    layout="mono",
+                    samples=min(frame_size, total - start),
+                )
+                for plane in frame.planes:
+                    plane.update(bytes(plane.buffer_size))  # silence
+                frame.sample_rate, frame.pts = _SAMPLE_RATE, start
+                container.mux(stream.encode(frame))
+            container.mux(stream.encode(None))
+        return buffer.getvalue()
+
+    return make
+
+
+@pytest.fixture
+def stored_media_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """An empty folder that StorageService saves into for this test (MEDIA_DIR)."""
+    monkeypatch.setenv("MEDIA_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    get_storage_service.cache_clear()
+    yield tmp_path
+    # the next caller builds both again from the restored environment
+    get_settings.cache_clear()
+    get_storage_service.cache_clear()
