@@ -2204,19 +2204,19 @@
       },
       "TokenResponse": {
         "properties": {
-          "token": {
+          "access_token": {
             "type": "string",
-            "title": "Token"
+            "title": "Access Token"
           },
           "token_type": {
             "type": "string",
-            "title": "Token Type"
+            "title": "Token Type",
+            "default": "bearer"
           }
         },
         "type": "object",
         "required": [
-          "token",
-          "token_type"
+          "access_token"
         ],
         "title": "TokenResponse"
       },
