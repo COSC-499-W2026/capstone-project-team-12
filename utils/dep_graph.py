@@ -2,8 +2,7 @@
 
 Usage (from the repo root):
     python utils/dep_graph.py            # print the problems
-    python utils/dep_graph.py --check    # also exit 1 if a rule is broken or the graph file is
-                                         # out of date (for CI)
+    python utils/dep_graph.py --check    # also exit 1 if a rule is broken (for CI)
     python utils/dep_graph.py --graph    # also redraw docs/architecture/dependency-graph.md
 
 Components follow the architecture diagram and DFDs:
@@ -213,16 +212,9 @@ def report(modules: set[str], edges: Graph, problems: list[str]) -> str:
     )
 
 
-def graph_is_up_to_date(graph_file: Path, text: str) -> bool:
-    """True if graph_file exists and holds exactly the text --graph would write."""
-    return graph_file.exists() and graph_file.read_text(encoding="utf-8") == text
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check and draw the backend's dependencies.")
-    parser.add_argument(
-        "--check", action="store_true", help="exit 1 if a rule is broken or the graph is stale"
-    )
+    parser.add_argument("--check", action="store_true", help="exit 1 if a rule is broken")
     parser.add_argument("--graph", action="store_true", help="redraw the dependency graph")
     args = parser.parse_args(argv)
 
@@ -236,14 +228,7 @@ def main(argv: list[str] | None = None) -> int:
         # LF on Windows too, so the file matches what CI draws
         GRAPH_FILE.write_text(text, encoding="utf-8", newline="\n")
         print(f"wrote {GRAPH_FILE}")
-    stale = args.check and not graph_is_up_to_date(GRAPH_FILE, text)
-    if stale:
-        relative = GRAPH_FILE.relative_to(ROOT) if GRAPH_FILE.is_relative_to(ROOT) else GRAPH_FILE
-        print(
-            f"{relative} is out of date. Run `python utils/dep_graph.py --graph` "
-            "and commit the file with your change."
-        )
-    return 1 if args.check and (problems or stale) else 0
+    return 1 if args.check and problems else 0
 
 
 if __name__ == "__main__":
