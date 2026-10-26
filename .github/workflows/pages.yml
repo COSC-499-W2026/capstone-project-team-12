@@ -7,8 +7,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -48,9 +46,6 @@ jobs:
           cp .github/pages/*.html site/
           cp docs/api/openapi.json docs/architecture/dependency-graph.md site/
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v6
-
       - name: Upload the site
         uses: actions/upload-pages-artifact@v5
         with:
@@ -59,6 +54,9 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
