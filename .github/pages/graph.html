@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Backend dependency graph</title>
+</head>
+<body>
+  <p><a href="./">Back</a></p>
+  <h1>Backend dependency graph</h1>
+  <pre class="mermaid" id="chart">Loading...</pre>
+  <h2>Rule check</h2>
+  <pre id="rules"></pre>
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@12.2.0/dist/mermaid.esm.min.mjs";
+    // turn off auto-render before the first await
+    mermaid.initialize({ startOnLoad: false, maxTextSize: 200000 });
+    try {
+      const md = await (await fetch("dependency-graph.md")).text();
+      // the page holds one mermaid block, then the "Rule check" section
+      document.getElementById("chart").textContent = md.match(/```mermaid\n([\s\S]*?)```/)[1];
+      document.getElementById("rules").textContent = md.split("## Rule check")[1].trim();
+      await mermaid.run({ nodes: [document.getElementById("chart")] });
+    } catch (error) {
+      // show the reason instead of staying on "Loading..."
+      document.getElementById("chart").textContent = "Could not draw the graph: " + error.message;
+    }
+  </script>
+</body>
+</html>

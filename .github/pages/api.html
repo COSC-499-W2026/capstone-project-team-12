@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hunt API reference</title>
+</head>
+<body>
+  <p id="fallback">
+    Loading the API reference... If nothing appears, open the raw
+    <a href="openapi.json">openapi.json</a> or go <a href="./">back</a>.
+    <noscript>This page needs JavaScript.</noscript>
+  </p>
+  <div id="redoc"></div>
+  <script src="https://cdn.jsdelivr.net/npm/redoc@2.5.4/bundles/redoc.standalone.js"></script>
+  <script>
+    if (window.Redoc) {
+      Redoc.init("openapi.json", {}, document.getElementById("redoc"), function (error) {
+        if (!error) document.getElementById("fallback").hidden = true;
+      });
+    }
+  </script>
+</body>
+</html>
