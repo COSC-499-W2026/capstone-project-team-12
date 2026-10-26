@@ -9,7 +9,7 @@ this function, in the same transaction (spec, Architecture and Session Lifecycle
 
 get_open_session_id: switching the current class or the Practice language is refused while the
 student has an open game (spec, Starting a Session), so accounts asks game instead of reading
-game_sessions.
+game_sessions. refuse_if_game_open raises the same 409 as starting a game.
 """
 
 from datetime import UTC, datetime
@@ -18,11 +18,16 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.game.sessions import abandon_sessions, idle_condition, session_idle_limit
+from app.game.sessions import (
+    abandon_sessions,
+    game_already_open,
+    idle_condition,
+    session_idle_limit,
+)
 from app.models.enums import SessionEndReason
 from app.models.game import OPEN_SESSION_STATES, GameSession
 
-__all__ = ["end_open_sessions", "get_open_session_id"]
+__all__ = ["end_open_sessions", "get_open_session_id", "refuse_if_game_open"]
 
 
 def end_open_sessions(class_id: UUID, db: Session, student_id: UUID | None = None) -> int:
@@ -52,3 +57,11 @@ def get_open_session_id(student_id: UUID, db: Session) -> UUID | None:
             ~idle_condition(datetime.now(UTC), session_idle_limit()),
         )
     )
+
+
+def refuse_if_game_open(student_id: UUID, db: Session) -> None:
+    """Raise 409 SESSION_ALREADY_OPEN (the open game's id in details) if the student has an open
+    game, as get_open_session_id counts it. Read only."""
+    game_id = get_open_session_id(student_id, db)
+    if game_id is not None:
+        raise game_already_open(game_id)
