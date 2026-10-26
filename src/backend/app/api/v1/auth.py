@@ -1,7 +1,7 @@
 from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends
+from fastapi import APIRouter, Cookie, Depends, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
@@ -35,9 +35,10 @@ def register(request: RegisterRequest, db: Annotated[Session, Depends(get_db)]) 
     tags=["login"],
     status_code=200,
     operation_id="loginUser",
-    responses=error_responses(HTTPStatus.UNAUTHORIZED),
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
 )
 def login(
+    response: Response,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: Annotated[Session, Depends(get_db)],
 ) -> TokenResponse:
@@ -45,7 +46,9 @@ def login(
 
     Returns an access token (expiry 60 minutes) and a refresh token (expiry 14 days).
     """
-    return login_account(form_data, db)
+    tokens = login_account(form_data, db)
+    response.set_cookie("refresh_token", tokens.refresh_token)
+    return TokenResponse(token=tokens["access_token"], token_type="bearer")
 
 
 @auth_router.post(
@@ -53,13 +56,17 @@ def login(
     tags=["refresh"],
     status_code=200,
     operation_id="refreshTokens",
-    responses=error_responses(HTTPStatus.UNAUTHORIZED),
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
 )
 def refresh(
-    db: Annotated[Session, Depends(get_db)], refresh_token: Annotated[str | None, Cookie()] = None
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    refresh_token: Annotated[str | None, Cookie()] = None,
 ) -> TokenResponse:
     """Rotates refresh token of user and returns a new access token and refresh token"""
     if refresh_token is None:
         raise AppError(ErrorCode.NOT_AUTHENTICATED, "Invalid token: please sign in again")
     else:
-        return rotate_tokens(refresh_token, db)
+        tokens = rotate_tokens(refresh_token, db)
+        response.set_cookie("refresh_token", tokens.refresh_token)
+        return TokenResponse(tokens["access_token"])
