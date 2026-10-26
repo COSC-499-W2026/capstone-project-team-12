@@ -85,7 +85,33 @@ def test_revoke_tokens(client: TestClient, db: Session, student: User):
 
 
 def test_refresh_with_no_refresh_token(client: TestClient):
-    register = {"email": VALID_EMAIL, "username": VALID_USERNAME, "password": VALID_PASSWORD}
-    client.post("api/v1/auth/register", json=register)
     response = client.post("/api/v1/auth/refresh")
+    assert response.status_code == 401
     assert response.json()["error"]["code"] == ErrorCode.NOT_AUTHENTICATED
+
+
+def test_expired_refresh_token_is_rejected(client: TestClient, db: Session, student: User):
+    refresh_token = login(client).json()["refresh_token"]
+    db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == student.id)
+        .values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
+    )
+    assert refresh(client, refresh_token).status_code == 401
+
+
+def test_disabled_account_cannot_login(client: TestClient, db: Session, student: User):
+    student.is_active = False
+    db.flush()
+    response = login(client)
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == ErrorCode.ACCOUNT_DISABLED
+
+
+def test_disabled_account_cannot_refresh(client: TestClient, db: Session, student: User):
+    refresh_token = login(client).json()["refresh_token"]
+    student.is_active = False
+    db.flush()
+    response = refresh(client, refresh_token)
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == ErrorCode.ACCOUNT_DISABLED
