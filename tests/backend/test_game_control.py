@@ -65,6 +65,7 @@ def test_pause_and_resume_keep_the_stage_and_attempts(
         paused_at,
     )
     assert paused.status.state == SessionState.PAUSED
+    assert paused.status.paused_at == paused_at
     assert paused.expires_at == paused_at + session_idle_limit()
 
     resumed_at = paused_at + timedelta(hours=2)
@@ -77,11 +78,29 @@ def test_pause_and_resume_keep_the_stage_and_attempts(
         resumed_at,
     )
     assert game.resume_count == 1
+    assert status.paused_at is None
     assert status.current_position == 2
     assert [(loc.status, loc.attempts_used) for loc in status.locations] == [
         (LocationStatus.COMPLETED, 0),
         (LocationStatus.VERIFYING, 3),
     ]
+
+
+def test_each_resume_adds_one_to_resume_count(
+    db: Session,
+    make_game_session: Callable[..., GameSession],
+    freeze_clock: Callable[..., None],
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    game = make_game_session(last_activity_at=now)
+    for expected in (1, 2, 3):
+        paused_at = now + timedelta(hours=expected)
+        freeze_clock(paused_at, *CLOCK)
+        paused = pause_game(game.student_id, game.id, db)
+        assert paused.status.paused_at == paused_at
+        freeze_clock(paused_at + timedelta(minutes=1), *CLOCK)
+        status = resume_game(game.student_id, game.id, db)
+        assert (game.resume_count, status.paused_at) == (expected, None)
 
 
 def test_pausing_again_changes_nothing(
