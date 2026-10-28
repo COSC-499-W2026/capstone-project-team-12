@@ -45,6 +45,29 @@ def test_an_open_game_is_abandoned_and_its_unfinished_locations_skipped(
         )
 
 
+def test_last_activity_at_changes_only_for_an_end_the_student_asked_for(
+    db: Session, make_game_session: Callable[..., GameSession]
+) -> None:
+    # quit and reset pass the time; a class closing or an expiry keeps the old value
+    played_at = datetime.now(UTC) - timedelta(hours=2)
+    quit_at = played_at + timedelta(hours=1)
+    by_student = make_game_session(last_activity_at=played_at)
+    by_system = make_game_session(last_activity_at=played_at)
+
+    abandon_sessions(
+        SessionEndReason.QUIT, [GameSession.id == by_student.id], db, last_activity_at=quit_at
+    )
+    abandon_sessions(SessionEndReason.CLASS_CLOSED, [GameSession.id == by_system.id], db)
+
+    db.refresh(by_student)
+    db.refresh(by_system)
+    assert (by_student.end_reason, by_student.last_activity_at) == (SessionEndReason.QUIT, quit_at)
+    assert (by_system.end_reason, by_system.last_activity_at) == (
+        SessionEndReason.CLASS_CLOSED,
+        played_at,
+    )
+
+
 def test_a_game_that_already_ended_is_left_alone(
     db: Session,
     make_game_session: Callable[..., GameSession],
