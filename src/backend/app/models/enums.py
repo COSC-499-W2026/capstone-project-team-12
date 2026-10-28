@@ -92,6 +92,8 @@ class LocationStatus(StrEnum):
 class SkipReason(StrEnum):
     SESSION_ENDED = "session_ended"  # quit, reset, expiry or class closed before it was played
     DEACTIVATED = "deactivated"  # a content manager deactivated the location
+    # replaced by a shuffle: the row stays with its photo attempts but is no longer a result
+    SHUFFLED = "shuffled"
 
 
 class ArrivalOverride(StrEnum):
