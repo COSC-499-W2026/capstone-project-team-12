@@ -9,14 +9,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.errors import AppError, ErrorCode
-from app.game.sessions import abandon_sessions, session_idle_limit
+from app.game.draw import draw_locations
+from app.game.sessions import abandon_sessions, session_idle_limit, start_of_today
+from app.game.start import StartedGame, save_new_game
 from app.game.status import GameStatus, expire_if_idle, status_of
-from app.models.enums import SessionEndReason, SessionState
+from app.models.enums import Difficulty, Language, SessionEndReason, SessionState
 from app.models.game import OPEN_SESSION_STATES, GameSession
+from app.services.audio import get_audio_service
+from app.services.locks import lock_user
 
 
 @dataclass(frozen=True)
@@ -76,6 +81,56 @@ def quit_game(student_id: UUID, game_id: UUID, db: Session) -> GameStatus:
     )
     # the UPDATE also changed the loaded game, which is locked, so it is current
     return status_of(game, db)
+
+
+def reset_game(student_id: UUID, game_id: UUID, db: Session) -> StartedGame:
+    """End the student's game and start a new one with the same class (or Practice), language
+    and difficulty. A paused game can be reset too.
+
+    At most max_resets_per_day (3) per local day: 409 RESET_LIMIT_REACHED. The new game is drawn
+    with no carry-over, so a reset rerolls. The draw and the first clue's link come before
+    anything is written, so NOT_ENOUGH_CONTENT or a missing recording leave the current game as
+    it is. The old game is abandoned with end_reason reset and last_activity_at now (the daily
+    limit counts it by that time); points already earned stay. The same lookup errors as
+    pause_game. Flushed; doesn't commit.
+    """
+    # the student's lock first, then the game, the same order as starting a game, so a reset
+    # and a start or a class switch wait for each other instead of deadlocking. It also stops
+    # two resets from both passing the daily limit.
+    lock_user(student_id, db)
+    game = _lock_open_game(student_id, game_id, db)
+    limit = get_settings().max_resets_per_day
+    if _resets_today(student_id, db) >= limit:
+        raise AppError(ErrorCode.RESET_LIMIT_REACHED, f"You can reset {limit} times a day")
+
+    language, difficulty = Language(game.target_language), Difficulty(game.difficulty)
+    snapshots = draw_locations(
+        student_id, game.class_id, language, difficulty, db, carry_over=False
+    )
+    clue_url = get_audio_service().clue_audio_url(snapshots[0].audio_asset_id, db)
+
+    abandon_sessions(
+        SessionEndReason.RESET,
+        [GameSession.id == game.id],
+        db,
+        last_activity_at=datetime.now(UTC),
+    )
+    return save_new_game(student_id, game.class_id, language, difficulty, snapshots, clue_url, db)
+
+
+def _resets_today(student_id: UUID, db: Session) -> int:
+    # in any mode: the limit is per student. A reset is a game action, so last_activity_at is
+    # when it happened.
+    count = db.scalar(
+        select(func.count())
+        .select_from(GameSession)
+        .where(
+            GameSession.student_id == student_id,
+            GameSession.end_reason == SessionEndReason.RESET,
+            GameSession.last_activity_at >= start_of_today(),
+        )
+    )
+    return count or 0
 
 
 def _lock_open_game(student_id: UUID, game_id: UUID, db: Session) -> GameSession:
