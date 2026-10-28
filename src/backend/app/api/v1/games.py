@@ -205,6 +205,7 @@ def _play(action: Callable[[], T], user: User, db: Session) -> T:
     try:
         result = action()
     except AppError:
+        # actions must raise AppError only before a write, or after the expiry: this commits first
         db.commit()
         raise
     db.commit()
