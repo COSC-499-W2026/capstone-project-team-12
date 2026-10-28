@@ -21,6 +21,7 @@ from app.models.enums import LocationStatus, SessionEndReason, SessionState, Use
 from app.models.game import GameSession, SessionLocation
 
 URL = "/api/v1/games"
+# resume joins this list next, so the cases below are not only for pause
 ACTIONS = ["pause"]
 
 GAME_FIELDS = {
@@ -83,17 +84,27 @@ def test_pause(
 
 
 def test_pausing_again_is_200(
+    db: Session,
     post: Callable[..., Response],
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
 ) -> None:
     student = make_user()
-    game = make_game_session(student, state=SessionState.PAUSED, paused_at=datetime.now(UTC))
+    paused_at = (datetime.now(UTC) - timedelta(hours=3)).replace(microsecond=0)
+    game = make_game_session(
+        student, state=SessionState.PAUSED, paused_at=paused_at, last_activity_at=paused_at
+    )
 
     response = post(student, game.id, "pause")
 
     assert response.status_code == 200, response.text
-    assert response.json()["state"] == SessionState.PAUSED.value
+    body = response.json()
+    assert body["state"] == SessionState.PAUSED.value
+    # the first pause time stays, so the expiry does not start again
+    assert datetime.fromisoformat(body["paused_at"]) == paused_at
+    assert datetime.fromisoformat(body["expires_at"]) == paused_at + session_idle_limit()
+    db.refresh(game)
+    assert (game.paused_at, game.last_activity_at) == (paused_at, paused_at)
 
 
 @pytest.mark.parametrize("action", ACTIONS)
