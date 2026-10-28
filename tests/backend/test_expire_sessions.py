@@ -238,3 +238,16 @@ def test_every_job_in_the_crontab_is_a_command() -> None:
 
     assert "expire-sessions" in jobs
     assert set(jobs) <= set(app.cli.COMMANDS)
+
+
+@pytest.mark.parametrize("batch_size", [0, -1])
+def test_a_non_positive_batch_is_refused(
+    db: Session, make_game_session: Callable[..., GameSession], batch_size: int
+) -> None:
+    game = make_game_session(last_activity_at=_idle_since())
+
+    with pytest.raises(ValueError, match="positive"):
+        expire_idle_sessions(db, batch_size=batch_size)
+
+    db.refresh(game)
+    assert game.state == SessionState.ACTIVE

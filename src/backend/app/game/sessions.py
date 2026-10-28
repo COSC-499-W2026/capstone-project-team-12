@@ -86,10 +86,12 @@ def expire_idle_sessions(db: Session, *, batch_size: int) -> int:
     """Expire up to `batch_size` open games that have been idle for the limit, and return how many
     ended (the expire-sessions job runs it until a batch comes back short).
 
-    The games are locked in id order with SKIP LOCKED, so a game another request is changing (a
-    pause, a start that expires it) is left for the next run instead of waiting on it, and two
-    runs can't deadlock. Doesn't commit.
+    `batch_size` must be positive. The games are locked in id order with SKIP LOCKED, so a game
+    another request is changing (a pause, a start that expires it) is left for the next run
+    instead of waiting on it, and two runs can't deadlock. Doesn't commit.
     """
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
     now, limit = datetime.now(UTC), session_idle_limit()
     batch = list(
         db.scalars(
