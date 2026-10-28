@@ -58,6 +58,37 @@ def test_open_game_is_found_with_its_locations_in_order(
     assert (status.locations[0].attempts_used, status.locations[0].points_awarded) == (2, 100)
 
 
+def test_rows_replaced_by_a_shuffle_are_not_shown(
+    db: Session,
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    game = make_game_session(shuffles_used=1)
+    make_session_location(
+        game,
+        1,
+        status=LocationStatus.COMPLETED,
+        points_awarded=100,
+        completed_at=datetime.now(UTC),
+    )
+    # position 2 was being played when the shuffle replaced it, position 3 was still to come
+    make_session_location(
+        game, 2, status=LocationStatus.SKIPPED, skip_reason=SkipReason.SHUFFLED, attempts_used=3
+    )
+    make_session_location(game, 3, status=LocationStatus.SKIPPED, skip_reason=SkipReason.SHUFFLED)
+    make_session_location(game, 2, status=LocationStatus.NAVIGATING)
+    make_session_location(game, 3)
+
+    status = get_game(game.student_id, game.id, db)
+
+    assert [(loc.position, loc.status, loc.attempts_used) for loc in status.locations] == [
+        (1, LocationStatus.COMPLETED, 0),
+        (2, LocationStatus.NAVIGATING, 0),
+        (3, LocationStatus.PENDING, 0),
+    ]
+    assert status.shuffles_used == 1
+
+
 def test_no_open_game_gives_none(
     db: Session, make_user: Callable[..., User], make_game_session: Callable[..., GameSession]
 ) -> None:
