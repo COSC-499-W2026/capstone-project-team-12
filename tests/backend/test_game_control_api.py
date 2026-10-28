@@ -1,8 +1,8 @@
-"""POST /api/v1/games/{id}/pause, /resume (A8) and /quit (A9) over HTTP.
+"""POST /api/v1/games/{id}/pause, /resume (A8), /quit and /reset (A9) over HTTP.
 
-The rules are tested in test_game_control.py and test_quit_game.py. These check the status
-codes, the response body and that the route commits, also when an idle game is expired before
-the 409.
+The rules are tested in test_game_control.py, test_quit_game.py and test_reset_game.py. These
+check the status codes, the response body and that the route commits, also when an idle game is
+expired before the 409.
 """
 
 from collections.abc import Callable
@@ -22,7 +22,7 @@ from app.models.enums import LocationStatus, SessionEndReason, SessionState, Use
 from app.models.game import GameSession, SessionLocation
 
 URL = "/api/v1/games"
-ACTIONS = ["pause", "resume", "quit"]
+ACTIONS = ["pause", "resume", "quit", "reset"]
 
 GAME_FIELDS = {
     "session_id",
@@ -202,6 +202,51 @@ def test_quit(
     db.refresh(game)
     assert (game.state, game.end_reason) == (SessionState.ABANDONED, SessionEndReason.QUIT)
     assert before <= game.last_activity_at <= datetime.now(UTC)
+
+
+def test_reset(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    transaction_calls: list[str],
+) -> None:
+    student = make_user()
+    paused_at = datetime.now(UTC)
+    old = make_game_session(student, state=SessionState.PAUSED, paused_at=paused_at)
+    transaction_calls.clear()
+
+    response = post(student, old.id, "reset")
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    # the same body as POST /games
+    assert set(body) == {"session_id", "state", "position", "clue_audio_url"}
+    assert (body["state"], body["position"]) == (SessionState.ACTIVE.value, 1)
+    assert body["session_id"] != str(old.id)
+    # the new game's savepoint fires a commit event too; the other is the route's own commit
+    assert transaction_calls.count("commit") == 2
+    db.refresh(old)
+    assert (old.state, old.end_reason) == (SessionState.ABANDONED, SessionEndReason.RESET)
+
+
+def test_the_fourth_reset_today_is_409(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    assert_error: Callable[..., None],
+) -> None:
+    student = make_user()
+    game = make_game_session(student)
+    for _ in range(3):
+        response = post(student, game.id, "reset")
+        assert response.status_code == 201, response.text
+        game = db.get_one(GameSession, response.json()["session_id"])
+
+    assert_error(post(student, game.id, "reset"), 409, ErrorCode.RESET_LIMIT_REACHED)
+    db.refresh(game)
+    assert (game.state, game.end_reason) == (SessionState.ACTIVE, None)
 
 
 @pytest.mark.parametrize("action", ACTIONS)
