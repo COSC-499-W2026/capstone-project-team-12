@@ -61,6 +61,12 @@ def test_register_lists_its_error_statuses() -> None:
     assert {"201", "409", "422"} <= set(register["responses"])
 
 
+def test_pause_and_resume_declare_a_conflict() -> None:
+    by_id = {op["operationId"]: op for op in operations(export_openapi.build_spec())}
+    for operation_id in ("pauseGame", "resumeGame"):
+        assert "409" in by_id[operation_id]["responses"]
+
+
 def test_error_response_model_matches_app_error_body() -> None:
     body = AppError(ErrorCode.EMAIL_TAKEN, "Email in use", [{"field": "email"}]).body()
     assert ErrorResponse.model_validate(body).model_dump(mode="json") == json.loads(
