@@ -187,11 +187,11 @@ def pause(
 ) -> PausedGameResponse:
     """Pause the student's game. The current location keeps its stage and attempts.
 
-    Pausing counts as a game action, so `expires_at` is now plus the expiry limit (24 hours by
-    default). Pausing a paused game changes nothing and returns it. 409 SESSION_NOT_ACTIVE for a
-    completed or abandoned game, or one that has been idle for the expiry limit, which is expired.
-    404 NOT_FOUND for another student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED
-    for a disabled account.
+    A new pause counts as a game action, so `expires_at` is now plus the expiry limit (24 hours
+    by default). A repeat pause changes nothing and returns the original `expires_at`. 409
+    SESSION_NOT_ACTIVE for a completed or abandoned game, or one that has been idle for the
+    expiry limit, which is expired. 404 NOT_FOUND for another student's game. 403 FORBIDDEN_ROLE
+    for an admin, ACCOUNT_DISABLED for a disabled account.
     """
     paused = _play(lambda: pause_game(user.id, game_id, db), user, db)
     return PausedGameResponse(**asdict(paused.status), expires_at=paused.expires_at)
