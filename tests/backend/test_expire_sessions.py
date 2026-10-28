@@ -251,3 +251,13 @@ def test_a_non_positive_batch_is_refused(
 
     db.refresh(game)
     assert game.state == SessionState.ACTIVE
+
+
+def test_expire_sessions_runs_every_five_minutes() -> None:
+    schedule = {
+        line.split("app.cli", 1)[1].strip(): " ".join(line.split()[:5])
+        for line in CRONTAB.read_text().splitlines()
+        if line.strip() and not line.startswith("#") and "app.cli" in line
+    }
+
+    assert schedule["expire-sessions"] == "*/5 * * * *"
