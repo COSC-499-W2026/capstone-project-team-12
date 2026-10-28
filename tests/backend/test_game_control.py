@@ -1,18 +1,27 @@
-"""pause_game and resume_game (A8): the rules. The HTTP side is in test_game_control_api.py."""
+"""pause_game and resume_game (A8): the service rules."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import Engine, delete, select, text, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.errors import AppError, ErrorCode
 from app.game.control import pause_game, resume_game
 from app.game.sessions import session_idle_limit
 from app.models.accounts import User
-from app.models.enums import LocationStatus, SessionEndReason, SessionState, SkipReason
+from app.models.enums import (
+    Difficulty,
+    Language,
+    LocationStatus,
+    SessionEndReason,
+    SessionState,
+    SkipReason,
+    UserRole,
+)
 from app.models.game import GameSession, SessionLocation
 
 # the modules whose clock pause and resume read
@@ -26,6 +35,11 @@ ENDED = [
 
 def _paused(make_game_session: Callable[..., GameSession], **fields: object) -> GameSession:
     return make_game_session(state=SessionState.PAUSED, paused_at=datetime.now(UTC), **fields)
+
+
+def _lock_timeout(error: OperationalError) -> bool:
+    # 55P03 lock_not_available: the other transaction still holds the row
+    return getattr(error.orig, "sqlstate", None) == "55P03"
 
 
 def test_pause_and_resume_keep_the_stage_and_attempts(
@@ -206,6 +220,81 @@ def test_pausing_starts_the_idle_time_again(
     freeze_clock(now + timedelta(minutes=1), *CLOCK)
     resume_game(game.student_id, game.id, db)
     assert (game.state, game.end_reason) == (SessionState.ACTIVE, None)
+
+
+def test_pause_locks_the_callers_row_until_the_transaction_ends(test_engine: Engine) -> None:
+    """pause_game keeps FOR UPDATE until the caller ends the transaction.
+
+    The game is already paused, so this call writes nothing and the lock is only the SELECT
+    FOR UPDATE. Another student's lookup locks nothing, so a second connection can still take
+    the row.
+    """
+    now = datetime.now(UTC)
+    student_id = stranger_id = game_id = None
+    holder: Session | None = None
+    lookup: Session | None = None
+    try:
+        with Session(test_engine) as setup:
+            student = User(
+                email=f"{uuid4().hex[:12]}@example.com",
+                username=f"user_{uuid4().hex[:8]}",
+                role=UserRole.STUDENT,
+            )
+            stranger = User(
+                email=f"{uuid4().hex[:12]}@example.com",
+                username=f"user_{uuid4().hex[:8]}",
+                role=UserRole.STUDENT,
+            )
+            setup.add_all([student, stranger])
+            setup.flush()
+            game = GameSession(
+                student_id=student.id,
+                target_language=Language.JA,
+                difficulty=Difficulty.BASIC,
+                state=SessionState.PAUSED,
+                paused_at=now,
+                last_activity_at=now,
+            )
+            setup.add(game)
+            setup.flush()
+            student_id, stranger_id, game_id = student.id, stranger.id, game.id
+            setup.commit()
+        holder = Session(test_engine)
+        pause_game(student_id, game_id, holder)
+        with Session(test_engine) as waiting:
+            # statement_timeout is a backstop: lock_timeout 0 would wait forever
+            waiting.execute(text("SET LOCAL lock_timeout = '500ms'"))
+            waiting.execute(text("SET LOCAL statement_timeout = '2s'"))
+            with pytest.raises(OperationalError) as blocked:
+                waiting.scalar(
+                    select(GameSession).where(GameSession.id == game_id).with_for_update()
+                )
+            assert _lock_timeout(blocked.value)
+        holder.rollback()
+        holder.close()
+        holder = None
+
+        lookup = Session(test_engine)
+        with pytest.raises(AppError) as missing:
+            pause_game(stranger_id, game_id, lookup)
+        assert missing.value.code == ErrorCode.NOT_FOUND
+        with Session(test_engine) as other:
+            other.execute(text("SET LOCAL lock_timeout = '500ms'"))
+            other.execute(text("SET LOCAL statement_timeout = '2s'"))
+            other.scalar(select(GameSession).where(GameSession.id == game_id).with_for_update())
+    finally:
+        if holder is not None:
+            holder.rollback()
+            holder.close()
+        if lookup is not None:
+            lookup.rollback()
+            lookup.close()
+        if game_id is not None:
+            with Session(test_engine) as cleanup:
+                cleanup.execute(text("SET LOCAL lock_timeout = '10s'"))
+                cleanup.execute(delete(GameSession).where(GameSession.id == game_id))
+                cleanup.execute(delete(User).where(User.id.in_((student_id, stranger_id))))
+                cleanup.commit()
 
 
 def test_a_game_ended_elsewhere_is_not_resumed(
