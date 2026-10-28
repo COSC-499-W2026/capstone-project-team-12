@@ -1,6 +1,6 @@
 """Ending games (spec Session Lifecycle): the one place that abandons a game and skips the
-locations it left unfinished. Used by class closing, expiry on start, expiry on read and the
-expire job. `get_open_session_id` uses its idle rule too."""
+locations it left unfinished. Used by quit, class closing, expiry on start, expiry on read and
+the expire job. `get_open_session_id` uses its idle rule too."""
 
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -47,29 +47,38 @@ def idle_condition(now: datetime, idle_limit: timedelta) -> ColumnElement[bool]:
 
 
 def abandon_sessions(
-    reason: SessionEndReason, where: Sequence[ColumnElement[bool]], db: Session
+    reason: SessionEndReason,
+    where: Sequence[ColumnElement[bool]],
+    db: Session,
+    *,
+    last_activity_at: datetime | None = None,
 ) -> list[UUID]:
     """Abandon the open games that match `where` with `reason` and skip their unfinished
     locations (session_ended). Returns the ids of the games that ended.
 
     Only open (active or paused) games change, in one UPDATE, so a game that ended in the
     meantime keeps its state and end reason. `where` must not be empty, so a missing filter
-    can't end every game. Points already earned stay, and so does last_activity_at, since
-    callers only pass system reasons (CLASS_CLOSED, EXPIRED), never something the student did.
-    Doesn't commit.
+    can't end every game. Points already earned stay.
+
+    `last_activity_at` is for an end the student asked for (quit, reset): it is a game action, so
+    it becomes the last activity. The system reasons (CLASS_CLOSED, EXPIRED) leave it out and keep
+    the old value, since the student did nothing. Doesn't commit.
     """
     if not where:
         raise ValueError("abandon_sessions needs at least one condition")
+    values: dict[str, object] = {
+        "state": SessionState.ABANDONED,
+        "end_reason": reason,
+        # set only while paused, so it has to be cleared
+        "paused_at": None,
+    }
+    if last_activity_at is not None:
+        values["last_activity_at"] = last_activity_at
     ended = list(
         db.scalars(
             update(GameSession)
             .where(GameSession.state.in_(OPEN_SESSION_STATES), *where)
-            .values(
-                state=SessionState.ABANDONED,
-                end_reason=reason,
-                # set only while paused, so it has to be cleared
-                paused_at=None,
-            )
+            .values(values)
             .returning(GameSession.id)
         )
     )
