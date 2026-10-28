@@ -8,9 +8,7 @@ locations are eligible; this module only picks among them.
 """
 
 import random
-from datetime import datetime
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.content import interface as content
 from app.errors import AppError, ErrorCode
+from app.game.sessions import start_of_today
 from app.models.enums import Difficulty, Language, LocationStatus, SessionEndReason, SkipReason
 from app.models.game import OPEN_SESSION_STATES, GameSession, SessionLocation
 
@@ -79,9 +78,6 @@ def _carried_over(
     db: Session,
 ) -> list[UUID]:
     """Unplayed locations of the last game in this mode, if it was quit today, by position."""
-    settings = get_settings()
-    zone = ZoneInfo(settings.app_timezone)
-    today_start = datetime.now(zone).replace(hour=0, minute=0, second=0, microsecond=0)
     # Quit is a game action, so last_activity_at is when the game was quit.
     last = db.scalar(
         select(GameSession)
@@ -97,7 +93,7 @@ def _carried_over(
     )
     if last is None or last.end_reason != SessionEndReason.QUIT:
         return []
-    if last.last_activity_at < today_start:
+    if last.last_activity_at < start_of_today():
         return []
     return list(
         db.scalars(
