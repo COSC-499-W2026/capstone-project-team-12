@@ -30,7 +30,8 @@ def pause_game(student_id: UUID, game_id: UUID, db: Session) -> PausedGame:
 
     Pausing a paused game changes nothing. Raises 404 NOT_FOUND for another student's game, and
     409 SESSION_NOT_ACTIVE for a finished game or one that has been idle for the limit, which is
-    expired first. The changes are flushed; doesn't commit.
+    expired first. The changes are flushed; doesn't commit. The caller commits before re-raising
+    that 409, or closing the session rolls the expiry back.
     """
     game = _lock_open_game(student_id, game_id, db)
     if game.state == SessionState.ACTIVE:
@@ -44,7 +45,8 @@ def resume_game(student_id: UUID, game_id: UUID, db: Session) -> GameStatus:
     """Resume the student's paused game where it was left.
 
     Resuming an active game changes nothing. The same errors as pause_game. The changes are
-    flushed; doesn't commit.
+    flushed; doesn't commit. On the idle 409 the expiry is already in this session, so the caller
+    commits before re-raising it, or closing the session rolls the expiry back.
     """
     game = _lock_open_game(student_id, game_id, db)
     if game.state == SessionState.PAUSED:

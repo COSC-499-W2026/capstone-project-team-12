@@ -169,6 +169,7 @@ def test_a_game_idle_for_the_limit_is_expired_instead(
     action: Callable[..., object],
     state: SessionState,
     freeze_clock: Callable[..., None],
+    transaction_calls: list[str],
 ) -> None:
     now, limit = datetime.now(UTC), session_idle_limit()
     freeze_clock(now, *CLOCK)
@@ -183,10 +184,13 @@ def test_a_game_idle_for_the_limit_is_expired_instead(
         state=state, paused_at=paused_at, last_activity_at=now - limit + timedelta(minutes=1)
     )
 
+    transaction_calls.clear()
     with pytest.raises(AppError) as error:
         action(at_the_limit.student_id, at_the_limit.id, db)
 
     assert error.value.code == ErrorCode.SESSION_NOT_ACTIVE
+    # expired in this session, still uncommitted, so the caller can commit before the 409
+    assert "commit" not in transaction_calls
     assert (at_the_limit.state, at_the_limit.end_reason, at_the_limit.paused_at) == (
         SessionState.ABANDONED,
         SessionEndReason.EXPIRED,
