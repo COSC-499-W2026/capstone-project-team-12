@@ -15,7 +15,8 @@ from app.errors import AppError, ErrorCode
 from app.models.enums import LocationStatus, SessionEndReason, SessionState, SkipReason
 from app.models.game import OPEN_SESSION_STATES, GameSession, SessionLocation
 
-_UNFINISHED = (LocationStatus.PENDING, LocationStatus.NAVIGATING, LocationStatus.VERIFYING)
+# not played to the end yet: what ending a game skips and what a shuffle replaces
+UNFINISHED = (LocationStatus.PENDING, LocationStatus.NAVIGATING, LocationStatus.VERIFYING)
 
 
 def session_idle_limit() -> timedelta:
@@ -97,7 +98,7 @@ def abandon_sessions(
         # locations after the game: a photo upload (A10) must lock the game first, or they deadlock
         db.execute(
             update(SessionLocation)
-            .where(SessionLocation.session_id.in_(ended), SessionLocation.status.in_(_UNFINISHED))
+            .where(SessionLocation.session_id.in_(ended), SessionLocation.status.in_(UNFINISHED))
             .values(status=LocationStatus.SKIPPED, skip_reason=SkipReason.SESSION_ENDED)
         )
     return ended
