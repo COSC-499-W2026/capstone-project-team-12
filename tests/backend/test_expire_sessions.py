@@ -253,6 +253,21 @@ def test_a_non_positive_batch_is_refused(
     assert game.state == SessionState.ACTIVE
 
 
+def test_a_batch_takes_the_lowest_ids(
+    db: Session, make_game_session: Callable[..., GameSession]
+) -> None:
+    # inserted last, and the least idle, so only id order picks it for a batch of one
+    later = make_game_session(id=UUID(int=3), last_activity_at=_idle_since() - timedelta(hours=2))
+    first = make_game_session(id=UUID(int=1), last_activity_at=_idle_since())
+
+    assert expire_idle_sessions(db, batch_size=1) == 1
+
+    db.refresh(later)
+    db.refresh(first)
+    assert first.end_reason == SessionEndReason.EXPIRED
+    assert later.end_reason is None
+
+
 def test_expire_sessions_runs_every_five_minutes() -> None:
     schedule = {
         line.split("app.cli", 1)[1].strip(): " ".join(line.split()[:5])
