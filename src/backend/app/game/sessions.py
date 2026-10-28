@@ -74,6 +74,7 @@ def abandon_sessions(
         )
     )
     if ended:
+        # locations after the game: a photo upload (A10) must lock the game first, or they deadlock
         db.execute(
             update(SessionLocation)
             .where(SessionLocation.session_id.in_(ended), SessionLocation.status.in_(_UNFINISHED))
