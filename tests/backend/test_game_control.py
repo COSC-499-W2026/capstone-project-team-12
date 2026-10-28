@@ -250,7 +250,8 @@ def test_pause_locks_the_callers_row_until_the_transaction_ends(test_engine: Eng
 
     The game is already paused, so this call writes nothing and the lock is only the SELECT
     FOR UPDATE. Another student's lookup locks nothing, so a second connection can still take
-    the row.
+    the row. The setup commits, unlike the other tests, so the lock is visible to another
+    connection.
     """
     now = datetime.now(UTC)
     student_id = stranger_id = game_id = None

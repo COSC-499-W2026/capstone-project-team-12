@@ -60,7 +60,8 @@ def resume_game(student_id: UUID, game_id: UUID, db: Session) -> GameStatus:
 
 def _lock_open_game(student_id: UUID, game_id: UUID, db: Session) -> GameSession:
     # locked and read again, so a quit, the expire job or a second pause can't change the game
-    # between this check and the update. Another student's game is never locked.
+    # between this check and the update. Another student's game is never locked. An idle game is
+    # expired here and not committed: the caller commits before re-raising the 409.
     game = db.scalar(
         select(GameSession)
         .where(GameSession.id == game_id, GameSession.student_id == student_id)
