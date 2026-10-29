@@ -93,6 +93,20 @@ def transaction_calls(db: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[
 
 
 @pytest.fixture
+def statements(db: Session) -> Iterator[list[str]]:
+    """The SQL sent on the test's connection while the test runs, in order."""
+    sent: list[str] = []
+    connection = db.connection()
+
+    def record(*args: Any) -> None:
+        sent.append(args[2])  # (conn, cursor, statement, ...)
+
+    event.listen(connection, "before_cursor_execute", record)
+    yield sent
+    event.remove(connection, "before_cursor_execute", record)
+
+
+@pytest.fixture
 def auth_headers() -> Callable[[User], dict[str, str]]:
     """The Authorization header for a user, with an access token that is valid for an hour."""
 

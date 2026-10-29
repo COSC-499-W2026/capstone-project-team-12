@@ -20,6 +20,7 @@ from pydantic import (
 )
 
 from app.config import get_settings
+from app.models.enums import Difficulty, FeedbackCode, Language
 
 # building code and number with at most one space or hyphen between them; ASCII only, so a
 # full-width or Arabic-Indic digit is refused rather than stored
@@ -101,3 +102,46 @@ class LocationOut(BaseModel):
     gps_points: list[EntrancePoint]
     gps_radius_meters: int
     is_active: bool
+
+
+class CombinationCoverage(BaseModel):
+    """One language and difficulty of a location in the coverage report."""
+
+    language: Language
+    difficulty: Difficulty
+    has_clue_text: bool  # a transcript, for teachers; games do not need one
+    has_primary_audio: bool  # the recording new games draw
+    playable: bool  # new games can draw this location in this language and difficulty
+
+
+class LocationCoverage(BaseModel):
+    """A location, inactive ones too, with every language and difficulty."""
+
+    id: UUID
+    name: str
+    room_number: str | None
+    is_active: bool
+    combinations: list[CombinationCoverage]  # by language, then difficulty
+
+
+class DifficultyCoverage(BaseModel):
+    """How many locations new games can draw from in one language and difficulty."""
+
+    difficulty: Difficulty
+    playable_locations: int
+
+
+class LanguageCoverage(BaseModel):
+    """What a language still lacks, and how many locations each difficulty can draw from."""
+
+    language: Language
+    # nothing in the language is playable until this is empty
+    missing_feedback_codes: list[FeedbackCode]
+    difficulties: list[DifficultyCoverage]  # 1 to 3
+
+
+class CoverageReport(BaseModel):
+    """Which location, language and difficulty combinations are playable (staff only)."""
+
+    languages: list[LanguageCoverage]
+    locations: list[LocationCoverage]
