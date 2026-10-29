@@ -66,7 +66,7 @@ def create_refresh_token(user_id: UUID, db: Session, family_id: UUID | None = No
         expires_at=expires,
     )
     db.execute(stmt)
-    db.commit()
+    db.flush()
     return token
 
 
@@ -88,7 +88,7 @@ def rotate_tokens(token: str, db: Session) -> dict[str, str]:
         update(RefreshToken).where(RefreshToken.id == valid_token_id).values(rotated_at=now())
     )
 
-    db.commit()
+    db.flush()
 
     new_access_token = create_access_token({"sub": str(user_id)})
     new_refresh_token = create_refresh_token(user_id, db, family_id)
@@ -100,29 +100,29 @@ def validate_refresh_token(token: str, db: Session) -> UUID | None:
     """Returns the id of the token if it is valid, and None otherwise"""
     hash = hashlib.sha256(token.encode()).hexdigest()
     result = db.execute(
-        select(
-            RefreshToken.id,
-            RefreshToken.expires_at,
-            RefreshToken.revoked_at,
-            RefreshToken.rotated_at,
-            RefreshToken.token_hash,
-        )
+        select(RefreshToken)
         .where(RefreshToken.token_hash == hash)
         .order_by(desc(RefreshToken.created_at))
-    )
-    if result:
-        for row in result:
-            id = row[0]
-            if row[1] > now() and row[2] is None and row[3] is None and row[4] == hash:
-                return id
+    ).scalar_one_or_none()
+
+    if result is not None:
+        id = result.id
+        user_id = result.user_id
+        if result.replaced_by is not None:
+            revoke_refresh_tokens(user_id, db)
+        if (result.expires_at > now() 
+            and result.revoked_at is None 
+            and result.rotated_at is None
+            and result.token_hash == hash):
+            return id
     return None
 
 
 def revoke_refresh_tokens(user_id: UUID, db: Session) -> None:
-    """Revokes all refresh tokens for the given user_id"""
+    """Revokes all refresh tokens for the given user_id."""
     stmt = update(RefreshToken).where(RefreshToken.user_id == user_id).values(revoked_at=now())
     db.execute(stmt)
-    db.commit()
+    db._flush()
 
 
 def now() -> datetime:
