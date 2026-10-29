@@ -10,9 +10,11 @@ from sqlalchemy.orm import Session
 
 from app.accounts.interface import revoke_all_refresh_tokens
 from app.accounts.password import hash_password
+from app.accounts.tokens import encode_jwt
 from app.config import get_settings
 from app.errors import ErrorCode
 from app.models.accounts import RefreshToken, User
+from app.models.engagement import Class, AccessCode
 
 VALID_EMAIL = "test@email.com"
 VALID_PASSWORD = "ValidPassword1"
@@ -63,6 +65,25 @@ def test_access_token_expires_in_60_minutes(client: TestClient, student: User):
     claims = decode(access_token, key, ["HS256"])
     expected = datetime.now(UTC) + timedelta(minutes=60)
     assert abs(claims["exp"] - expected.timestamp()) < 60
+
+
+def test_expired_access_token_on_restricted_route(
+        client: TestClient, 
+        student: User, 
+        make_class: Class,
+        make_access_code: AccessCode):
+    data = {"sub": str(student.id)}
+    past_expiry = timedelta(minutes=-2)
+    expired_token = encode_jwt(data, past_expiry, get_settings().access_token_secret_key)
+    new_class = make_class()
+    access_code = make_access_code(school_class=new_class)
+    joined = client.post(
+        "/api/v1/me/classes/join",
+        json={"access_code": access_code},
+        headers={"Authorization": f"Bearer {expired_token}"}
+    )
+    assert joined.status_code == 401
+    assert joined.json()["error"]["code"] == ErrorCode.NOT_AUTHENTICATED
 
 
 def test_refresh_rotates_tokens(client: TestClient, student: User):
