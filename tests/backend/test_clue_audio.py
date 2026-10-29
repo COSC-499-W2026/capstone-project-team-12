@@ -1,12 +1,12 @@
 import io
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -152,6 +152,20 @@ def test_rejected_audio_stores_nothing_and_creates_no_clue(
     assert error.value.code == ErrorCode.UNSUPPORTED_MEDIA_TYPE
     assert not list(stored_media_dir.iterdir())
     assert db.scalars(select(Clue).where(Clue.location_id == location.id)).first() is None
+
+
+@pytest.fixture
+def statements(db: Session) -> Iterator[list[str]]:
+    """The SQL sent on the test's connection while the test runs."""
+    sent: list[str] = []
+    connection = db.connection()
+
+    def record(*args: Any) -> None:
+        sent.append(args[2])  # (conn, cursor, statement, ...)
+
+    event.listen(connection, "before_cursor_execute", record)
+    yield sent
+    event.remove(connection, "before_cursor_execute", record)
 
 
 def test_clue_is_locked_before_the_primary_is_chosen(

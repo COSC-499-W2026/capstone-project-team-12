@@ -1,10 +1,12 @@
 import io
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
+from uuid import UUID
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, event, select, text
 from sqlalchemy.orm import Session
 
 from app.content.clue_audio import add_clue_recording
@@ -16,6 +18,20 @@ from app.models.enums import Difficulty, FeedbackCode, Language
 
 FR_2 = (Language.FR, Difficulty.ADVANCING)
 EVERY_COMBINATION = [(language, difficulty) for language in Language for difficulty in Difficulty]
+
+
+@pytest.fixture
+def statements(db: Session) -> Iterator[list[str]]:
+    """The SQL sent on the test's connection while the test runs, in order."""
+    sent: list[str] = []
+    connection = db.connection()
+
+    def record(_conn: Any, _cursor: Any, statement: str, *_rest: Any) -> None:
+        sent.append(statement)
+
+    event.listen(connection, "before_cursor_execute", record)
+    yield sent
+    event.remove(connection, "before_cursor_execute", record)
 
 
 @pytest.fixture
@@ -117,15 +133,47 @@ def test_locations_are_listed_by_room_number(
     make_location: Callable[..., Location],
     primary_recording: Callable[..., AudioAsset],
 ) -> None:
-    later = make_location(room_number="ZZZ 999", accepted_answers=["ZZZ999"])
-    earlier = make_location(room_number="AAA 100", accepted_answers=["AAA100"])
-    primary_recording(later, *FR_2)  # several rows for one location stay together
-    primary_recording(later, Language.JA, Difficulty.BASIC)
+    # Created last to first, and named and given IDs so that sorting by name or by id, either
+    # way, gives a different order than the room number does.
+    last = make_location(
+        id=UUID(int=1), name="A", room_number="ZZZ 300", accepted_answers=["ZZZ300"]
+    )
+    middle = make_location(
+        id=UUID(int=3), name="C", room_number="MMM 200", accepted_answers=["MMM200"]
+    )
+    first = make_location(
+        id=UUID(int=2), name="B", room_number="AAA 100", accepted_answers=["AAA100"]
+    )
+    primary_recording(middle, *FR_2)  # several rows for one location stay together
+    primary_recording(middle, Language.JA, Difficulty.BASIC)
 
     ids = [item.id for item in coverage_report(db).locations]
 
-    assert ids.index(earlier.id) < ids.index(later.id)
-    assert ids.count(later.id) == 1
+    ours = {first.id, middle.id, last.id}
+    assert [i for i in ids if i in ours] == [first.id, middle.id, last.id]
+    assert ids.count(middle.id) == 1
+
+
+def test_location_without_a_room_number_is_not_playable(
+    db: Session,
+    make_location: Callable[..., Location],
+    primary_recording: Callable[..., AudioAsset],
+    record_phrases: Callable[..., None],
+) -> None:
+    # The CHECK makes this impossible today, but the spec's definition names the room number and
+    # other verification types are Future Work. Dropped inside the test's transaction.
+    db.execute(text("ALTER TABLE locations DROP CONSTRAINT ck_locations_room_number_required"))
+    record_phrases(Language.FR)
+    without = make_location(room_number=None, accepted_answers=["TST999"])
+    with_room = make_location()
+    primary_recording(without, *FR_2)
+    primary_recording(with_room, *FR_2)
+
+    report = coverage_report(db)
+
+    assert combination(report, without, *FR_2).has_primary_audio
+    assert playable(report, without) == []
+    assert playable(report, with_room) == [FR_2]
 
 
 def test_missing_feedback_phrase_makes_nothing_in_the_language_playable(
