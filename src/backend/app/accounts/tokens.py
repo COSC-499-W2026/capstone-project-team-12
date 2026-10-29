@@ -110,6 +110,7 @@ def validate_refresh_token(token: str, db: Session) -> UUID | None:
         user_id = result.user_id
         if result.replaced_by is not None:
             revoke_refresh_tokens(user_id, db)
+            raise AppError(ErrorCode.INVALID_CREDENTIALS)
         if (result.expires_at > now() 
             and result.revoked_at is None 
             and result.rotated_at is None
