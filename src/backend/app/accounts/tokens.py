@@ -84,14 +84,22 @@ def rotate_tokens(token: str, db: Session) -> dict[str, str]:
     user = db.get(User, user_id)
     if user is None or not user.is_active:
         raise AppError(ErrorCode.ACCOUNT_DISABLED, "Your account has been disabled.")
+
+    new_refresh_token = create_refresh_token(user_id, db, family_id)
+    hash = hashlib.sha256(new_refresh_token.encode()).hexdigest()
+
+    new_uuid = db.execute(
+        select(RefreshToken.id).where(RefreshToken.token_hash == hash)
+    ).scalar_one_or_none()
+    
     db.execute(
-        update(RefreshToken).where(RefreshToken.id == valid_token_id).values(rotated_at=now())
+        update(RefreshToken).where(RefreshToken.id == valid_token_id)
+        .values(rotated_at=now(), replaced_by=new_uuid)
     )
 
     db.flush()
 
     new_access_token = create_access_token({"sub": str(user_id)})
-    new_refresh_token = create_refresh_token(user_id, db, family_id)
 
     return {"access_token": new_access_token, "refresh_token": new_refresh_token}
 
@@ -110,7 +118,7 @@ def validate_refresh_token(token: str, db: Session) -> UUID | None:
         user_id = result.user_id
         if result.replaced_by is not None:
             revoke_refresh_tokens(user_id, db)
-            raise AppError(ErrorCode.INVALID_CREDENTIALS)
+            raise AppError(ErrorCode.NOT_AUTHENTICATED)
         if (result.expires_at > now() 
             and result.revoked_at is None 
             and result.rotated_at is None

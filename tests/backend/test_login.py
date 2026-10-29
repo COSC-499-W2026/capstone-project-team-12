@@ -137,3 +137,18 @@ def test_disabled_account_cannot_refresh(client: TestClient, db: Session, studen
     response = refresh(client, refresh_token)
     assert response.status_code == 403
     assert response.json()["error"]["code"] == ErrorCode.ACCOUNT_DISABLED
+
+
+def test_refresh_cookie_is_protected(client: TestClient, student: User):
+    cookie = login(client).headers["set-cookie"].lower()
+    assert "httponly" in cookie
+    assert "samesite=strict" in cookie
+    assert f"max-age={14 * 24 * 60 * 60}" in cookie
+
+
+def test_using_replaced_token_revokes_family(client: TestClient, student: User):
+    first_token = login(client).cookies["refresh_token"]
+    second_token = refresh(client, first_token).cookies["refresh_token"]
+    # First should refuses because it was replaced, second should refuse because it was revoked
+    assert refresh(client, first_token).json()["error"]["code"] == ErrorCode.NOT_AUTHENTICATED
+    assert refresh(client, second_token).json()["error"]["code"] == ErrorCode.NOT_AUTHENTICATED
