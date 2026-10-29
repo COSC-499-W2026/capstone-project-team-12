@@ -3,7 +3,7 @@
 import io
 import random
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from itertools import count
 from pathlib import Path
 from typing import Any, NamedTuple, TypeVar
@@ -138,6 +138,30 @@ def split_media_url() -> Callable[[str], tuple[str, int, str]]:
         return key, int(query["expires"][0]), query["sig"][0]
 
     return split
+
+
+@pytest.fixture
+def freeze_clock(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
+    """Make datetime.now() return a fixed time in the given modules, so a test can hit an exact
+    time limit, e.g. freeze_clock(now, "app.game.status"). Each module must import `datetime`
+    from datetime. Call it again to move the clock.
+
+    `frozen` has to be timezone-aware. A naive value is read as local time, so now(UTC) shifts
+    when the machine is not on UTC. Only the modules named here are frozen: one you leave out,
+    such as app.game.control, keeps the real clock. now() with no time zone is that instant as a
+    naive local time, the same as the real datetime.now().
+    """
+
+    def freeze(frozen: datetime, *modules: str) -> None:
+        class FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz: tzinfo | None = None) -> "FrozenDatetime":
+                return cls.fromtimestamp(frozen.timestamp(), tz)
+
+        for module in modules:
+            monkeypatch.setattr(f"{module}.datetime", FrozenDatetime)
+
+    return freeze
 
 
 @pytest.fixture
