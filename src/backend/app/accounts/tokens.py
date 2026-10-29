@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from jwt import decode, encode
+from jwt import encode
 from pydantic import BaseModel
 from sqlalchemy import desc, insert, select, update
 from sqlalchemy.orm import Session
@@ -20,10 +20,12 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRES_MINUTES = 60
 REFRESH_TOKEN_EXPIRES_DAYS = 14
 
+
 # Returned by token functions to for route to handle. Not returned to user
 class TokenPair(BaseModel):
     access_token: str
-    refresh_token: set
+    refresh_token: str
+
 
 # Access token response returned to user
 class TokenResponse(BaseModel):
@@ -88,9 +90,10 @@ def rotate_tokens(token: str, db: Session) -> TokenPair:
     new_uuid = db.execute(
         select(RefreshToken.id).where(RefreshToken.token_hash == hash)
     ).scalar_one_or_none()
-    
+
     db.execute(
-        update(RefreshToken).where(RefreshToken.id == valid_token_id)
+        update(RefreshToken)
+        .where(RefreshToken.id == valid_token_id)
         .values(rotated_at=now(), replaced_by=new_uuid)
     )
 
@@ -116,17 +119,19 @@ def validate_refresh_token(token: str, db: Session) -> UUID | None:
         if result.replaced_by is not None:
             revoke_refresh_tokens(user_id, db)
             raise AppError(ErrorCode.NOT_AUTHENTICATED)
-        if (result.expires_at > now() 
-            and result.revoked_at is None 
+        if (
+            result.expires_at > now()
+            and result.revoked_at is None
             and result.rotated_at is None
-            and result.token_hash == hash):
+            and result.token_hash == hash
+        ):
             return id
     return None
 
 
 def revoke_refresh_tokens(user_id: UUID, db: Session) -> None:
-    """Revokes all refresh tokens for the given user_id. 
-    
+    """Revokes all refresh tokens for the given user_id.
+
     This function does not commit: the caller owns the transaction"""
     stmt = update(RefreshToken).where(RefreshToken.user_id == user_id).values(revoked_at=now())
     db.execute(stmt)

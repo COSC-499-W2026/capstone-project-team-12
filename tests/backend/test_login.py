@@ -14,7 +14,7 @@ from app.accounts.tokens import encode_jwt
 from app.config import get_settings
 from app.errors import ErrorCode
 from app.models.accounts import RefreshToken, User
-from app.models.engagement import Class, AccessCode
+from app.models.engagement import AccessCode, Class
 
 VALID_EMAIL = "test@email.com"
 VALID_PASSWORD = "ValidPassword1"
@@ -68,10 +68,8 @@ def test_access_token_expires_in_60_minutes(client: TestClient, student: User):
 
 
 def test_expired_access_token_on_restricted_route(
-        client: TestClient, 
-        student: User, 
-        make_class: Class,
-        make_access_code: AccessCode):
+    client: TestClient, student: User, make_class: Class, make_access_code: AccessCode
+):
     data = {"sub": str(student.id)}
     past_expiry = timedelta(minutes=-2)
     expired_token = encode_jwt(data, past_expiry, get_settings().access_token_secret_key)
@@ -79,8 +77,8 @@ def test_expired_access_token_on_restricted_route(
     access_code = make_access_code(school_class=new_class)
     joined = client.post(
         "/api/v1/me/classes/join",
-        json={"access_code": access_code},
-        headers={"Authorization": f"Bearer {expired_token}"}
+        json={"access_code": access_code.code},
+        headers={"Authorization": f"Bearer {expired_token}"},
     )
     assert joined.status_code == 401
     assert joined.json()["error"]["code"] == ErrorCode.NOT_AUTHENTICATED

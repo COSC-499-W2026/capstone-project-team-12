@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 
-_DUMMY_HASH = hashpw("DummyPassword".encode(), gensalt(12))
+_DUMMY_HASH = hashpw(b"DummyPassword", gensalt(12))
 
 
 def validate_password_security(password: str) -> None:
@@ -43,8 +43,6 @@ def check_password_hash(email: str, password: str, db: Session) -> bool:
     """Takes a plaintext password and checks it agaist the stored hash for the user"""
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if user is None:
-        checkpw(password, _DUMMY_HASH)  # Dummy check if no user is found
+        checkpw(password.encode(), _DUMMY_HASH)  # Dummy check if no user is found
         return False
-    if checkpw(password.encode(), user.password_hash):
-        return True
-    return False
+    return checkpw(password.encode(), str(user.password_hash).encode())
