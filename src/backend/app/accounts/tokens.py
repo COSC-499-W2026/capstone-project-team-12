@@ -20,7 +20,12 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRES_MINUTES = 60
 REFRESH_TOKEN_EXPIRES_DAYS = 14
 
+# Returned by token functions to for route to handle. Not returned to user
+class TokenPair(BaseModel):
+    access_token: str
+    refresh_token: set
 
+# Access token response returned to user
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -34,16 +39,8 @@ def encode_jwt(data: dict[str, Any], expires_at: timedelta, key: str) -> str:
     return encoded_jwt
 
 
-def decode_jwt(jwt: str, key: str) -> dict[str, Any]:
-    """Decodes provided JWT and returns its contents"""
-    decoded_jwt = decode(jwt, key, [ALGORITHM])
-    return decoded_jwt
-
-
 def create_access_token(data: dict[str, Any]) -> str:
     """Creates a new access token with the provided data."""
-    expire = now() + timedelta(minutes=ACCESS_TOKEN_EXPIRES_MINUTES)
-    data.update({"exp": expire})
     return encode_jwt(data, timedelta(minutes=ACCESS_TOKEN_EXPIRES_MINUTES), str(ACCESS_TOKEN_KEY))
 
 
@@ -70,7 +67,7 @@ def create_refresh_token(user_id: UUID, db: Session, family_id: UUID | None = No
     return token
 
 
-def rotate_tokens(token: str, db: Session) -> dict[str, str]:
+def rotate_tokens(token: str, db: Session) -> TokenPair:
     """Rotates the provided token represented by token_id, then creates and returns a new
     JWT access code and refresh token in the same family."""
     valid_token_id = validate_refresh_token(token, db)
@@ -101,7 +98,7 @@ def rotate_tokens(token: str, db: Session) -> dict[str, str]:
 
     new_access_token = create_access_token({"sub": str(user_id)})
 
-    return {"access_token": new_access_token, "refresh_token": new_refresh_token}
+    return TokenPair(access_token=new_access_token, refresh_token=new_refresh_token)
 
 
 def validate_refresh_token(token: str, db: Session) -> UUID | None:
@@ -128,7 +125,9 @@ def validate_refresh_token(token: str, db: Session) -> UUID | None:
 
 
 def revoke_refresh_tokens(user_id: UUID, db: Session) -> None:
-    """Revokes all refresh tokens for the given user_id."""
+    """Revokes all refresh tokens for the given user_id. 
+    
+    This function does not commit: the caller owns the transaction"""
     stmt = update(RefreshToken).where(RefreshToken.user_id == user_id).values(revoked_at=now())
     db.execute(stmt)
     db._flush()

@@ -49,8 +49,9 @@ def login(
     Returns an access token (expiry 60 minutes) and a refresh token (expiry 14 days).
     """
     tokens = login_account(form_data, db)
-    _set_refresh_cookie(response, tokens["refresh_token"])
-    return TokenResponse(access_token=tokens["access_token"])
+    db.commit()
+    _set_refresh_cookie(response, tokens.refresh_token)
+    return TokenResponse(access_token=tokens.access_token)
 
 
 @auth_router.post(
@@ -70,6 +71,7 @@ def refresh(
         raise AppError(ErrorCode.NOT_AUTHENTICATED, "Invalid token: please sign in again")
     else:
         tokens = rotate_tokens(refresh_token, db)
+        db.commit()
         _set_refresh_cookie(response, tokens["refresh_token"])
         return TokenResponse(access_token=tokens["access_token"])
 
