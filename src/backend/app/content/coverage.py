@@ -108,6 +108,8 @@ def _locations(db: Session, missing: _MissingCodes) -> list[LocationCoverage]:
         )
         .outerjoin(Clue, Clue.location_id == Location.id)
         .outerjoin(AudioAsset, PRIMARY_RECORDING)
+        # room numbers sort as text ("SCI 1000" before "SCI 333"), as in list_locations; the spec
+        # has no order. Name and id only keep locations without a room number in a fixed order.
         .order_by(Location.room_number, Location.name, Location.id)
     )
     labels: dict[UUID, _Label] = {}
