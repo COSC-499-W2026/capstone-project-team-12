@@ -5,6 +5,7 @@ the expire job. `get_open_session_id` uses its idle rule too."""
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import ColumnElement, select, update
 from sqlalchemy.orm import Session
@@ -20,6 +21,16 @@ _UNFINISHED = (LocationStatus.PENDING, LocationStatus.NAVIGATING, LocationStatus
 def session_idle_limit() -> timedelta:
     """How long a game may be idle before it expires (SESSION_IDLE_EXPIRY_HOURS, 24 by default)."""
     return timedelta(hours=get_settings().session_idle_expiry_hours)
+
+
+def start_of_today() -> datetime:
+    """Midnight at the start of today in the app's time zone (America/Vancouver by default).
+
+    The day-based game rules (carry-over after a quit, the daily reset limit) use the local
+    calendar day, so they turn over at local midnight, also across daylight saving changes.
+    """
+    now = datetime.now(ZoneInfo(get_settings().app_timezone))
+    return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 def game_already_open(game_id: UUID) -> AppError:

@@ -3,12 +3,13 @@ loaded game (is_idle) and for a query (idle_condition)."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.game.sessions import abandon_sessions, idle_condition, is_idle
+from app.game.sessions import abandon_sessions, idle_condition, is_idle, start_of_today
 from app.models.enums import LocationStatus, SessionEndReason, SessionState, SkipReason
 from app.models.game import GameSession, SessionLocation
 
@@ -143,3 +144,25 @@ def test_a_game_is_idle_from_the_limit_on(
         select(GameSession.id).where(GameSession.id == game.id, idle_condition(now, IDLE_LIMIT))
     )
     assert (in_query == game.id) is expected
+
+
+@pytest.mark.parametrize(
+    "local_now",
+    [
+        datetime(2026, 10, 28, 0, 30),
+        # 07:30 UTC, already the next day in UTC
+        datetime(2026, 10, 28, 23, 30),
+        # the night daylight saving ends: 01:30 happens twice
+        datetime(2026, 11, 1, 1, 30, fold=1),
+    ],
+)
+def test_today_starts_at_local_midnight(
+    local_now: datetime, freeze_clock: Callable[..., None]
+) -> None:
+    vancouver = ZoneInfo("America/Vancouver")
+    freeze_clock(local_now.replace(tzinfo=vancouver), "app.game.sessions")
+
+    start = start_of_today()
+
+    assert start == datetime(local_now.year, local_now.month, local_now.day, tzinfo=vancouver)
+    assert (start.hour, start.minute) == (0, 0)
