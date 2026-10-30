@@ -20,6 +20,7 @@ from pydantic import (
 )
 
 from app.config import get_settings
+from app.models.enums import Difficulty, Language
 
 # building code and number with at most one space or hyphen between them; ASCII only, so a
 # full-width or Arabic-Indic digit is refused rather than stored
@@ -113,3 +114,21 @@ class LocationOut(BaseModel):
     gps_points: list[EntrancePoint]
     gps_radius_meters: int
     is_active: bool
+
+
+class ClueText(BaseModel):
+    """A clue's transcript. Required, as a PUT replaces it: send null or blank to clear it."""
+
+    text: str | None
+
+
+class ClueOut(BaseModel):
+    """A clue as content managers see it. Students only ever hear it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    location_id: UUID
+    difficulty: Difficulty
+    language: Language
+    text: str | None
