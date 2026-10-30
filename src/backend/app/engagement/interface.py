@@ -141,15 +141,14 @@ def apply_location_result(
         invoking this function.
 
     Preconditions:
-        The game caller must lock the session and location, validate ownership,
-        and set the location's final status before invoking this function
-        within the finish-location transaction.
+    The game caller must acquire the student lock using
+    lock_user(student_id, db) before locking the game session
+    or session location. This consistent lock order prevents
+    deadlocks with game start and class/language switching.
 
-        completed must be True only for a COMPLETED location.
-        FAILED and SKIPPED locations must pass completed=False.
-
-        target_language and class_id must come from the validated game
-        session. class_id is None for Practice sessions.
+    The caller must validate location existence and ownership,
+    set its final status, and invoke this function within the
+    same transaction. Missing locations must raise NOT_FOUND.
 
     Location scoring:
         - A completed location awards 100 points when first processed.
