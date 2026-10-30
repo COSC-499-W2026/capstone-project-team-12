@@ -34,7 +34,7 @@ from app.engagement.classes import (
     update_class_settings,
 )
 from app.errors import AppError, ErrorCode
-from app.models.accounts import ClassStaff, User
+from app.models.accounts import ClassStaff
 from app.models.engagement import (
     AccessCode,
     Class,
@@ -46,11 +46,12 @@ from app.models.enums import (
     ClassStaffRole,
     EnrollmentEndReason,
     Language,
-    LocationStatus,
+    PointsSourceType,
     UserRole,
 )
-from app.models.game import GameSession, SessionLocation
 from app.services.locks import lock_user
+
+LOCATION_COMPLETION_POINTS = 100
 
 __all__ = [
     "EngagementResult",
@@ -122,31 +123,40 @@ def _level_for_points(total_points: int) -> int:
 def apply_location_result(
     session_location_id: UUID,
     student_id: UUID,
+    *,
+    completed: bool,
+    target_language: Language,
+    class_id: UUID | None,
     db: Session,
 ) -> EngagementResult:
     """Process a finished session location and return engagement information.
 
-    Interface contract for Issue #15. Location scoring, points persistence,
-    per-language totals, and level calculation are implemented in this PR.
+    Interface contract for Issue #15. Implements location scoring, points
+    persistence, per-language totals, and level calculation.
 
     Ownership:
-        student_id identifies the authenticated student making the request.
-        The implementation must resolve the student through the location's
-        game session and verify that it matches student_id.
-        A mismatch raises NOT_FOUND before any engagement changes.
+        student_id identifies the authenticated student owning the session.
+        The game caller must verify that the session location exists, belongs
+        to the student's game session, and has reached a final status before
+        invoking this function.
 
     Preconditions:
-        The caller must set the session location's final status before
-        invoking this function within the finish-location transaction.
+        The game caller must lock the session and location, validate ownership,
+        and set the location's final status before invoking this function
+        within the finish-location transaction.
+
+        completed must be True only for a COMPLETED location.
+        FAILED and SKIPPED locations must pass completed=False.
+
+        target_language and class_id must come from the validated game
+        session. class_id is None for Practice sessions.
 
     Location scoring:
-        - A location with status COMPLETED awards 100 points when first
-          processed.
-        - A location with status FAILED or SKIPPED awards zero points.
-        - FAILED and SKIPPED return existing cumulative language points,
-          derived level, and global streak unchanged, with level_up=False
-          and no newly completed challenges or unlocked achievements.
-        - FAILED and SKIPPED do not count as active days for streaks.
+        - A completed location awards 100 points when first processed.
+        - Failed and skipped locations award zero points.
+        - Failed and skipped locations return existing cumulative language
+          points and derived level, with level_up=False.
+        - Failed and skipped locations do not count as active streak days.
         - Location points are attributed to the session's target language
           and class. The class is null for Practice sessions.
 
@@ -156,6 +166,7 @@ def apply_location_result(
         The points ledger is the source of truth. Each award and the
         corresponding user_language_stats.total_points update must occur
         within the same transaction.
+
         Levels are derived from cumulative language points, not stored:
         - Level 1: 0-499 points.
         - Level 2: 500-1,499 points.
@@ -166,20 +177,25 @@ def apply_location_result(
     Session score ownership:
         Engagement returns location_points_awarded as the number of new
         location points awarded during this invocation.
+
         The game caller owns updates to session_locations.points_awarded
         and game_sessions.total_score.
+
         On first processing, the caller stores the location award.
         On repeat processing, location_points_awarded is zero, but the
         caller must preserve any previously stored location points.
+
         The caller must recalculate game_sessions.total_score from
         persisted session location scores within the same transaction.
         It must not blindly add the returned award to an existing score.
+
         Daily challenge and streak milestone bonuses affect engagement
         totals, not the location-only game session score.
 
     Idempotency:
         Processing must be safe to repeat. Each ledger award must have
         a unique combination of student, award source, and source reference.
+
         A repeated call must:
         - Award zero additional location points.
         - Preserve previously stored location points.
@@ -190,30 +206,83 @@ def apply_location_result(
         - Return achievements_unlocked=().
         - Avoid duplicate location, challenge, and milestone awards.
 
+    Streaks:
+        Streaks are global across languages and use the America/Vancouver
+        calendar day.
+
+        Multiple completed locations on the same day count as one active
+        day. Completing a location on the day immediately after the
+        previous active day increments the streak.
+
+        Otherwise, the current streak starts at one.
+        The best streak is the maximum current streak reached.
+
+    Daily challenges:
+        Three challenges are generated per student per local day.
+
+        Before recording progress for a completed location, the
+        implementation must ensure that the student's daily challenges
+        exist, even if the student has not opened the challenges screen.
+
+        Challenge initialization must be idempotent so simultaneous
+        requests cannot generate duplicate challenges.
+
+        Challenges are global across languages and expire at local
+        midnight. Eligible completion and difficulty challenges award
+        50 or 100 points according to their definitions.
+
+        Every challenge award must have its own uniquely identifiable
+        points ledger entry. Repeated calls must not award it twice.
+
+    Streak milestones:
+        The 7-day milestone awards 100 points.
+        The 30-day milestone awards 300 points.
+
+        Each milestone is awarded once per student using a separate,
+        uniquely identifiable points ledger entry.
+
+    Achievements:
+        Achievements award zero points.
+
+        Eligibility is checked after processing a completed location
+        and any resulting streak change.
+
     Validation:
-        The implementation must verify that:
+        The game caller must verify that:
         - The session location exists.
         - Its associated game session belongs to student_id.
         - The location has reached a valid final status.
+        - The supplied language and class match the game session.
+
         Validation failures must not modify engagement state.
+
+        Engagement verifies that the student exists before updating
+        engagement records.
 
     Transactions:
         The caller owns the database transaction.
+
         Engagement may add records and flush pending database changes
         to enforce constraints or obtain generated identifiers.
+
         Engagement must not commit or roll back the transaction.
+
         Location, session, ledger, and engagement-stat changes must
         remain consistent within the caller's transaction.
 
     Pending functionality:
         Streak tracking, daily challenges, streak milestones, and
-        achievement unlocking are not implemented in this PR.
+        achievement unlocking are not yet implemented.
+
         Until implemented, streak_days is zero and both
         challenges_completed and achievements_unlocked are empty.
 
     Args:
         session_location_id: UUID of the finished session location.
         student_id: UUID of the authenticated student owning the session.
+        completed: Whether the location finished successfully.
+        target_language: Language of the validated game session.
+        class_id: Class UUID, or None for Practice sessions.
         db: SQLAlchemy session belonging to the caller's transaction.
 
     Returns:
@@ -221,70 +290,55 @@ def apply_location_result(
         cumulative engagement information.
 
     Raises:
-        AppError(ErrorCode.NOT_FOUND): Session location does not exist or
-            belongs to another student.
-        AppError(ErrorCode.INVALID_STAGE): Session location has not
-            reached a final status.
+        AppError(ErrorCode.NOT_FOUND): Student does not exist.
     """
-    location = db.get(SessionLocation, session_location_id)
-    if location is None:
-        raise AppError(ErrorCode.NOT_FOUND)
-
-    game = db.get(GameSession, location.session_id)
-    if game is None or game.student_id != student_id:
-        raise AppError(ErrorCode.NOT_FOUND)
-
-    if location.status not in (
-        LocationStatus.COMPLETED,
-        LocationStatus.FAILED,
-        LocationStatus.SKIPPED,
-    ):
-        raise AppError(ErrorCode.INVALID_STAGE)
-
-    # Serialize all awards to this student to prevent lost increments.
-    student = db.scalar(select(User).where(User.id == student_id).with_for_update())
+    # Serialize awards for this student to prevent lost increments.
+    student = lock_user(student_id, db)
     if student is None:
         raise AppError(ErrorCode.NOT_FOUND)
 
-    stats = db.get(UserLanguageStats, (student_id, game.target_language))
+    stats = db.get(UserLanguageStats, (student_id, target_language))
     previous_total = stats.total_points if stats is not None else 0
     previous_level = _level_for_points(previous_total)
     awarded = 0
 
-    if location.status == LocationStatus.COMPLETED:
+    if completed:
         existing_award = db.scalar(
             select(PointsLedger.id).where(
                 PointsLedger.user_id == student_id,
-                PointsLedger.source_type == "location",
+                PointsLedger.source_type == PointsSourceType.LOCATION,
                 PointsLedger.source_ref == str(session_location_id),
             )
         )
+
         if existing_award is None:
             db.add(
                 PointsLedger(
                     user_id=student_id,
-                    source_type="location",
+                    source_type=PointsSourceType.LOCATION,
                     source_ref=str(session_location_id),
-                    class_id=game.class_id,
-                    language=game.target_language,
-                    points=100,
+                    class_id=class_id,
+                    language=target_language,
+                    points=LOCATION_COMPLETION_POINTS,
                 )
             )
+
             if stats is None:
                 stats = UserLanguageStats(
                     user_id=student_id,
-                    language=game.target_language,
-                    total_points=100,
+                    language=target_language,
+                    total_points=LOCATION_COMPLETION_POINTS,
                 )
                 db.add(stats)
             else:
-                stats.total_points += 100
+                stats.total_points += LOCATION_COMPLETION_POINTS
 
-            awarded = 100
+            awarded = LOCATION_COMPLETION_POINTS
             db.flush()
 
     total_points = stats.total_points if stats is not None else 0
     level = _level_for_points(total_points)
+
     return EngagementResult(
         location_points_awarded=awarded,
         total_points=total_points,
