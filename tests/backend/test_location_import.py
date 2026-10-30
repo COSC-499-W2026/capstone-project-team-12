@@ -1,4 +1,5 @@
-from collections.abc import Callable
+import io
+from collections.abc import Callable, Iterator
 
 import pytest
 from sqlalchemy import Engine, func, select
@@ -8,7 +9,7 @@ from app.config import get_settings
 from app.content import location_import
 from app.content.location_import import IMPORT_LOCK_KEY, import_locations
 from app.content.locations import create_location
-from app.content.schemas import ImportedRow, LocationFields, LocationOut
+from app.content.schemas import ImportedRow, LocationFields, LocationImportReport, LocationOut
 from app.errors import AppError, ErrorCode
 from app.models.content import Location
 
@@ -17,6 +18,22 @@ HEADER = "name,building_name,floor_number,room_number,entrances,gps_radius_meter
 
 def csv_file(*rows: str, header: str = HEADER) -> bytes:
     return "\n".join([header, *rows]).encode()
+
+
+def import_csv(data: bytes, db: Session, dry_run: bool = False) -> LocationImportReport:
+    return import_locations(io.BytesIO(data), db, dry_run)
+
+
+@pytest.fixture
+def set_setting(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str, int], None]]:
+    """Changes a setting (by its environment variable) for this test only."""
+
+    def set_variable(name: str, value: int) -> None:
+        monkeypatch.setenv(name, str(value))
+        get_settings.cache_clear()
+
+    yield set_variable
+    get_settings.cache_clear()  # the next caller reads the restored environment
 
 
 def row(room_number: str) -> str:
@@ -36,7 +53,7 @@ def test_import_saves_every_column(db: Session) -> None:
     entrances = '"49.9394,-119.3948; 49.9401 , -119.3952"'
     data = csv_file(f"Chem lab,Science Building,3,qzx-901,{entrances},45")
 
-    report = import_locations(data, db)
+    report = import_csv(data, db)
 
     assert report.model_dump() == {
         "dry_run": False,
@@ -71,7 +88,7 @@ def test_import_saves_every_column(db: Session) -> None:
     ],
 )
 def test_optional_columns_may_be_blank_or_left_out(header: str, cells: str, db: Session) -> None:
-    report = import_locations(csv_file(cells, header=header), db)
+    report = import_csv(csv_file(cells, header=header), db)
 
     assert report.rejected == []
     location = saved("QZX 901", db)
@@ -82,7 +99,7 @@ def test_optional_columns_may_be_blank_or_left_out(header: str, cells: str, db: 
 
 @pytest.mark.parametrize("entrances", ["49.9,-119.3;", "49.9,-119.3;;49.8,-119.2", ";49.9,-119.3"])
 def test_stray_semicolons_in_entrances_are_ignored(entrances: str, db: Session) -> None:
-    report = import_locations(csv_file(f'Lab,Sci,,QZX 901,"{entrances}",'), db)
+    report = import_csv(csv_file(f'Lab,Sci,,QZX 901,"{entrances}",'), db)
 
     assert report.rejected == []
     location = saved("QZX 901", db)
@@ -115,7 +132,7 @@ def test_stray_semicolons_in_entrances_are_ignored(entrances: str, db: Session) 
 def test_invalid_row_is_reported_and_the_others_imported(
     bad_row: str, reason: str, dry_run: bool, db: Session
 ) -> None:
-    report = import_locations(csv_file(row("QZX 901"), bad_row, row("QZX 903")), db, dry_run)
+    report = import_csv(csv_file(row("QZX 901"), bad_row, row("QZX 903")), db, dry_run)
 
     assert report.imported == [
         ImportedRow(row=2, room_number="QZX 901"),
@@ -135,7 +152,7 @@ def test_room_number_already_in_use_is_reported(
     make_location(room_number="QZX 903", accepted_answers=["QZX903"])
     data = csv_file(row("QZX 901"), row("qzx-901"), row("QZX 902"), row("QZX 903"))
 
-    report = import_locations(data, db, dry_run)
+    report = import_csv(data, db, dry_run)
 
     assert report.imported == [ImportedRow(row=2, room_number="QZX 901")]
     assert [(rejected.row, rejected.code, rejected.reason) for rejected in report.rejected] == [
@@ -156,7 +173,7 @@ def test_dry_run_saves_nothing_and_keeps_the_callers_changes(
     earlier = make_location()  # not committed: only the dry run's own inserts are undone
     count = location_count(db)
 
-    report = import_locations(csv_file(row("QZX 901"), row("QZX 902")), db, dry_run=True)
+    report = import_csv(csv_file(row("QZX 901"), row("QZX 902")), db, dry_run=True)
 
     assert report.dry_run
     assert [imported.room_number for imported in report.imported] == ["QZX 901", "QZX 902"]
@@ -179,7 +196,7 @@ def test_dry_run_is_undone_when_a_row_raises(
     monkeypatch.setattr(location_import, "create_location", create_then_fail)
 
     with pytest.raises(RuntimeError):
-        import_locations(csv_file(row("QZX 901"), row("QZX 902")), db, dry_run=True)
+        import_csv(csv_file(row("QZX 901"), row("QZX 902")), db, dry_run=True)
 
     assert created
     assert saved("QZX 901", db) is None
@@ -189,7 +206,7 @@ def test_dry_run_is_undone_when_a_row_raises(
 def test_empty_lines_are_skipped_but_counted(db: Session) -> None:
     data = csv_file("", ",,, ,,", row("QZX 901"), header=f",,\n{HEADER}")
 
-    report = import_locations(data, db)
+    report = import_csv(data, db)
 
     assert report.imported == [ImportedRow(row=5, room_number="QZX 901")]
     assert report.rejected == []
@@ -230,7 +247,7 @@ def test_unreadable_file_is_refused_whole(data: bytes, problem: str, db: Session
     count = location_count(db)
 
     with pytest.raises(AppError) as raised:
-        import_locations(data, db)
+        import_csv(data, db)
 
     assert raised.value.code == ErrorCode.VALIDATION_ERROR
     assert problem in raised.value.message
@@ -243,11 +260,39 @@ def test_another_import_waits_until_this_transaction_ends(
     dry_run: bool, db: Session, test_engine: Engine
 ) -> None:
     # two imports listing the same rooms in different orders would otherwise deadlock
-    import_locations(csv_file(row("QZX 901")), db, dry_run)
+    import_csv(csv_file(row("QZX 901")), db, dry_run)
 
     with test_engine.connect() as other_request:  # rolled back when closed
         taken = other_request.scalar(select(func.pg_try_advisory_xact_lock(IMPORT_LOCK_KEY)))
     assert taken is False
+
+
+def test_file_over_the_row_limit_is_refused_whole(
+    set_setting: Callable[[str, int], None], db: Session
+) -> None:
+    set_setting("MAX_IMPORT_ROWS", 2)
+    rows = [row("QZX 901"), row("QZX 902")]
+    assert len(import_csv(csv_file(*rows, ""), db, dry_run=True).imported) == 2
+
+    # reading stops after the first row over the limit, before the broken line
+    with pytest.raises(AppError, match="more than 2 rows") as raised:
+        import_csv(csv_file(*rows, row("QZX 999"), '"not closed'), db)
+
+    assert raised.value.code == ErrorCode.VALIDATION_ERROR
+    assert saved("QZX 901", db) is None
+
+
+def test_file_over_the_size_limit_is_refused_unread(
+    set_setting: Callable[[str, int], None], db: Session
+) -> None:
+    set_setting("MAX_MEDIA_FILE_MB", 1)
+    upload = io.BytesIO(csv_file(row("QZX 901"), "," * 2**21))
+
+    with pytest.raises(AppError, match="CSV files can be at most 1 MB") as raised:
+        import_locations(upload, db)
+
+    assert raised.value.code == ErrorCode.FILE_TOO_LARGE
+    assert upload.tell() == 2**20 + 1
 
 
 def test_import_leaves_the_transaction_to_the_caller(
@@ -256,7 +301,7 @@ def test_import_leaves_the_transaction_to_the_caller(
     # not transaction_calls: it also counts releasing a savepoint as a commit
     earlier = make_location()
 
-    import_locations(csv_file(row("QZX 901")), db)
+    import_csv(csv_file(row("QZX 901")), db)
 
     assert saved(earlier.room_number, db) is not None  # not rolled back
     db.rollback()

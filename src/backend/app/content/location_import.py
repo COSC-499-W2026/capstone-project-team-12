@@ -10,8 +10,9 @@ they still need the client's confirmation.
 Every row is checked as a location created through the API, and the valid rows are imported
 even when others are rejected. A room number already in use, by an earlier row or by an inactive
 location, is rejected; for a deactivated location the reason says to reactivate it instead.
-A problem with the file itself (not UTF-8 CSV, wrong header) rejects the whole file; that
-includes a quoting mistake, because after one the rows can no longer be told apart.
+A problem with the file itself (over `max_media_file_mb`, not UTF-8 CSV, wrong header, more
+than `max_import_rows` rows) rejects the whole file; that includes a quoting mistake, because
+after one the rows can no longer be told apart.
 
 Imports run one at a time (a lock held until the caller's transaction ends): two inserting the
 same room numbers in different orders would each wait for the other's row, a deadlock.
@@ -26,13 +27,15 @@ import csv
 import io
 from collections import Counter
 from collections.abc import Iterator
-from typing import Annotated
+from itertools import islice
+from typing import Annotated, BinaryIO
 
 from pydantic import BeforeValidator, Field, ValidationError
 from pydantic_core import ErrorDetails
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.content.locations import create_location, invalid_field
 from app.content.schemas import (
     EntrancePoint,
@@ -41,6 +44,7 @@ from app.content.schemas import (
     LocationImportReport,
     RejectedRow,
 )
+from app.content.uploads import read_upload
 from app.errors import AppError, ErrorCode
 
 COLUMNS = ("name", "building_name", "floor_number", "room_number", "entrances", "gps_radius_meters")
@@ -69,10 +73,13 @@ class LocationRow(LocationFields):
     )
 
 
-def import_locations(csv_data: bytes, db: Session, dry_run: bool = False) -> LocationImportReport:
-    """Import each valid row of `csv_data` and report every row, imported or rejected with its
-    reason; VALIDATION_ERROR on `file` if the whole file is refused (see above)."""
-    header, rows = _read_csv(csv_data)
+def import_locations(
+    csv_file: BinaryIO, db: Session, dry_run: bool = False
+) -> LocationImportReport:
+    """Import each valid row of `csv_file` and report every row, imported or rejected with its
+    reason; 413 FILE_TOO_LARGE over `max_media_file_mb`, or VALIDATION_ERROR on `file` if the
+    whole file is refused (see above)."""
+    header, rows = _read_csv(read_upload(csv_file, "CSV files"))
     report = LocationImportReport(dry_run=dry_run)
     db.execute(IMPORT_LOCK)  # before the savepoint, so rolling a dry run back keeps it
     preview = db.begin_nested() if dry_run else None
@@ -87,8 +94,8 @@ def import_locations(csv_data: bytes, db: Session, dry_run: bool = False) -> Loc
 
 def _read_csv(csv_data: bytes) -> tuple[list[str], list[tuple[int, list[str]]]]:
     """The column names (lowercase) and the rows with their spreadsheet row numbers, empty rows
-    left out; VALIDATION_ERROR if the file is not UTF-8 or not valid CSV, or its header is not
-    the expected columns."""
+    left out; VALIDATION_ERROR if the file is not UTF-8 or not valid CSV, its header is not the
+    expected columns or it has more than `max_import_rows` rows (reading stops there)."""
     try:
         text = csv_data.decode("utf-8-sig")  # Excel adds a BOM
     except UnicodeDecodeError as error:
@@ -98,7 +105,12 @@ def _read_csv(csv_data: bytes) -> tuple[list[str], list[tuple[int, list[str]]]]:
     first = next(lines, None)
     header = [column.lower() for column in first[1]] if first else []
     _check_header(header)  # before reading on: a wrong file is named as such
-    return header, list(lines)
+    limit = get_settings().max_import_rows
+    rows = list(islice(lines, limit + 1))  # one more than the limit means the file is too long
+    if len(rows) > limit:
+        message = f"The file has more than {limit} rows, the most one import takes"
+        raise invalid_field("file", message)
+    return header, rows
 
 
 def _rows(text: str) -> Iterator[tuple[int, list[str]]]:
