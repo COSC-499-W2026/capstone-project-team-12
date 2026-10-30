@@ -17,6 +17,8 @@ def unlock_completion_badges(
     """Unlock eligible completion badges once per student and language.
 
     Called while apply_location_result holds the student's row lock.
+    Only invoked for newly awarded location points; newly activated
+    achievements are not retroactively unlocked for past completions.
     Does not commit; the caller owns the transaction.
     """
     completed_count = (
