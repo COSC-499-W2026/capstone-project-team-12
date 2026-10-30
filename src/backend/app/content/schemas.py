@@ -134,6 +134,19 @@ class ClueOut(BaseModel):
     text: str | None
 
 
+class ClueRecordingOut(BaseModel):
+    """A stored clue recording. Its storage key is left out: it is random, and files are only
+    served through signed media links."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    clue_id: UUID
+    is_primary: bool  # the recording new games draw
+    duration_seconds: float  # of the re-encoded file
+    file_size_kb: int
+
+
 class CombinationCoverage(BaseModel):
     """One language and difficulty of a location in the coverage report."""
 
