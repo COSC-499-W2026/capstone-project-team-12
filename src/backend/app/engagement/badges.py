@@ -1,12 +1,14 @@
 """Badge unlocking helpers for completed locations (Issue #86)."""
 
+from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.engagement import Achievement, PointsLedger, UserAchievement
-from app.models.enums import PointsSourceType
+from app.models.enums import Language, PointsSourceType
 
 
 def unlock_completion_badges(
@@ -74,3 +76,45 @@ def unlock_completion_badges(
 
     db.flush()
     return tuple(sorted(unlocked))
+
+
+@dataclass(frozen=True)
+class UnlockedAchievement:
+    """An achievement earned by the authenticated student."""
+
+    achievement_key: str
+    category: str
+    icon_key: str
+    language: str | None
+    unlocked_at: datetime
+
+
+def list_unlocked_achievements(
+    student_id: UUID,
+    language: Language,
+    db: Session,
+) -> tuple[UnlockedAchievement, ...]:
+    """Read language-specific and global unlocked achievements."""
+    rows = db.execute(
+        select(UserAchievement, Achievement)
+        .join(Achievement, UserAchievement.achievement_id == Achievement.id)
+        .where(
+            UserAchievement.user_id == student_id,
+            (UserAchievement.language == language) | (UserAchievement.language.is_(None)),
+        )
+        .order_by(
+            UserAchievement.unlocked_at.desc(),
+            UserAchievement.id.desc(),
+        )
+    ).all()
+
+    return tuple(
+        UnlockedAchievement(
+            achievement_key=achievement.achievement_key,
+            category=achievement.category,
+            icon_key=achievement.icon_key,
+            language=unlock.language,
+            unlocked_at=unlock.unlocked_at,
+        )
+        for unlock, achievement in rows
+    )
