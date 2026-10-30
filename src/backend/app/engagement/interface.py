@@ -28,7 +28,11 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.engagement.badges import unlock_completion_badges
+from app.engagement.badges import (
+    UnlockedAchievement,
+    list_unlocked_achievements,
+    unlock_completion_badges,
+)
 from app.engagement.classes import (
     create_class,
     deactivate_access_code,
@@ -79,6 +83,8 @@ __all__ = [
     "validate_code_and_enrol",
     "LanguageEngagementStats",
     "get_language_engagement_stats",
+    "UnlockedAchievement",
+    "list_unlocked_achievements",
 ]
 
 
