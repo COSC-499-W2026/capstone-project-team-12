@@ -111,7 +111,7 @@ def _saving_room_number(room_number: str, db: Session) -> Iterator[None]:
             raise
         message = f"Another location already has room number {room_number}"
         if db.scalar(select(Location.is_active).filter_by(room_number=room_number)) is False:
-            message += "; it is deactivated: bring it back with PUT instead"
+            message += "; it is deactivated: reactivate it (is_active true) instead"
         raise invalid_field("room_number", message) from error
 
 
