@@ -34,8 +34,9 @@ class Settings(BaseSettings):
     # clue and feedback recordings at most 60 s
     max_media_file_mb: PositiveInt = 5
     max_audio_seconds: PositiveInt = 60
-    # not in the spec: rows in one locations CSV, far above the campus's few dozen locations,
-    # so one import cannot hold its transaction (and its room number locks) for long
+    # proposed, not in the spec (team and client to confirm): rows in one locations CSV, far
+    # above the campus's few dozen locations, so one import cannot hold its transaction (and its
+    # room number locks) for long; 1000 rows take about 1.5 s
     max_import_rows: PositiveInt = 1000
     audio_service_type: AudioServiceType = "uploaded"
     gps_radius_meters: PositiveInt = 30  # default for a new location; each location stores its own

@@ -145,7 +145,12 @@ def test_room_number_already_in_use_is_reported(
     assert report.imported == [ImportedRow(row=2, room_number="QZX 901")]
     assert [(rejected.row, rejected.code, rejected.reason) for rejected in report.rejected] == [
         (3, ErrorCode.VALIDATION_ERROR, "Another location already has room number QZX 901"),
-        (4, ErrorCode.VALIDATION_ERROR, "Another location already has room number QZX 902"),
+        (
+            4,
+            ErrorCode.VALIDATION_ERROR,
+            "Another location already has room number QZX 902; it is deactivated: bring it back"
+            " with PUT instead",
+        ),
     ]
 
 
@@ -186,7 +191,13 @@ def test_empty_lines_are_skipped_but_counted(db: Session) -> None:
         pytest.param(f"name,,{HEADER[5:]}".encode(), "unknown ''", id="unnamed column"),
         pytest.param(f"{HEADER},name".encode(), "repeated 'name'", id="repeated column"),
         pytest.param(csv_file(row("QZX 901")).replace(b"Lab", b"Caf\xe9"), "UTF-8", id="not UTF-8"),
-        pytest.param(csv_file(f'"{"x" * 200_000}"'), "UTF-8", id="cell over the csv limit"),
+        pytest.param(
+            csv_file(row("QZX 901"), 'Lab,Sci,,QZX 902,"49.9,-119.3,', row("QZX 903")),
+            "Line 4 is not valid CSV: a quote is not closed",
+            id="quote not closed",
+        ),
+        pytest.param(csv_file('Lab,Sci,,QZX 902,"49.9'), "not valid CSV", id="open at the end"),
+        pytest.param(csv_file(f'"{"x" * 200_000}"'), "not valid CSV", id="cell over 128 KiB"),
     ],
 )
 def test_unreadable_file_is_refused_whole(data: bytes, problem: str, db: Session) -> None:
@@ -205,8 +216,9 @@ def test_file_over_the_row_limit_is_refused_whole(row_limit: int, db: Session) -
     rows = [row(f"QZX {901 + number}") for number in range(row_limit)]
     assert len(import_locations(csv_file(*rows, ""), db, dry_run=True).imported) == row_limit
 
-    with pytest.raises(AppError, match=f"at most {row_limit} can be imported") as raised:
-        import_locations(csv_file(*rows, row("QZX 999")), db)
+    # reading stops after the first row over the limit, before the broken line
+    with pytest.raises(AppError, match=f"more than {row_limit} rows") as raised:
+        import_locations(csv_file(*rows, row("QZX 999"), '"not closed'), db)
 
     assert raised.value.code == ErrorCode.VALIDATION_ERROR
     assert saved("QZX 901", db) is None
