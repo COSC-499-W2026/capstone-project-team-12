@@ -100,7 +100,8 @@ def _saving_room_number(room_number: str, db: Session) -> Iterator[None]:
 
     The unique constraint is the check, so two requests cannot both save the same room number.
     The spec has no error code for it. The block runs in a savepoint (opening one flushes, so
-    the changes must be made inside), so a failed save undoes only itself.
+    the changes must be made inside), so a failed save undoes only itself. If the location that
+    has it is deactivated, the message says to bring that one back instead.
     """
     try:
         with db.begin_nested():
@@ -109,6 +110,8 @@ def _saving_room_number(room_number: str, db: Session) -> Iterator[None]:
         if violated_constraint(error) != "uq_locations_room_number":
             raise
         message = f"Another location already has room number {room_number}"
+        if db.scalar(select(Location.is_active).filter_by(room_number=room_number)) is False:
+            message += "; it is deactivated: bring it back with PUT instead"
         raise invalid_field("room_number", message) from error
 
 

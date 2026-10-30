@@ -13,12 +13,16 @@ location, is rejected: a deactivated location is brought back with PUT, not impo
 problem with the file itself (not UTF-8 CSV, wrong header, more than `max_import_rows` rows)
 rejects the whole file.
 
-A dry run makes the same inserts in a savepoint and rolls them back, so its preview rejects
-exactly the rows the import would. Flushes, never commits: the router owns the transaction.
+A dry run makes the same inserts in a savepoint of its own and rolls back only that savepoint,
+so its preview rejects exactly the rows the import would and the caller's transaction is left as
+it was (as create_location's savepoint does for a duplicate). Otherwise this flushes and never
+commits or rolls back: the router owns the transaction.
 """
 
 import csv
 import io
+from collections import Counter
+from itertools import islice
 from typing import Annotated
 
 from pydantic import BeforeValidator, Field, ValidationError
@@ -66,30 +70,39 @@ def import_locations(csv_data: bytes, db: Session, dry_run: bool = False) -> Loc
     reason; VALIDATION_ERROR on `file` if the whole file is refused (see above)."""
     header, rows = _read_csv(csv_data)
     report = LocationImportReport(dry_run=dry_run)
-    with db.begin_nested() as savepoint:
-        for row, cells in rows:
-            _import_row(row, header, cells, report, db)
-        if dry_run:
-            savepoint.rollback()
+    preview = db.begin_nested() if dry_run else None
+    for row, cells in rows:
+        _import_row(row, header, cells, report, db)
+    if preview is not None:
+        preview.rollback()  # only the dry run's own savepoint
     return report
 
 
 def _read_csv(csv_data: bytes) -> tuple[list[str], list[tuple[int, list[str]]]]:
     """The column names (lowercase) and the rows with their spreadsheet row numbers, empty lines
-    left out; VALIDATION_ERROR if the file cannot be read, its header is not the expected
-    columns or it has more than `max_import_rows` rows."""
+    left out; VALIDATION_ERROR if the file is not UTF-8 or not valid CSV, its header is not the
+    expected columns or it has more than `max_import_rows` rows (reading stops there)."""
     try:
-        text = io.StringIO(csv_data.decode("utf-8-sig"), newline="")  # Excel adds a BOM
-        records = [_cells(record) for record in csv.reader(text)]
-    except (UnicodeDecodeError, csv.Error) as error:  # csv.Error: a cell over 128 KiB
-        raise invalid_field("file", "The file must be a CSV file saved as UTF-8") from error
-    lines = [(number, cells) for number, cells in enumerate(records, start=1) if cells]
+        text = csv_data.decode("utf-8-sig")  # Excel adds a BOM
+    except UnicodeDecodeError as error:
+        message = "The file must be saved as UTF-8 (in Excel: CSV UTF-8)"
+        raise invalid_field("file", message) from error
+    # strict: a quote left open is an error, not a cell that swallows the rows after it
+    reader = csv.reader(io.StringIO(text, newline=""), strict=True)
+    numbered = enumerate(map(_cells, reader), start=1)
+    limit = get_settings().max_import_rows
+    try:
+        # the header, at most `limit` rows and one more, which means the file is too long
+        lines = list(islice(((number, cells) for number, cells in numbered if cells), limit + 2))
+    except csv.Error as error:
+        line = reader.line_num
+        message = f"Line {line} is not valid CSV: a quote is not closed, or a cell is over 128 KiB"
+        raise invalid_field("file", message) from error
     header = [column.lower() for column in lines[0][1]] if lines else []
     _check_header(header)
     rows = lines[1:]
-    limit = get_settings().max_import_rows
     if len(rows) > limit:
-        message = f"The file has {len(rows)} rows; at most {limit} can be imported at once"
+        message = f"The file has more than {limit} rows, the most one import takes"
         raise invalid_field("file", message)
     return header, rows
 
@@ -108,7 +121,7 @@ def _check_header(header: list[str]) -> None:
     problems = {
         "missing": REQUIRED_COLUMNS - set(header),
         "unknown": set(header) - set(COLUMNS),
-        "repeated": {column for column in header if header.count(column) > 1},
+        "repeated": {column for column, count in Counter(header).items() if count > 1},
     }
     found = [
         f"{kind} {', '.join(map(repr, sorted(columns)))}"
