@@ -36,6 +36,11 @@ from app.engagement.classes import (
     list_staff_classes,
     update_class_settings,
 )
+from app.engagement.stats import (
+    LanguageEngagementStats,
+    get_language_engagement_stats,
+    level_for_points,
+)
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff
 from app.models.engagement import (
@@ -72,6 +77,8 @@ __all__ = [
     "require_active_enrolment",
     "update_class_settings",
     "validate_code_and_enrol",
+    "LanguageEngagementStats",
+    "get_language_engagement_stats",
 ]
 
 
@@ -113,15 +120,7 @@ class EngagementResult:
 
 def _level_for_points(total_points: int) -> int:
     """Derive the language level from cumulative points."""
-    if total_points >= 5000:
-        return 5
-    if total_points >= 3000:
-        return 4
-    if total_points >= 1500:
-        return 3
-    if total_points >= 500:
-        return 2
-    return 1
+    return level_for_points(total_points)
 
 
 def apply_location_result(
