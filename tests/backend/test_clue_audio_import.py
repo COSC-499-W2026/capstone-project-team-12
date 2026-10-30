@@ -1,5 +1,6 @@
 import io
 import zipfile
+import zlib
 from collections.abc import Callable
 from pathlib import Path
 
@@ -16,6 +17,9 @@ from app.models.accounts import User
 from app.models.content import AudioAsset, Clue, Location
 
 MB = 1024 * 1024
+UNREADABLE = "The file cannot be read from the zip"
+# the signatures of a file's two headers in a zip: before its data, and in the zip's directory
+LOCAL, CENTRAL = b"PK\x03\x04", b"PK\x01\x02"
 
 
 def zip_of(files: dict[str, bytes], compression: int = zipfile.ZIP_DEFLATED) -> bytes:
@@ -27,6 +31,11 @@ def zip_of(files: dict[str, bytes], compression: int = zipfile.ZIP_DEFLATED) -> 
             info.filename = name  # on Windows, ZipInfo turns '\\' into '/'
             archive.writestr(info, data, compression)
     return buffer.getvalue()
+
+
+def at(header: bytes, offset: int, data: bytearray) -> int:
+    """The index of a field of the first file's local or central header."""
+    return data.find(header) + offset
 
 
 def answer(location: Location) -> str:
@@ -229,7 +238,51 @@ def test_folders_and_hidden_files_are_skipped(
     assert report.model_dump() == {"imported": imported, "rejected": []}
 
 
-@pytest.mark.parametrize("data", [b"", b"not a zip", b"PK cut short"])
+def test_zip_with_more_files_than_the_limit_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+    stored_media_dir: Path,
+    make_location: Callable[..., Location],
+    make_audio: Callable[..., bytes],
+    import_zip: Callable[[bytes], AudioImportReport],
+) -> None:
+    monkeypatch.setenv("MAX_IMPORT_FILES", "2")
+    get_settings.cache_clear()  # stored_media_dir clears it again after the test
+    location = make_location()
+    two = {file_name(location, 1, "ja"): make_audio(1), file_name(location): make_audio(1)}
+    skipped = {"clues/": b"", ".DS_Store": b""}  # not counted
+
+    assert len(import_zip(zip_of(two | skipped)).imported) == 2
+    with pytest.raises(AppError) as error:
+        import_zip(zip_of(two | {file_name(location, 3, "ja"): make_audio(1)}))
+
+    assert error.value.code == ErrorCode.VALIDATION_ERROR
+    assert error.value.details == [
+        {
+            "in": "body",
+            "field": "file",
+            "message": "The zip has 3 files; one import takes at most 2",
+        }
+    ]
+    assert len(list(stored_media_dir.iterdir())) == 2  # only the first import's
+
+
+def central_name_not_utf8() -> bytes:
+    """A zip whose directory flags a name as UTF-8 that is not."""
+    data = bytearray(zip_of({"x.mp3": b"x"}))
+    data[at(CENTRAL, 9, data)] |= 0x08  # bit 11 of the flags
+    data[at(CENTRAL, 46, data)] = 0xFF
+    return bytes(data)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        pytest.param(b"", id="empty"),
+        pytest.param(b"not a zip", id="text"),
+        pytest.param(b"PK\x03\x04 cut short", id="cut short"),
+        pytest.param(central_name_not_utf8(), id="name not UTF-8"),
+    ],
+)
 def test_upload_that_is_not_a_zip_is_refused(
     data: bytes, import_zip: Callable[[bytes], AudioImportReport]
 ) -> None:
@@ -240,7 +293,47 @@ def test_upload_that_is_not_a_zip_is_refused(
     assert error.value.message == "Upload a zip file"
 
 
-def test_damaged_file_is_rejected_and_the_others_imported(
+# Damage to the first file of a zip, given the zip and where the file's data starts
+def flip_first_byte(data: bytearray, start: int) -> None:
+    data[start] ^= 0xFF
+
+
+def first_byte_ff(data: bytearray, start: int) -> None:
+    data[start] = 0xFF  # deflate: a reserved block type; bzip2: no "BZh" header
+
+
+def bad_lzma_options(data: bytearray, start: int) -> None:
+    data[start + 4] = 0xFF  # after the 4-byte header zipfile writes before LZMA data
+
+
+def unknown_method(data: bytearray, start: int) -> None:
+    data[at(CENTRAL, 10, data)] = 99
+
+
+def encrypted(data: bytearray, start: int) -> None:
+    data[at(CENTRAL, 8, data)] |= 0x01
+
+
+def local_name_not_utf8(data: bytearray, start: int) -> None:
+    data[at(LOCAL, 7, data)] |= 0x08  # bit 11 of the flags
+    data[at(LOCAL, 30, data)] = 0xFF
+
+
+@pytest.mark.parametrize(
+    ("compression", "damage"),
+    [
+        pytest.param(zipfile.ZIP_STORED, flip_first_byte, id="CRC does not match"),
+        pytest.param(zipfile.ZIP_DEFLATED, first_byte_ff, id="damaged deflate data"),
+        pytest.param(zipfile.ZIP_BZIP2, first_byte_ff, id="damaged bzip2 data"),
+        pytest.param(zipfile.ZIP_LZMA, bad_lzma_options, id="damaged lzma data"),
+        pytest.param(zipfile.ZIP_STORED, unknown_method, id="unknown compression"),
+        pytest.param(zipfile.ZIP_STORED, encrypted, id="encrypted"),
+        pytest.param(zipfile.ZIP_STORED, local_name_not_utf8, id="name not UTF-8"),
+    ],
+)
+def test_file_that_cannot_be_read_from_the_zip_is_rejected(
+    compression: int,
+    damage: Callable[[bytearray, int], None],
     db: Session,
     make_location: Callable[..., Location],
     make_audio: Callable[..., bytes],
@@ -248,19 +341,15 @@ def test_damaged_file_is_rejected_and_the_others_imported(
 ) -> None:
     location = make_location()
     damaged, intact = file_name(location, 1, "ja"), file_name(location)
-    data = bytearray(zip_of({damaged: make_audio(3), intact: make_audio(3)}, zipfile.ZIP_STORED))
-    data[30 + len(damaged)] ^= 0xFF  # its first byte, after a 30-byte header and the name
+    data = bytearray(zip_of({damaged: make_audio(3), intact: make_audio(3)}, compression))
+    damage(data, 30 + len(damaged))  # the data follows a 30-byte header and the name
 
     report = import_zip(bytes(data))
 
     assert [imported.file for imported in report.imported] == [intact]
-    assert report.model_dump()["rejected"] == [
-        {
-            "file": damaged,
-            "code": ErrorCode.UNSUPPORTED_MEDIA_TYPE,
-            "reason": "The file cannot be read from the zip: it is damaged",
-        }
-    ]
+    [rejected] = report.rejected
+    assert (rejected.file, rejected.code) == (damaged, ErrorCode.UNSUPPORTED_MEDIA_TYPE)
+    assert rejected.reason.startswith(UNREADABLE)
     assert recordings(location, db) == [(2, "fr", True)]
 
 
@@ -271,11 +360,11 @@ def test_error_after_the_file_is_read_is_not_reported_as_unreadable(
     import_zip: Callable[[bytes], AudioImportReport],
 ) -> None:
     def fail(*args: object, **kwargs: object) -> None:
-        raise zipfile.BadZipFile("not from reading the zip")
+        raise zlib.error("not from reading the zip")
 
     monkeypatch.setattr(audio_import, "add_clue_recording", fail)
 
-    with pytest.raises(zipfile.BadZipFile):  # not a rejected file: what it wrote would be kept
+    with pytest.raises(zlib.error):  # not a rejected file: what it wrote would be kept
         import_zip(zip_of({file_name(make_location()): make_audio(3)}))
 
 
