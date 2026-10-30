@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.engagement import Achievement, PointsLedger, UserAchievement
+from app.models.enums import PointsSourceType
 
 
 def unlock_completion_badges(
@@ -23,21 +24,14 @@ def unlock_completion_badges(
             select(func.count(PointsLedger.id)).where(
                 PointsLedger.user_id == student_id,
                 PointsLedger.language == language,
-                PointsLedger.source_type == "location",
+                PointsLedger.source_type == PointsSourceType.LOCATION,
             )
         )
         or 0
     )
 
-    thresholds = {
-        "first_step": 1,
-        "starter": 5,
-        "explorer": 20,
-    }
-
     definitions = db.scalars(
         select(Achievement).where(
-            Achievement.achievement_key.in_(tuple(thresholds)),
             Achievement.is_active.is_(True),
         )
     ).all()
@@ -45,7 +39,16 @@ def unlock_completion_badges(
     unlocked: list[str] = []
 
     for achievement in definitions:
-        if completed_count < thresholds[achievement.achievement_key]:
+        condition = achievement.unlock_condition
+
+        if condition.get("type") != "locations_completed":
+            continue
+
+        threshold = condition.get("threshold")
+        if type(threshold) is not int or threshold < 1:
+            continue
+
+        if completed_count < threshold:
             continue
 
         existing = db.scalar(
@@ -68,4 +71,4 @@ def unlock_completion_badges(
         unlocked.append(achievement.achievement_key)
 
     db.flush()
-    return tuple(key for key in thresholds if key in unlocked)
+    return tuple(sorted(unlocked))

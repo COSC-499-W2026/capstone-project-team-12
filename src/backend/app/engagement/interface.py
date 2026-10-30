@@ -4,13 +4,15 @@ Implemented:
 - Issue #11: Class language, active enrolment, and archived-state lookups.
 - Issue #106: Access code validation and student enrolment.
 - Issue #84: Classroom creation, access code generation, settings update
- services (update_class_settings), classroom listing via list_staff_classes,
- and code deactivation.
+  services (update_class_settings), classroom listing via list_staff_classes,
+  and code deactivation.
 - Issue #85: Student leave-class service and current-class reassignment.
 
 Implemented in part:
-- Issue #15: Location scoring and per-language levels.
-  Streaks, challenges, and badges are pending.
+- Issue #15: Location scoring, per-language levels, and completion badges.
+  Streaks, daily challenges, and advanced achievements are pending.
+- Issue #86: Points, levels, and completion badge unlocking.
+  Student engagement, achievements, and statistics API endpoints are pending.
 
 Callers must check class existence and archived status before enrolment
 so archived classes produce CLASS_ARCHIVED rather than an enrolment error.
@@ -26,6 +28,7 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.engagement.badges import unlock_completion_badges
 from app.engagement.classes import (
     create_class,
     deactivate_access_code,
@@ -77,7 +80,8 @@ class EngagementResult:
     """Engagement information returned after processing a location result.
 
     Defines the engagement response contract for Issue #15.
-    Streaks, challenges, and achievements are pending implementation.
+    Completion badges are implemented. Streaks, daily challenges,
+    and advanced achievements are pending implementation.
 
     Attributes:
         location_points_awarded: New location points awarded by this call.
@@ -271,10 +275,11 @@ def apply_location_result(
 
     Pending functionality:
         Streak tracking, daily challenges, streak milestones, and
-        achievement unlocking are not yet implemented.
+        advanced achievement types are not yet implemented.
 
-        Until implemented, streak_days is zero and both
-        challenges_completed and achievements_unlocked are empty.
+        Until implemented, streak_days is zero and
+        challenges_completed is empty. Completion badges can be
+        unlocked by successful locations.
 
     Args:
         session_location_id: UUID of the finished session location.
@@ -335,6 +340,10 @@ def apply_location_result(
             awarded = LOCATION_COMPLETION_POINTS
             db.flush()
 
+    achievements_unlocked = (
+        unlock_completion_badges(student_id, target_language, db) if awarded > 0 else ()
+    )
+
     total_points = stats.total_points if stats is not None else 0
     level = _level_for_points(total_points)
 
@@ -345,7 +354,7 @@ def apply_location_result(
         level_up=level > previous_level,
         streak_days=0,
         challenges_completed=(),
-        achievements_unlocked=(),
+        achievements_unlocked=achievements_unlocked,
     )
 
 
