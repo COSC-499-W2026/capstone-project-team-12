@@ -128,3 +128,30 @@ def test_invalid_achievement_language_rejected(
 
     with pytest.raises(IntegrityError):
         db.flush()
+
+
+def test_duplicate_language_specific_unlock_rejected(
+    db: Session,
+    make_user: Callable[..., User],
+) -> None:
+    student = make_user()
+    achievement = db.scalar(select(Achievement).where(Achievement.achievement_key == "first_step"))
+    assert achievement is not None
+
+    db.add_all(
+        [
+            UserAchievement(
+                user_id=student.id,
+                achievement_id=achievement.id,
+                language=Language.JA,
+            ),
+            UserAchievement(
+                user_id=student.id,
+                achievement_id=achievement.id,
+                language=Language.JA,
+            ),
+        ]
+    )
+
+    with pytest.raises(IntegrityError):
+        db.flush()
