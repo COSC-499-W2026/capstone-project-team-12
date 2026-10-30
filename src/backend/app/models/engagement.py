@@ -20,7 +20,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 from app.models.columns import created_at, in_check, language_check, updated_at, uuid_pk
-from app.models.enums import EnrollmentEndReason, PointsSourceType
+from app.models.enums import AchievementCategory, EnrollmentEndReason, PointsSourceType
 
 # Letters and digits that are hard to mix up when read aloud or copied by hand:
 # no 0/O, no 1/I/L. The code generator must pick from these characters too.
@@ -166,7 +166,7 @@ class Achievement(Base):
         UniqueConstraint("achievement_key"),
         in_check(
             "category",
-            ("learning", "streak", "difficulty"),
+            tuple(category.value for category in AchievementCategory),
             name="category",
         ),
     )
@@ -183,7 +183,12 @@ class Achievement(Base):
 
 
 class UserAchievement(Base):
-    """An achievement earned by a user, optionally in a specific language."""
+    """An achievement earned by a user, optionally in a specific language.
+
+    A database trigger enforces the category-language relationship:
+    streak achievements require NULL language, while learning and
+    difficulty achievements require a non-NULL language.
+    """
 
     __tablename__ = "user_achievements"
     __table_args__ = (
