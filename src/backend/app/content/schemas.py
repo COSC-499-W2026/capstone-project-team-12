@@ -125,3 +125,24 @@ class LocationImportReport(BaseModel):
     dry_run: bool
     imported: list[ImportedRow] = Field(default_factory=list)
     rejected: list[RejectedRow] = Field(default_factory=list)
+
+
+class ImportedFile(BaseModel):
+    """A file of an audio zip that was imported."""
+
+    file: str  # its path in the zip
+
+
+class RejectedFile(BaseModel):
+    """A file of an audio zip that was not imported, and why."""
+
+    file: str
+    code: ErrorCode
+    reason: str
+
+
+class AudioImportReport(BaseModel):
+    """Every file of an audio zip, in the zip's order, imported or rejected."""
+
+    imported: list[ImportedFile] = Field(default_factory=list)
+    rejected: list[RejectedFile] = Field(default_factory=list)
