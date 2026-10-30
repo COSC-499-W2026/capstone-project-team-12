@@ -30,9 +30,9 @@ from av.container import InputContainer, OutputContainer
 from av.stream import Disposition
 
 from app.config import get_settings
+from app.content.uploads import read_upload
 from app.errors import AppError, ErrorCode
 
-_BYTES_PER_MB = 1024 * 1024
 # what every stored recording is encoded as: enough for speech, playable in every browser
 _SAMPLE_RATE = 44100
 _LAYOUT = "mono"
@@ -76,10 +76,7 @@ def check_audio(upload: BinaryIO) -> CheckedAudio:
     """The recording read from `upload` re-encoded without its metadata, or AppError:
     413 FILE_TOO_LARGE, 415 UNSUPPORTED_MEDIA_TYPE (not MP3 or M4A audio, or unreadable) or
     422 AUDIO_TOO_LONG. Reads one byte more than the size limit at most."""
-    max_mb = get_settings().max_media_file_mb
-    data = upload.read(max_mb * _BYTES_PER_MB + 1)
-    if len(data) > max_mb * _BYTES_PER_MB:
-        raise AppError(ErrorCode.FILE_TOO_LARGE, f"Audio files can be at most {max_mb} MB")
+    data = read_upload(upload, "Audio files")
     audio_format = _detect_format(data)
     encoded, duration = _reencode(data, audio_format)
     return CheckedAudio(encoded, audio_format.suffix, duration, math.ceil(len(encoded) / 1024))
