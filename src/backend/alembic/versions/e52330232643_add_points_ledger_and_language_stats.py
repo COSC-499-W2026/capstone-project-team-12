@@ -1,7 +1,7 @@
 """add points ledger and language stats
 
 Revision ID: e52330232643
-Revises: 434124c953bc
+Revises: f4b3b8f11717
 Create Date: 2026-10-20 21:11:52.030741
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "e52330232643"
-down_revision: str | None = "434124c953bc"
+down_revision: str | None = "f4b3b8f11717"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
