@@ -6,13 +6,14 @@ from typing import Annotated, Self, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, NonNegativeInt, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.control import pause_game, quit_game, reset_game, resume_game
+from app.game.shuffle import shuffle_game
 from app.game.start import start_game
 from app.game.status import find_current_game, get_game
 from app.models.accounts import User
@@ -276,6 +277,48 @@ def reset(
     """
     started = _play(lambda: reset_game(user.id, game_id, db), user, db)
     return StartGameResponse.model_validate(started, from_attributes=True)
+
+
+class ShuffleRequest(BaseModel):
+    # the shuffles_used the app last saw, so a retried request can't shuffle twice
+    shuffles_used: NonNegativeInt
+
+
+class ShuffledGameResponse(GameStatusResponse):
+    # the clue of the new current location
+    clue_audio_url: str
+
+
+@games_router.post(
+    "/{game_id}/shuffle",
+    operation_id="shuffleGame",
+    response_model=ShuffledGameResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def shuffle(
+    game_id: UUID,
+    request: ShuffleRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ShuffledGameResponse:
+    """Replace the unfinished locations of the student's game (the current one and those still
+    to come) with new ones. Finished locations and their points don't change.
+
+    Send the `shuffles_used` from the last game status. Returns the game status plus
+    `clue_audio_url`, the clue of the new current location. 409 STATE_CHANGED if `shuffles_used`
+    no longer matches, for example a retry of a shuffle that already happened; nothing changes,
+    `details` holds the current `shuffles_used`, `state` and `current_position`, and the
+    locations come from GET /games/{id}. 409 SHUFFLE_LIMIT_REACHED after 2 shuffles
+    in this game. 409 NOT_ENOUGH_CONTENT if there aren't enough new locations; the shuffle isn't
+    used up. 409 SESSION_NOT_ACTIVE for a paused game (resume first), a game that has ended, or
+    one that has been idle for the expiry limit (24 hours by default), which is expired. 404
+    NOT_FOUND for another student's game, or if the new clue has no recording. 403
+    FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.
+    """
+    shuffled = _play(lambda: shuffle_game(user.id, game_id, request.shuffles_used, db), user, db)
+    return ShuffledGameResponse(**asdict(shuffled.status), clue_audio_url=shuffled.clue_audio_url)
 
 
 def _play(action: Callable[[], T], user: User, db: Session) -> T:
