@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.accounts.login import login_account
 from app.accounts.register import RegisterRequest, RegisterResponse, register_account
-from app.accounts.tokens import TokenResponse, rotate_tokens
+from app.accounts.tokens import REFRESH_TOKEN_EXPIRES_DAYS, TokenResponse, rotate_tokens
+from app.config import get_settings
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
 
@@ -48,8 +49,9 @@ def login(
     Returns an access token (expiry 60 minutes) and a refresh token (expiry 14 days).
     """
     tokens = login_account(form_data, db)
-    response.set_cookie("refresh_token", tokens["refresh_token"])
-    return TokenResponse(access_token=tokens["access_token"])
+    db.commit()
+    _set_refresh_cookie(response, tokens.refresh_token)
+    return TokenResponse(access_token=tokens.access_token)
 
 
 @auth_router.post(
@@ -69,5 +71,18 @@ def refresh(
         raise AppError(ErrorCode.NOT_AUTHENTICATED, "Invalid token: please sign in again")
     else:
         tokens = rotate_tokens(refresh_token, db)
-        response.set_cookie("refresh_token", tokens["refresh_token"])
-        return TokenResponse(access_token=tokens["access_token"])
+        db.commit()
+        _set_refresh_cookie(response, tokens.refresh_token)
+        return TokenResponse(access_token=tokens.access_token)
+
+
+def _set_refresh_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        "refresh_token",
+        token,
+        max_age=REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60,
+        path="/api/v1/auth",
+        httponly=True,
+        secure=get_settings().app_env != "development",
+        samesite="strict",
+    )

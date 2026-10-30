@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 
+_DUMMY_HASH = hashpw(b"DummyPassword", gensalt(12))
+
 
 def validate_password_security(password: str) -> None:
     """Returns a list of criteria that the password did not meet.
@@ -39,16 +41,8 @@ def hash_password(password: str) -> str:
 
 def check_password_hash(email: str, password: str, db: Session) -> bool:
     """Takes a plaintext password and checks it agaist the stored hash for the user"""
-    pw_bytes = password.encode("utf-8")
-    stmt = select(User.email, User.password_hash).where(User.email == email)
-    result = db.execute(stmt)
-    for row in result:
-        hash: str = "" + str(row[1])
-        if row[0] == email and checkpw(pw_bytes, hash.encode("utf-8")):
-            return True
-        else:
-            raise AppError(
-                ErrorCode.INVALID_CREDENTIALS,
-                "The email or password you entered are incorrect.",
-            )
-    return False
+    user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    if user is None:
+        checkpw(password.encode(), _DUMMY_HASH)  # Dummy check if no user is found
+        return False
+    return checkpw(password.encode(), str(user.password_hash).encode())

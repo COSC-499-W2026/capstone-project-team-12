@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from jwt import decode, encode
+from jwt import encode
 from pydantic import BaseModel
 from sqlalchemy import desc, insert, select, update
 from sqlalchemy.orm import Session
@@ -21,6 +21,13 @@ ACCESS_TOKEN_EXPIRES_MINUTES = 60
 REFRESH_TOKEN_EXPIRES_DAYS = 14
 
 
+# Returned by token functions to for route to handle. Not returned to user
+class TokenPair(BaseModel):
+    access_token: str
+    refresh_token: str
+
+
+# Access token response returned to user
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -34,16 +41,8 @@ def encode_jwt(data: dict[str, Any], expires_at: timedelta, key: str) -> str:
     return encoded_jwt
 
 
-def decode_jwt(jwt: str, key: str) -> dict[str, Any]:
-    """Decodes provided JWT and returns its contents"""
-    decoded_jwt = decode(jwt, key, [ALGORITHM])
-    return decoded_jwt
-
-
 def create_access_token(data: dict[str, Any]) -> str:
     """Creates a new access token with the provided data."""
-    expire = now() + timedelta(minutes=ACCESS_TOKEN_EXPIRES_MINUTES)
-    data.update({"exp": expire})
     return encode_jwt(data, timedelta(minutes=ACCESS_TOKEN_EXPIRES_MINUTES), str(ACCESS_TOKEN_KEY))
 
 
@@ -66,11 +65,11 @@ def create_refresh_token(user_id: UUID, db: Session, family_id: UUID | None = No
         expires_at=expires,
     )
     db.execute(stmt)
-    db.commit()
+    db.flush()
     return token
 
 
-def rotate_tokens(token: str, db: Session) -> dict[str, str]:
+def rotate_tokens(token: str, db: Session) -> TokenPair:
     """Rotates the provided token represented by token_id, then creates and returns a new
     JWT access code and refresh token in the same family."""
     valid_token_id = validate_refresh_token(token, db)
@@ -84,45 +83,59 @@ def rotate_tokens(token: str, db: Session) -> dict[str, str]:
     user = db.get(User, user_id)
     if user is None or not user.is_active:
         raise AppError(ErrorCode.ACCOUNT_DISABLED, "Your account has been disabled.")
+
+    new_refresh_token = create_refresh_token(user_id, db, family_id)
+    hash = hashlib.sha256(new_refresh_token.encode()).hexdigest()
+
+    new_uuid = db.execute(
+        select(RefreshToken.id).where(RefreshToken.token_hash == hash)
+    ).scalar_one_or_none()
+
     db.execute(
-        update(RefreshToken).where(RefreshToken.id == valid_token_id).values(rotated_at=now())
+        update(RefreshToken)
+        .where(RefreshToken.id == valid_token_id)
+        .values(rotated_at=now(), replaced_by=new_uuid)
     )
 
-    db.commit()
+    db.flush()
 
     new_access_token = create_access_token({"sub": str(user_id)})
-    new_refresh_token = create_refresh_token(user_id, db, family_id)
 
-    return {"access_token": new_access_token, "refresh_token": new_refresh_token}
+    return TokenPair(access_token=new_access_token, refresh_token=new_refresh_token)
 
 
 def validate_refresh_token(token: str, db: Session) -> UUID | None:
     """Returns the id of the token if it is valid, and None otherwise"""
     hash = hashlib.sha256(token.encode()).hexdigest()
     result = db.execute(
-        select(
-            RefreshToken.id,
-            RefreshToken.expires_at,
-            RefreshToken.revoked_at,
-            RefreshToken.rotated_at,
-            RefreshToken.token_hash,
-        )
+        select(RefreshToken)
         .where(RefreshToken.token_hash == hash)
         .order_by(desc(RefreshToken.created_at))
-    )
-    if result:
-        for row in result:
-            id = row[0]
-            if row[1] > now() and row[2] is None and row[3] is None and row[4] == hash:
-                return id
+    ).scalar_one_or_none()
+
+    if result is not None:
+        id = result.id
+        user_id = result.user_id
+        if result.replaced_by is not None:
+            revoke_refresh_tokens(user_id, db)
+            raise AppError(ErrorCode.NOT_AUTHENTICATED)
+        if (
+            result.expires_at > now()
+            and result.revoked_at is None
+            and result.rotated_at is None
+            and result.token_hash == hash
+        ):
+            return id
     return None
 
 
 def revoke_refresh_tokens(user_id: UUID, db: Session) -> None:
-    """Revokes all refresh tokens for the given user_id"""
+    """Revokes all refresh tokens for the given user_id.
+
+    This function does not commit: the caller owns the transaction"""
     stmt = update(RefreshToken).where(RefreshToken.user_id == user_id).values(revoked_at=now())
     db.execute(stmt)
-    db.commit()
+    db._flush()
 
 
 def now() -> datetime:
