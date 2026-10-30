@@ -20,6 +20,7 @@ from pydantic import (
 )
 
 from app.config import get_settings
+from app.errors import ErrorCode
 from app.models.enums import Difficulty, FeedbackCode, Language
 
 # building code and number with at most one space or hyphen between them; ASCII only, so a
@@ -145,3 +146,26 @@ class CoverageReport(BaseModel):
 
     languages: list[LanguageCoverage]
     locations: list[LocationCoverage]
+
+
+class ImportedRow(BaseModel):
+    """A CSV row that was imported, or in a dry run would be."""
+
+    row: int  # numbered as in a spreadsheet: the header is row 1
+    room_number: str
+
+
+class RejectedRow(BaseModel):
+    """A CSV row that was not imported, and why."""
+
+    row: int
+    code: ErrorCode
+    reason: str
+
+
+class LocationImportReport(BaseModel):
+    """Every row of a locations CSV, imported or rejected; a dry run saves nothing."""
+
+    dry_run: bool
+    imported: list[ImportedRow] = Field(default_factory=list)
+    rejected: list[RejectedRow] = Field(default_factory=list)
