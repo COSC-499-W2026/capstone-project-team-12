@@ -15,6 +15,14 @@ class Language(StrEnum):
     ES = "es"
 
 
+class PointsSourceType(StrEnum):
+    """Sources that can award points to a student."""
+
+    LOCATION = "location"
+    DAILY_CHALLENGE = "daily_challenge"
+    STREAK_MILESTONE = "streak_milestone"
+
+
 class Difficulty(IntEnum):
     BASIC = 1  # numbers only
     ADVANCING = 2  # numbers and a simple description
