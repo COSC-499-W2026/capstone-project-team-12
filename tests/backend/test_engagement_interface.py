@@ -701,3 +701,91 @@ def test_first_step_badge_is_tracked_per_language(
 
     assert len(unlocks) == 2
     assert {unlock.language for unlock in unlocks} == {Language.JA, Language.FR}
+
+
+@pytest.mark.parametrize(
+    ("badge_key", "threshold"),
+    [
+        ("starter", 5),
+        ("explorer", 20),
+    ],
+)
+def test_completion_badge_unlocks_at_threshold(
+    db: Session,
+    make_user: Callable[..., User],
+    badge_key: str,
+    threshold: int,
+) -> None:
+    student = make_user()
+
+    db.add_all(
+        [
+            PointsLedger(
+                user_id=student.id,
+                source_type="location",
+                source_ref=str(uuid4()),
+                class_id=None,
+                language=Language.JA,
+                points=100,
+            )
+            for _ in range(threshold - 1)
+        ]
+    )
+    db.flush()
+
+    from app.engagement.badges import unlock_completion_badges
+
+    before = unlock_completion_badges(student.id, Language.JA, db)
+
+    assert badge_key not in before
+
+    db.add(
+        PointsLedger(
+            user_id=student.id,
+            source_type="location",
+            source_ref=str(uuid4()),
+            class_id=None,
+            language=Language.JA,
+            points=100,
+        )
+    )
+    db.flush()
+
+    at_threshold = unlock_completion_badges(student.id, Language.JA, db)
+
+    assert badge_key in at_threshold
+
+    repeated = unlock_completion_badges(student.id, Language.JA, db)
+
+    assert badge_key not in repeated
+
+
+def test_completion_badge_counts_are_language_specific(
+    db: Session,
+    make_user: Callable[..., User],
+) -> None:
+    student = make_user()
+
+    db.add_all(
+        [
+            PointsLedger(
+                user_id=student.id,
+                source_type="location",
+                source_ref=str(uuid4()),
+                class_id=None,
+                language=language,
+                points=100,
+            )
+            for language in [Language.JA] * 4 + [Language.FR]
+        ]
+    )
+    db.flush()
+
+    from app.engagement.badges import unlock_completion_badges
+
+    french_unlocked = unlock_completion_badges(student.id, Language.FR, db)
+    japanese_unlocked = unlock_completion_badges(student.id, Language.JA, db)
+
+    assert "first_step" in french_unlocked
+    assert "starter" not in french_unlocked
+    assert "starter" not in japanese_unlocked
