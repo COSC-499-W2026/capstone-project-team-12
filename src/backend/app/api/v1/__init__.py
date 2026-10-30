@@ -16,8 +16,12 @@ from app.api.v1.me import me_router
 from app.api.v1.media import media_router
 from app.errors import error_responses
 
-# every route can fail validation; this replaces FastAPI's default 422 schema with ours
-api_router = APIRouter(prefix="/api/v1", responses=error_responses(HTTPStatus.UNPROCESSABLE_ENTITY))
+# every route can fail validation (this replaces FastAPI's default 422 schema with ours), and
+# its body can be over the size limit (app.api.body_limit)
+api_router = APIRouter(
+    prefix="/api/v1",
+    responses=error_responses(HTTPStatus.UNPROCESSABLE_ENTITY, HTTPStatus.REQUEST_ENTITY_TOO_LARGE),
+)
 api_router.include_router(auth_router)
 api_router.include_router(classes_router)
 api_router.include_router(teacher_classes_router)
