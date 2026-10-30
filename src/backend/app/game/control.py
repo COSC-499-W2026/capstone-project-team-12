@@ -1,7 +1,8 @@
-"""Pausing and resuming a game (A8, spec Session Lifecycle).
+"""Controlling a game: pause and resume (A8), quit and reset (A9). Spec Session Lifecycle;
+DFD 2.0 process 2.5.
 
-Both count as game actions, so they set last_activity_at and the idle time starts again. A game
-that has already been idle for the limit can't be paused or resumed: it is expired instead.
+All of them count as game actions, so they set last_activity_at and the idle time starts again.
+A game that has already been idle for the limit can't be played: it is expired instead.
 """
 
 from dataclasses import dataclass
@@ -12,9 +13,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.errors import AppError, ErrorCode
-from app.game.sessions import session_idle_limit
+from app.game.sessions import abandon_sessions, session_idle_limit
 from app.game.status import GameStatus, expire_if_idle, status_of
-from app.models.enums import SessionState
+from app.models.enums import SessionEndReason, SessionState
 from app.models.game import OPEN_SESSION_STATES, GameSession
 
 
@@ -55,6 +56,25 @@ def resume_game(student_id: UUID, game_id: UUID, db: Session) -> GameStatus:
         game.last_activity_at = datetime.now(UTC)
         game.resume_count += 1
         db.flush()
+    return status_of(game, db)
+
+
+def quit_game(student_id: UUID, game_id: UUID, db: Session) -> GameStatus:
+    """End the student's game: abandoned with end_reason quit. A paused game can be quit too.
+
+    Points already earned stay, and the unfinished locations are skipped (session_ended), so the
+    next game today in the same mode draws them first (A11). Quit is a game action, so
+    last_activity_at is the quit time; that draw relies on it. The same errors as pause_game, so
+    quitting twice is 409 SESSION_NOT_ACTIVE. Flushed; doesn't commit.
+    """
+    game = _lock_open_game(student_id, game_id, db)
+    abandon_sessions(
+        SessionEndReason.QUIT,
+        [GameSession.id == game.id],
+        db,
+        last_activity_at=datetime.now(UTC),
+    )
+    # the UPDATE also changed the loaded game, which is locked, so it is current
     return status_of(game, db)
 
 

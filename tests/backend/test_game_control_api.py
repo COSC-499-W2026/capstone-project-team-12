@@ -1,7 +1,8 @@
-"""POST /api/v1/games/{id}/pause and /resume (A8) over HTTP.
+"""POST /api/v1/games/{id}/pause, /resume (A8) and /quit (A9) over HTTP.
 
-The rules are tested in test_game_control.py. These check the status codes, the response body and
-that the route commits, also when an idle game is expired before the 409.
+The rules are tested in test_game_control.py and test_quit_game.py. These check the status
+codes, the response body and that the route commits, also when an idle game is expired before
+the 409.
 """
 
 from collections.abc import Callable
@@ -21,7 +22,7 @@ from app.models.enums import LocationStatus, SessionEndReason, SessionState, Use
 from app.models.game import GameSession, SessionLocation
 
 URL = "/api/v1/games"
-ACTIONS = ["pause", "resume"]
+ACTIONS = ["pause", "resume", "quit"]
 
 GAME_FIELDS = {
     "session_id",
@@ -159,6 +160,48 @@ def test_resuming_an_active_game_is_200(
     assert response.json() == before.json()
     db.refresh(game)
     assert (game.resume_count, game.last_activity_at) == (0, played_at)
+
+
+@pytest.mark.parametrize("state", [SessionState.ACTIVE, SessionState.PAUSED])
+def test_quit(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    transaction_calls: list[str],
+    state: SessionState,
+) -> None:
+    student = make_user()
+    paused_at = datetime.now(UTC) if state == SessionState.PAUSED else None
+    game = make_game_session(student, state=state, paused_at=paused_at, total_score=100)
+    make_session_location(
+        game, 1, status=LocationStatus.COMPLETED, points_awarded=100, completed_at=datetime.now(UTC)
+    )
+    make_session_location(game, 2, status=LocationStatus.NAVIGATING)
+    transaction_calls.clear()
+    before = datetime.now(UTC)
+
+    response = post(student, game.id, "quit")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body) == GAME_FIELDS
+    assert (body["state"], body["end_reason"], body["paused_at"], body["total_score"]) == (
+        SessionState.ABANDONED.value,
+        SessionEndReason.QUIT.value,
+        None,
+        100,
+    )
+    assert [location["status"] for location in body["locations"]] == [
+        LocationStatus.COMPLETED.value,
+        LocationStatus.SKIPPED.value,
+    ]
+    assert "SCI333" not in response.text
+    assert transaction_calls.count("commit") == 1
+    db.refresh(game)
+    assert (game.state, game.end_reason) == (SessionState.ABANDONED, SessionEndReason.QUIT)
+    assert before <= game.last_activity_at <= datetime.now(UTC)
 
 
 @pytest.mark.parametrize("action", ACTIONS)
