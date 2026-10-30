@@ -9,27 +9,26 @@ they still need the client's confirmation.
 
 Every row is checked as a location created through the API, and the valid rows are imported
 even when others are rejected. A room number already in use, by an earlier row or by an inactive
-location, is rejected: a deactivated location is brought back with PUT, not imported again. A
-problem with the file itself (not UTF-8 CSV, wrong header, more than `max_import_rows` rows)
-rejects the whole file.
+location, is rejected: a deactivated location is reactivated (`is_active`), not imported again.
+A problem with the file itself (not UTF-8 CSV, wrong header) rejects the whole file; that
+includes a quoting mistake, because after one the rows can no longer be told apart.
 
 A dry run makes the same inserts in a savepoint of its own and rolls back only that savepoint,
-so its preview rejects exactly the rows the import would and the caller's transaction is left as
-it was (as create_location's savepoint does for a duplicate). Otherwise this flushes and never
-commits or rolls back: the router owns the transaction.
+also when a row raises, so its preview rejects exactly the rows the import would and the
+caller's transaction is left as it was (as create_location's savepoint does for a duplicate).
+Otherwise this flushes and never commits or rolls back: the router owns the transaction.
 """
 
 import csv
 import io
 from collections import Counter
-from itertools import islice
+from collections.abc import Iterator
 from typing import Annotated
 
 from pydantic import BeforeValidator, Field, ValidationError
 from pydantic_core import ErrorDetails
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
 from app.content.locations import create_location, invalid_field
 from app.content.schemas import (
     EntrancePoint,
@@ -42,8 +41,6 @@ from app.errors import AppError, ErrorCode
 
 COLUMNS = ("name", "building_name", "floor_number", "room_number", "entrances", "gps_radius_meters")
 OPTIONAL_COLUMNS = frozenset({"floor_number", "gps_radius_meters"})
-
-
 REQUIRED_COLUMNS = frozenset(COLUMNS) - OPTIONAL_COLUMNS
 
 
@@ -71,40 +68,48 @@ def import_locations(csv_data: bytes, db: Session, dry_run: bool = False) -> Loc
     header, rows = _read_csv(csv_data)
     report = LocationImportReport(dry_run=dry_run)
     preview = db.begin_nested() if dry_run else None
-    for row, cells in rows:
-        _import_row(row, header, cells, report, db)
-    if preview is not None:
-        preview.rollback()  # only the dry run's own savepoint
+    try:
+        for row, cells in rows:
+            _import_row(row, header, cells, report, db)
+    finally:
+        if preview is not None:
+            preview.rollback()
     return report
 
 
 def _read_csv(csv_data: bytes) -> tuple[list[str], list[tuple[int, list[str]]]]:
-    """The column names (lowercase) and the rows with their spreadsheet row numbers, empty lines
-    left out; VALIDATION_ERROR if the file is not UTF-8 or not valid CSV, its header is not the
-    expected columns or it has more than `max_import_rows` rows (reading stops there)."""
+    """The column names (lowercase) and the rows with their spreadsheet row numbers, empty rows
+    left out; VALIDATION_ERROR if the file is not UTF-8 or not valid CSV, or its header is not
+    the expected columns."""
     try:
         text = csv_data.decode("utf-8-sig")  # Excel adds a BOM
     except UnicodeDecodeError as error:
         message = "The file must be saved as UTF-8 (in Excel: CSV UTF-8)"
         raise invalid_field("file", message) from error
+    lines = _rows(text)
+    first = next(lines, None)
+    header = [column.lower() for column in first[1]] if first else []
+    _check_header(header)  # before reading on: a wrong file is named as such
+    return header, list(lines)
+
+
+def _rows(text: str) -> Iterator[tuple[int, list[str]]]:
+    """The rows of `text` that are not empty, numbered as a spreadsheet numbers them (a quoted
+    cell may hold a line break, so these are not line numbers); VALIDATION_ERROR at the first
+    row that is not valid CSV."""
     # strict: a quote left open is an error, not a cell that swallows the rows after it
     reader = csv.reader(io.StringIO(text, newline=""), strict=True)
-    numbered = enumerate(map(_cells, reader), start=1)
-    limit = get_settings().max_import_rows
+    number = 0  # the last row read whole
     try:
-        # the header, at most `limit` rows and one more, which means the file is too long
-        lines = list(islice(((number, cells) for number, cells in numbered if cells), limit + 2))
+        for number, record in enumerate(reader, start=1):
+            if cells := _cells(record):
+                yield number, cells
     except csv.Error as error:
-        line = reader.line_num
-        message = f"Line {line} is not valid CSV: a quote is not closed, or a cell is over 128 KiB"
-        raise invalid_field("file", message) from error
-    header = [column.lower() for column in lines[0][1]] if lines else []
-    _check_header(header)
-    rows = lines[1:]
-    if len(rows) > limit:
-        message = f"The file has more than {limit} rows, the most one import takes"
-        raise invalid_field("file", message)
-    return header, rows
+        # all three causes: csv's own message would mislead, as a quote left open usually fails
+        # further on, at the next quote, as text following a closing quote
+        problems = "a quote is not closed, text follows a closing quote, or a cell has more"
+        message = f"{problems} than {csv.field_size_limit()} characters"
+        raise invalid_field("file", f"Row {number + 1} is not valid CSV: {message}") from error
 
 
 def _cells(record: list[str]) -> list[str]:
@@ -162,7 +167,8 @@ def _location_row(header: list[str], cells: list[str]) -> LocationRow:
 
 
 def _problem(problem: ErrorDetails) -> str:
-    """One problem of a row as "column: message", e.g. "entrances.2.lat: ..."; entrances are
-    numbered from 1, as rows are."""
+    """One problem of a row as "column: message", e.g. "entrances.2.lat: ...". Unlike a 422's
+    `field` (app.errors), which names the JSON body from 0, this names the CSV's columns and
+    numbers entrances from 1, as rows are: the report is read by people looking at the file."""
     parts = (part + 1 if isinstance(part, int) else part for part in problem["loc"])
     return f"{'.'.join(map(str, parts))}: {problem['msg']}"

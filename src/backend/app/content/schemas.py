@@ -107,7 +107,7 @@ class LocationOut(BaseModel):
 class ImportedRow(BaseModel):
     """A CSV row that was imported, or in a dry run would be."""
 
-    row: int  # numbered as in a spreadsheet: the header is row 1
+    row: int  # numbered as in a spreadsheet: the file's first row is 1, empty rows count
     room_number: str
 
 

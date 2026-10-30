@@ -1,12 +1,14 @@
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.content import location_import
 from app.content.location_import import import_locations
-from app.content.schemas import ImportedRow, LocationOut
+from app.content.locations import create_location
+from app.content.schemas import ImportedRow, LocationFields, LocationOut
 from app.errors import AppError, ErrorCode
 from app.models.content import Location
 
@@ -28,15 +30,6 @@ def saved(room_number: str, db: Session) -> Location | None:
 
 def location_count(db: Session) -> int:
     return db.scalars(select(func.count()).select_from(Location)).one()
-
-
-@pytest.fixture
-def row_limit(monkeypatch: pytest.MonkeyPatch) -> Iterator[int]:
-    """MAX_IMPORT_ROWS lowered to 2 for this test."""
-    monkeypatch.setenv("MAX_IMPORT_ROWS", "2")
-    get_settings.cache_clear()
-    yield 2
-    get_settings.cache_clear()  # the next caller reads the restored environment
 
 
 def test_import_saves_every_column(db: Session) -> None:
@@ -148,8 +141,8 @@ def test_room_number_already_in_use_is_reported(
         (
             4,
             ErrorCode.VALIDATION_ERROR,
-            "Another location already has room number QZX 902; it is deactivated: bring it back"
-            " with PUT instead",
+            "Another location already has room number QZX 902; it is deactivated: reactivate it"
+            " (is_active true) instead",
         ),
     ]
 
@@ -168,6 +161,28 @@ def test_dry_run_saves_nothing_and_keeps_the_callers_changes(
     assert db.get(Location, earlier.id) is earlier
 
 
+def test_dry_run_is_undone_when_a_row_raises(
+    db: Session, monkeypatch: pytest.MonkeyPatch, make_location: Callable[..., Location]
+) -> None:
+    earlier = make_location()
+    created: list[Location] = []
+
+    def create_then_fail(fields: LocationFields, db: Session) -> Location:
+        if created:
+            raise RuntimeError("connection lost")
+        created.append(create_location(fields, db))
+        return created[0]
+
+    monkeypatch.setattr(location_import, "create_location", create_then_fail)
+
+    with pytest.raises(RuntimeError):
+        import_locations(csv_file(row("QZX 901"), row("QZX 902")), db, dry_run=True)
+
+    assert created
+    assert saved("QZX 901", db) is None
+    assert saved(earlier.room_number, db) is not None  # only the dry run's savepoint is undone
+
+
 def test_empty_lines_are_skipped_but_counted(db: Session) -> None:
     data = csv_file("", ",,, ,,", row("QZX 901"), header=f",,\n{HEADER}")
 
@@ -184,7 +199,7 @@ def test_empty_lines_are_skipped_but_counted(db: Session) -> None:
             b"", "missing 'building_name', 'entrances', 'name', 'room_number'", id="empty"
         ),
         pytest.param(
-            b"name,building,room_number,entrances",
+            b'name,building,room_number,entrances\n"not closed',  # the header is checked first
             "missing 'building_name'; unknown 'building'",
             id="misspelt column",
         ),
@@ -193,11 +208,19 @@ def test_empty_lines_are_skipped_but_counted(db: Session) -> None:
         pytest.param(csv_file(row("QZX 901")).replace(b"Lab", b"Caf\xe9"), "UTF-8", id="not UTF-8"),
         pytest.param(
             csv_file(row("QZX 901"), 'Lab,Sci,,QZX 902,"49.9,-119.3,', row("QZX 903")),
-            "Line 4 is not valid CSV: a quote is not closed",
+            "Row 3 is not valid CSV: a quote is not closed",
             id="quote not closed",
         ),
-        pytest.param(csv_file('Lab,Sci,,QZX 902,"49.9'), "not valid CSV", id="open at the end"),
-        pytest.param(csv_file(f'"{"x" * 200_000}"'), "not valid CSV", id="cell over 128 KiB"),
+        pytest.param(csv_file('Lab,Sci,,QZX 902,"49.9'), "Row 2 is not", id="open at the end"),
+        # rows, not lines: row 2's name holds a line break
+        pytest.param(
+            csv_file('"Lab\nroom",Sci,,QZX 901,"49.9,-119.3",', 'Lab,"5" Main,,QZX 902,"1,2",'),
+            "Row 3 is not valid CSV",
+            id="text after a closing quote",
+        ),
+        pytest.param(
+            csv_file(f'"{"é" * 131_073}"'), "more than 131072 characters", id="cell too long"
+        ),
     ],
 )
 def test_unreadable_file_is_refused_whole(data: bytes, problem: str, db: Session) -> None:
@@ -212,21 +235,14 @@ def test_unreadable_file_is_refused_whole(data: bytes, problem: str, db: Session
     assert location_count(db) == count
 
 
-def test_file_over_the_row_limit_is_refused_whole(row_limit: int, db: Session) -> None:
-    rows = [row(f"QZX {901 + number}") for number in range(row_limit)]
-    assert len(import_locations(csv_file(*rows, ""), db, dry_run=True).imported) == row_limit
-
-    # reading stops after the first row over the limit, before the broken line
-    with pytest.raises(AppError, match=f"more than {row_limit} rows") as raised:
-        import_locations(csv_file(*rows, row("QZX 999"), '"not closed'), db)
-
-    assert raised.value.code == ErrorCode.VALIDATION_ERROR
-    assert saved("QZX 901", db) is None
-
-
-def test_import_leaves_the_commit_to_the_caller(db: Session) -> None:
+def test_import_leaves_the_transaction_to_the_caller(
+    db: Session, make_location: Callable[..., Location]
+) -> None:
     # not transaction_calls: it also counts releasing a savepoint as a commit
-    import_locations(csv_file(row("QZX 901")), db)
-    db.rollback()
+    earlier = make_location()
 
-    assert saved("QZX 901", db) is None
+    import_locations(csv_file(row("QZX 901")), db)
+
+    assert saved(earlier.room_number, db) is not None  # not rolled back
+    db.rollback()
+    assert saved("QZX 901", db) is None  # not committed
