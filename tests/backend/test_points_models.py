@@ -68,7 +68,12 @@ def test_points_are_tracked_separately_by_language(
     assert french.total_points == 100
 
 
-def test_negative_points_are_rejected(db: Session, make_user: Callable[..., User]) -> None:
+@pytest.mark.parametrize("points", [-100, 0])
+def test_nonpositive_points_are_rejected(
+    db: Session,
+    make_user: Callable[..., User],
+    points: int,
+) -> None:
     student = make_user()
     db.add(
         PointsLedger(
@@ -76,7 +81,7 @@ def test_negative_points_are_rejected(db: Session, make_user: Callable[..., User
             source_type=PointsSourceType.LOCATION,
             source_ref="invalid-award",
             language=Language.JA,
-            points=-100,
+            points=points,
         )
     )
 
