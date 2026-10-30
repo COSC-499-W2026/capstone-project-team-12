@@ -2,12 +2,12 @@
 
 The rules are tested in test_audio_files.py, test_clue_audio.py and test_content_coverage.py.
 These check the acceptance cases end to end, who may call each route, the status codes, the
-bodies and that an upload is committed. The routes use the same access dependencies as the
-location routes, which test_content_locations_api.py checks for every kind of account.
+bodies and that an upload is committed.
 """
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -25,7 +25,7 @@ from app.models.engagement import Class
 from app.models.enums import ClassStaffRole, Difficulty, FeedbackCode, Language, UserRole
 
 COVERAGE_URL = "/api/v1/content/coverage"
-BYTES_PER_MB = 1024 * 1024
+ONE_MB = 1024 * 1024  # MAX_MEDIA_FILE_MB counts MiB, as in test_audio_files.py
 # files the upload refuses, made from make_audio; each is sent named clue.mp3 as audio/mpeg, so
 # neither the name nor the declared type is trusted
 REJECTED = [
@@ -36,7 +36,7 @@ REJECTED = [
         id="too long",
     ),
     pytest.param(
-        lambda make_audio: bytes(get_settings().max_media_file_mb * BYTES_PER_MB + 1),
+        lambda make_audio: bytes(get_settings().max_media_file_mb * ONE_MB + 1),
         413,
         ErrorCode.FILE_TOO_LARGE,
         id="too large",
@@ -76,12 +76,31 @@ def upload(
 
 
 @pytest.fixture
+def assistant(
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., ClassStaff],
+) -> User:
+    """A student who is a class's TA: still a student account, so refused like any student."""
+    user = make_user()
+    make_class_staff(make_class(), user, role=ClassStaffRole.ASSISTANT)
+    return user
+
+
+@pytest.fixture
 def every_french_phrase(db: Session, make_feedback_audio: Callable[..., FeedbackAudio]) -> None:
     """French has every feedback phrase, whatever the database already holds (the test's
     transaction is rolled back)."""
     db.execute(delete(FeedbackAudio).where(FeedbackAudio.language == Language.FR))
     for code in FeedbackCode:
         make_feedback_audio(code, Language.FR)
+
+
+def created(response: Response) -> dict[str, Any]:
+    """The body of a 201 response; fails with the server's error otherwise."""
+    assert response.status_code == 201, response.text
+    body: dict[str, Any] = response.json()
+    return body
 
 
 def playable(response: Response, location: Location) -> list[tuple[Language, Difficulty]]:
@@ -114,10 +133,8 @@ def test_uploaded_mp3_makes_the_location_playable_in_the_coverage_report(
     teacher = make_user(role=UserRole.STAFF)  # any staff account may read the report
     assert playable(client.get(COVERAGE_URL, headers=auth_headers(teacher)), location) == []
 
-    response = upload(location.id, make_audio(3))
+    body = created(upload(location.id, make_audio(3)))
 
-    assert response.status_code == 201, response.text
-    body = response.json()
     assert set(body) == set(ClueRecordingOut.model_fields)  # no storage key
     assert body["is_primary"] is True  # the clue's first recording
     db.rollback()  # the route committed: this only undoes what was not
@@ -138,7 +155,7 @@ def test_a_later_recording_becomes_primary_only_when_asked(
     location = make_location()
 
     first, second, third = (
-        upload(location.id, make_audio(1), **form).json()
+        created(upload(location.id, make_audio(1), **form))
         for form in ({}, {}, {"make_primary": "true"})
     )
 
@@ -171,8 +188,9 @@ def test_rejected_file_stores_nothing(
     assert_nothing_stored(db, location, stored_media_dir)
 
 
-def test_teacher_without_content_rights_cannot_upload(
+def test_only_content_managers_can_upload(
     upload: Callable[..., Response],
+    assistant: User,
     make_user: Callable[..., User],
     make_location: Callable[..., Location],
     make_audio: Callable[..., bytes],
@@ -181,10 +199,13 @@ def test_teacher_without_content_rights_cannot_upload(
     db: Session,
 ) -> None:
     location = make_location()
+    data = make_audio(1)
+    teacher = make_user(role=UserRole.STAFF)  # a staff account without content rights
 
-    response = upload(location.id, make_audio(1), user=make_user(role=UserRole.STAFF))
+    for user in (teacher, assistant, make_user(role=UserRole.ADMIN)):
+        response = upload(location.id, data, user=user)
 
-    assert_error(response, 403, ErrorCode.FORBIDDEN_ROLE)
+        assert_error(response, 403, ErrorCode.FORBIDDEN_ROLE)
     assert_nothing_stored(db, location, stored_media_dir)
 
 
@@ -220,15 +241,12 @@ def test_upload_without_a_file_is_422_on_file(
 def test_tas_and_admins_cannot_read_coverage(
     client: TestClient,
     auth_headers: Callable[[User], dict[str, str]],
+    assistant: User,
     make_user: Callable[..., User],
-    make_class: Callable[..., Class],
-    make_class_staff: Callable[..., ClassStaff],
     make_location: Callable[..., Location],
     assert_error: Callable[..., None],
 ) -> None:
     location = make_location()
-    assistant = make_user()  # a student account, so no room numbers
-    make_class_staff(make_class(), assistant, role=ClassStaffRole.ASSISTANT)
 
     for user in (assistant, make_user(role=UserRole.ADMIN)):
         response = client.get(COVERAGE_URL, headers=auth_headers(user))

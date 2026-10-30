@@ -189,8 +189,8 @@ def upload_clue_audio(
 
     404 NOT_FOUND for an unknown location (deactivated ones can be edited); 413 FILE_TOO_LARGE
     over `MAX_MEDIA_FILE_MB`; 415 UNSUPPORTED_MEDIA_TYPE if it is not MP3 or M4A audio; 422
-    AUDIO_TOO_LONG over `MAX_AUDIO_SECONDS`, or VALIDATION_ERROR without a file. Needs content
-    rights: 403 FORBIDDEN_ROLE otherwise.
+    AUDIO_TOO_LONG over `MAX_AUDIO_SECONDS`, or VALIDATION_ERROR on `file` without a file or for
+    a recording under 5 ms. Needs content rights: 403 FORBIDDEN_ROLE otherwise.
     """
     recording = add_clue_recording(
         location_id, difficulty, language, file.file, user.id, db, make_primary=make_primary
