@@ -122,6 +122,7 @@ class PointsLedger(Base):
     __tablename__ = "points_ledger"
     __table_args__ = (
         UniqueConstraint("user_id", "source_type", "source_ref"),
+        Index("ix_points_ledger_class_created_at", "class_id", "created_at"),
         in_check("source_type", PointsSourceType, name="source_type"),
         ForeignKeyConstraint(
             ["class_id", "language"],
