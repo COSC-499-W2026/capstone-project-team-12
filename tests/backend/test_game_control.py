@@ -1,5 +1,6 @@
 """pause_game and resume_game (A8): the service rules. The lookup errors are checked for
-quit_game (A9) too; its own rules are in test_quit_game.py."""
+quit_game and reset_game (A9) too; their own rules are in test_quit_game.py and
+test_reset_game.py."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -11,7 +12,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.errors import AppError, ErrorCode
-from app.game.control import pause_game, quit_game, resume_game
+from app.game.control import pause_game, quit_game, reset_game, resume_game
 from app.game.sessions import session_idle_limit
 from app.models.accounts import User
 from app.models.enums import (
@@ -136,7 +137,7 @@ def test_resuming_an_active_game_changes_nothing(
 
 
 @pytest.mark.parametrize("fields", ENDED)
-@pytest.mark.parametrize("action", [pause_game, resume_game, quit_game])
+@pytest.mark.parametrize("action", [pause_game, resume_game, quit_game, reset_game])
 def test_a_finished_game_is_not_active(
     db: Session,
     make_game_session: Callable[..., GameSession],
@@ -154,7 +155,7 @@ def test_a_finished_game_is_not_active(
     assert (game.state, game.paused_at) == (fields["state"], None)
 
 
-@pytest.mark.parametrize("action", [pause_game, resume_game, quit_game])
+@pytest.mark.parametrize("action", [pause_game, resume_game, quit_game, reset_game])
 def test_another_students_game_or_an_unknown_id_is_not_found(
     db: Session,
     make_user: Callable[..., User],
