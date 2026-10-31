@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     gps_override_after_minutes: PositiveInt = 3  # or this long in Stage 1
     speed_anomaly_mps: PositiveInt = 10  # faster than this between pings is flagged
     ping_min_interval_seconds: PositiveInt = 2  # pings closer together get 429 RATE_LIMITED
+    arrival_ping_max_age_seconds: PositiveInt = 30  # confirm-arrival needs a ping this recent
     # "today" for day-based rules, e.g. carry-over
     app_timezone: str = "America/Vancouver"
 

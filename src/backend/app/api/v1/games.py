@@ -6,12 +6,13 @@ from typing import Annotated, Self, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, NonNegativeInt, model_validator
+from pydantic import BaseModel, Field, NonNegativeInt, PositiveInt, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
+from app.game.arrival import confirm_arrival
 from app.game.control import pause_game, quit_game, reset_game, resume_game
 from app.game.current_location import Stage, get_current_location
 from app.game.navigation import Ping, Trend, process_ping
@@ -20,6 +21,7 @@ from app.game.start import start_game
 from app.game.status import GameStatus, find_current_game, get_game
 from app.models.accounts import User
 from app.models.enums import (
+    ArrivalOverride,
     Difficulty,
     FeedbackCode,
     Language,
@@ -292,6 +294,52 @@ def navigation_ping(
         feedback=FeedbackResponse(code=outcome.feedback, audio_url=outcome.feedback_audio_url),
         gps_override_available_at=outcome.gps_override_available_at,
     )
+
+
+class ArrivalRequest(BaseModel):
+    # "gps_unavailable": "Continue without GPS", allowed from gps_override_available_at on
+    override_reason: ArrivalOverride | None = None
+    # the position the app is confirming; a different current position gives 409 STATE_CHANGED
+    position: PositiveInt | None = None
+
+
+class ArrivalResponse(CurrentLocationResponse):
+    # VERIFY_START, to play now (the same list shape as the photo response)
+    feedback: list[FeedbackResponse]
+
+
+@games_router.post(
+    "/{game_id}/navigation/confirm-arrival",
+    operation_id="confirmArrival",
+    response_model=ArrivalResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def navigation_confirm_arrival(
+    game_id: UUID,
+    request: ArrivalRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ArrivalResponse:
+    """Confirm arrival and start Stage 2, plus VERIFY_START.
+
+    No override: ping under 30 s and in the radius, else 409 STALE_POSITION or NOT_WITHIN_RADIUS
+    (`details` reason `gps_weak` if accuracy is over 50 m). `gps_unavailable` works from
+    `gps_override_available_at` (3 min, or 3 weak pings), else 409 GPS_OVERRIDE_NOT_ALLOWED.
+    Stage 2 repeats with no writes, even paused. 409 SESSION_NOT_ACTIVE if paused in Stage 1,
+    ended or expired; STATE_CHANGED for a stale `position`; INVALID_STAGE otherwise. A shuffle
+    keeps the position; the new row has no ping (409 STALE_POSITION). 404 for another student's
+    game or no recording. 403 FORBIDDEN_ROLE or ACCOUNT_DISABLED.
+    """
+    arrival = _play(
+        lambda: confirm_arrival(user.id, game_id, request.override_reason, request.position, db),
+        user,
+        db,
+    )
+    feedback = FeedbackResponse(code=arrival.feedback, audio_url=arrival.feedback_audio_url)
+    location = CurrentLocationResponse.model_validate(arrival.location, from_attributes=True)
+    return ArrivalResponse(**location.model_dump(), feedback=[feedback])
 
 
 class PausedGameResponse(GameStatusResponse):
