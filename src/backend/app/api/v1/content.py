@@ -1,5 +1,5 @@
-"""Content management (A20): locations, clue text and clue audio, the coverage report and the
-locations CSV import, for staff only.
+"""Content management (A20): locations, clue text and clue audio, the coverage report and the bulk
+imports, for staff only.
 
 Room numbers and accepted answers are the game's answers, so only staff accounts may read them:
 students, including students who are a class's TA, and admins get 403. Changes also need content
@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Form, UploadFile
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import can_manage_content, get_current_user, require_staff
+from app.content.audio_import import import_clue_audio, import_feedback_audio
 from app.content.clue_audio import add_clue_recording
 from app.content.coverage import coverage_report
 from app.content.location_import import import_locations
@@ -25,6 +26,7 @@ from app.content.locations import (
     set_clue_text,
 )
 from app.content.schemas import (
+    AudioImportReport,
     ClueOut,
     ClueRecordingOut,
     ClueText,
@@ -251,5 +253,71 @@ def post_location_import(
     """
     report = import_locations(file.file, db, dry_run)
     # a dry run's inserts were already undone; this ends the transaction, and the import's lock
+    db.commit()
+    return report
+
+
+@content_router.post(
+    "/import/clue-audio",
+    operation_id="importClueAudio",
+    summary="Import clue recordings from a zip",
+    dependencies=CONTENT_MANAGER,
+    response_model=AudioImportReport,
+    responses=error_responses(*ACCESS_ERRORS, HTTPStatus.UNSUPPORTED_MEDIA_TYPE),
+)
+def post_clue_audio_import(
+    file: UploadFile,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AudioImportReport:
+    """Add each valid recording in a zip (multipart `file`) as its clue's primary recording and
+    report every file by its path in the zip, imported or rejected with its reason; each list
+    keeps the zip's order. The valid files are imported even when others are rejected.
+
+    Files are named `{ROOM}_{difficulty}_{language}.mp3` (or `.m4a`), e.g. `SCI333_2_fr.mp3`: the
+    room number in capitals without a space. Only the file's own name counts, not its folders;
+    folders and hidden files (`.DS_Store`, `__MACOSX/`) are skipped. A file is rejected, and
+    nothing saved for it, if its name is not in this format, another file names the same clue, it
+    cannot be read from the zip, no location has the room number (deactivated ones count), or it
+    fails the checks of `uploadClueAudio` (its code then is FILE_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE
+    or AUDIO_TOO_LONG). Each file is re-encoded without its tags and stored under a random name.
+    The old primary recording is kept, as games in progress keep playing it, so importing the
+    same zip again adds a new primary recording to each clue.
+
+    415 UNSUPPORTED_MEDIA_TYPE if the upload is not a zip; 422 VALIDATION_ERROR on `file` without
+    a file or with more than `MAX_IMPORT_FILES` files (100 by default: one zip per language covers
+    a campus). Needs content rights: 403 FORBIDDEN_ROLE otherwise.
+    """
+    report = import_clue_audio(file.file, user.id, db)
+    db.commit()
+    return report
+
+
+@content_router.post(
+    "/import/feedback-audio",
+    operation_id="importFeedbackAudio",
+    summary="Import feedback phrases from a zip",
+    dependencies=CONTENT_MANAGER,
+    response_model=AudioImportReport,
+    responses=error_responses(*ACCESS_ERRORS, HTTPStatus.UNSUPPORTED_MEDIA_TYPE),
+)
+def post_feedback_audio_import(
+    file: UploadFile, db: Annotated[Session, Depends(get_db)]
+) -> AudioImportReport:
+    """Make each valid recording in a zip (multipart `file`) the feedback phrase it is named for
+    and report every file, imported or rejected with its reason. The valid files are imported
+    even when others are rejected. A language is only playable once it has all 13 phrases.
+
+    Files are named `{CODE}_{language}.mp3` (or `.m4a`), e.g. `NAV_START_fr.mp3`, CODE being a
+    feedback code. A file replaces the language's phrase for its code (clearing its transcript)
+    or adds it. Folders, hidden files, the report and the reasons a file is rejected are as in
+    `importClueAudio`, with an unknown code rejected by the name format. Every phrase of every
+    language (78) fits in one zip.
+
+    415 UNSUPPORTED_MEDIA_TYPE if the upload is not a zip; 422 VALIDATION_ERROR on `file` without
+    a file or with more than `MAX_IMPORT_FILES` files. Needs content rights: 403 FORBIDDEN_ROLE
+    otherwise.
+    """
+    report = import_feedback_audio(file.file, db)
     db.commit()
     return report
