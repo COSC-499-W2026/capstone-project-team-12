@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     gps_trend_interval_seconds: PositiveInt = 25  # compare with a reference about this old
     gps_trend_reset_seconds: PositiveInt = 60  # an older reference is reset, no trend that ping
     gps_dead_band_meters: PositiveInt = 10  # a smaller change counts as steady
+    gps_weak_accuracy_meters: PositiveInt = 50  # worse accuracy is a weak fix
+    gps_weak_pings_for_override: PositiveInt = 3  # weak pings in a row that allow the override
+    gps_override_after_minutes: PositiveInt = 3  # or this long in Stage 1
+    speed_anomaly_mps: PositiveInt = 10  # faster than this between pings is flagged
     # "today" for day-based rules, e.g. carry-over
     app_timezone: str = "America/Vancouver"
 
