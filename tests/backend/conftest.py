@@ -2,6 +2,8 @@
 
 import io
 import random
+import threading
+import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta, tzinfo
 from itertools import count
@@ -15,13 +17,13 @@ import pytest
 from fastapi.testclient import TestClient
 from httpx2 import Response
 from jwt import encode
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.content.clue_audio import UPLOAD_PROVIDER
 from app.db import DB_CONNECT_ARGS, get_db
-from app.errors import ErrorCode
+from app.errors import AppError, ErrorCode
 from app.main import create_app
 from app.models.accounts import ClassStaff, User
 from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
@@ -142,6 +144,57 @@ def split_media_url() -> Callable[[str], tuple[str, int, str]]:
         return key, int(query["expires"][0]), query["sig"][0]
 
     return split
+
+
+@pytest.fixture
+def run_together(test_engine: Engine) -> Callable[..., list[Any]]:
+    """Run jobs at the same moment on real Postgres, each in its own thread, session and
+    committed transaction (the savepoint `db` can't run two at once).
+
+    A job is a function of its session, or (function, delay) to start it `delay` s after the
+    jobs meet, so an earlier one takes its lock first. Each transaction stays open `hold` s
+    after its job, so the locks overlap, then commits. Returns each job's result, or the
+    AppError it raised, in order; any other exception is raised again. A stuck job fails.
+    """
+
+    def run(
+        *jobs: Callable[[Session], Any] | tuple[Callable[[Session], Any], float], hold: float = 0
+    ) -> list[Any]:
+        timed = [job if isinstance(job, tuple) else (job, 0.0) for job in jobs]
+        start = threading.Barrier(len(timed), timeout=10)
+        results: list[Any] = [None] * len(timed)
+        errors: list[BaseException] = []  # a thread's exception is otherwise only printed
+
+        def one(index: int, job: Callable[[Session], Any], delay: float) -> None:
+            try:
+                with Session(test_engine) as session:
+                    # a stuck lock fails the job instead of hanging pytest
+                    session.execute(text("SET lock_timeout = '10s'"))
+                    start.wait()
+                    time.sleep(delay)
+                    try:
+                        results[index] = job(session)
+                    except AppError as error:
+                        results[index] = error
+                    time.sleep(hold)
+                    session.commit()
+            except BaseException as error:
+                errors.append(error)
+
+        threads = [
+            threading.Thread(target=one, args=(index, job, delay))
+            for index, (job, delay) in enumerate(timed)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+        assert not any(thread.is_alive() for thread in threads), "a job is stuck"
+        if errors:
+            raise errors[0]
+        return results
+
+    return run
 
 
 @pytest.fixture

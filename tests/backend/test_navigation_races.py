@@ -1,11 +1,9 @@
 """Concurrent navigation on real Postgres (A19). Each action has its own session.
 
-The threads meet on a barrier, then sleep inside the open transaction so the row locks overlap.
-An ordered pair gives the second action a head start wait, so the first one holds the lock.
+The jobs start together (run_together in conftest) and keep their transactions open for HOLD s,
+so the row locks overlap. A job given HOLD as its delay starts after the first one holds the lock.
 """
 
-import threading
-import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -98,42 +96,6 @@ def _playing(engine: Engine, rows: list[dict[str, Any]]) -> Any:
         _cleanup(engine, user_id)
 
 
-def _race(engine: Engine, jobs: list[tuple[Callable[[Session], Any], float]]) -> list[Any]:
-    """Run one job per thread. The float is how long to wait after the barrier, before the call."""
-    start = threading.Barrier(len(jobs), timeout=10)
-    results: list[Any] = [None] * len(jobs)
-    errors: list[BaseException] = []
-
-    def run(index: int, fn: Callable[[Session], Any], delay: float) -> None:
-        try:
-            with Session(engine) as session:
-                session.execute(text("SET lock_timeout = '10s'"))
-                start.wait()
-                if delay:
-                    time.sleep(delay)
-                try:
-                    results[index] = fn(session)
-                except AppError as error:
-                    results[index] = error
-                time.sleep(HOLD)
-                session.commit()
-        except BaseException as error:  # a thread's exception is otherwise only printed
-            errors.append(error)
-
-    threads = [
-        threading.Thread(target=run, args=(index, fn, delay))
-        for index, (fn, delay) in enumerate(jobs)
-    ]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=15)
-    assert not any(thread.is_alive() for thread in threads), "a request is stuck"
-    if errors:
-        raise errors[0]
-    return results
-
-
 def _navigating(**fields: Any) -> dict[str, Any]:
     now = datetime.now(UTC)
     values: dict[str, Any] = {
@@ -175,13 +137,15 @@ def _body(arrival: Arrival) -> tuple[Any, ...]:
     )
 
 
-def test_two_confirms_agree_and_record_one_override(test_engine: Engine) -> None:
+def test_two_confirms_agree_and_record_one_override(
+    test_engine: Engine, run_together: Callable[..., list[Any]]
+) -> None:
     with _playing(test_engine, [_navigating()]) as (student_id, game_id):
 
         def confirm(session: Session) -> Arrival:
             return confirm_arrival(student_id, game_id, GPS, None, session)
 
-        first, second = _race(test_engine, [(confirm, 0), (confirm, 0)])
+        first, second = run_together(confirm, confirm, hold=HOLD)
         assert isinstance(first, Arrival) and isinstance(second, Arrival)
         assert _body(first) == _body(second)
         with Session(test_engine) as session:
@@ -189,7 +153,9 @@ def test_two_confirms_agree_and_record_one_override(test_engine: Engine) -> None
             assert (row.status, row.flags) == (LocationStatus.VERIFYING, ["gps_override"])
 
 
-def test_a_ping_after_confirm_is_the_wrong_stage(test_engine: Engine) -> None:
+def test_a_ping_after_confirm_is_the_wrong_stage(
+    test_engine: Engine, run_together: Callable[..., list[Any]]
+) -> None:
     with _playing(test_engine, [_navigating()]) as (student_id, game_id):
 
         def confirm(session: Session) -> Arrival:
@@ -198,27 +164,31 @@ def test_a_ping_after_confirm_is_the_wrong_stage(test_engine: Engine) -> None:
         def ping(session: Session) -> PingOutcome:
             return process_ping(student_id, game_id, Ping(LAT, LNG, 5), session)
 
-        confirmed, pinged = _race(test_engine, [(confirm, 0), (ping, HOLD)])
+        confirmed, pinged = run_together(confirm, (ping, HOLD), hold=HOLD)
 
     assert isinstance(confirmed, Arrival)
     assert isinstance(pinged, AppError)
     assert pinged.code == ErrorCode.INVALID_STAGE
 
 
-def test_two_pings_inside_two_seconds_one_is_rate_limited(test_engine: Engine) -> None:
+def test_two_pings_inside_two_seconds_one_is_rate_limited(
+    test_engine: Engine, run_together: Callable[..., list[Any]]
+) -> None:
     with _playing(test_engine, [_navigating(last_ping_at=None)]) as (student_id, game_id):
 
         def ping(session: Session) -> PingOutcome:
             return process_ping(student_id, game_id, Ping(LAT, LNG, 5), session)
 
-        results = _race(test_engine, [(ping, 0), (ping, 0)])
+        results = run_together(ping, ping, hold=HOLD)
 
     assert sum(isinstance(result, PingOutcome) for result in results) == 1
     limited = [result for result in results if isinstance(result, AppError)]
     assert [result.code for result in limited] == [ErrorCode.RATE_LIMITED]
 
 
-def test_confirm_after_pause_is_not_active(test_engine: Engine) -> None:
+def test_confirm_after_pause_is_not_active(
+    test_engine: Engine, run_together: Callable[..., list[Any]]
+) -> None:
     with _playing(test_engine, [_navigating()]) as (student_id, game_id):
 
         def pause(session: Session) -> Any:
@@ -227,14 +197,16 @@ def test_confirm_after_pause_is_not_active(test_engine: Engine) -> None:
         def confirm(session: Session) -> Arrival:
             return confirm_arrival(student_id, game_id, None, None, session)
 
-        _paused, confirmed = _race(test_engine, [(pause, 0), (confirm, HOLD)])
+        _paused, confirmed = run_together(pause, (confirm, HOLD), hold=HOLD)
 
     assert isinstance(confirmed, AppError)
     assert confirmed.code == ErrorCode.SESSION_NOT_ACTIVE
 
 
 @pytest.mark.parametrize("follow", ["confirm", "ping"])
-def test_quit_then_a_play_action_is_not_active(test_engine: Engine, follow: str) -> None:
+def test_quit_then_a_play_action_is_not_active(
+    test_engine: Engine, run_together: Callable[..., list[Any]], follow: str
+) -> None:
     with _playing(test_engine, [_navigating()]) as (student_id, game_id):
 
         def quit(session: Session) -> Any:
@@ -247,13 +219,15 @@ def test_quit_then_a_play_action_is_not_active(test_engine: Engine, follow: str)
             return process_ping(student_id, game_id, Ping(LAT, LNG, 5), session)
 
         follow_up = confirm if follow == "confirm" else ping
-        _ended, followed = _race(test_engine, [(quit, 0), (follow_up, HOLD)])
+        _ended, followed = run_together(quit, (follow_up, HOLD), hold=HOLD)
 
     assert isinstance(followed, AppError)
     assert followed.code == ErrorCode.SESSION_NOT_ACTIVE
 
 
-def test_a_ping_after_a_shuffle_starts_the_new_row(test_engine: Engine) -> None:
+def test_a_ping_after_a_shuffle_starts_the_new_row(
+    test_engine: Engine, run_together: Callable[..., list[Any]]
+) -> None:
     with _playing(test_engine, [_navigating(), {"status": LocationStatus.PENDING}]) as ids:
         student_id, game_id = ids
 
@@ -263,14 +237,16 @@ def test_a_ping_after_a_shuffle_starts_the_new_row(test_engine: Engine) -> None:
         def ping(session: Session) -> PingOutcome:
             return process_ping(student_id, game_id, Ping(FAR_LAT, LNG, 5), session)
 
-        _shuffled, pinged = _race(test_engine, [(shuffle, 0), (ping, HOLD)])
+        _shuffled, pinged = run_together(shuffle, (ping, HOLD), hold=HOLD)
         assert isinstance(pinged, PingOutcome)
         assert pinged.feedback == FeedbackCode.NAV_START
         with Session(test_engine) as session:
             assert _live(session, game_id, 1).last_feedback_code == FeedbackCode.NAV_START
 
 
-def test_confirm_after_a_shuffle_is_a_stale_position(test_engine: Engine) -> None:
+def test_confirm_after_a_shuffle_is_a_stale_position(
+    test_engine: Engine, run_together: Callable[..., list[Any]]
+) -> None:
     with _playing(test_engine, [_navigating(), {"status": LocationStatus.PENDING}]) as ids:
         student_id, game_id = ids
 
@@ -280,13 +256,15 @@ def test_confirm_after_a_shuffle_is_a_stale_position(test_engine: Engine) -> Non
         def confirm(session: Session) -> Arrival:
             return confirm_arrival(student_id, game_id, None, 1, session)
 
-        _shuffled, confirmed = _race(test_engine, [(shuffle, 0), (confirm, HOLD)])
+        _shuffled, confirmed = run_together(shuffle, (confirm, HOLD), hold=HOLD)
 
     assert isinstance(confirmed, AppError)
     assert confirmed.code == ErrorCode.STALE_POSITION
 
 
-def test_two_current_location_calls_skip_invalid_rows_once(test_engine: Engine) -> None:
+def test_two_current_location_calls_skip_invalid_rows_once(
+    test_engine: Engine, run_together: Callable[..., list[Any]]
+) -> None:
     with Session(test_engine) as session:
         active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, session))
     rows = [
@@ -299,7 +277,7 @@ def test_two_current_location_calls_skip_invalid_rows_once(test_engine: Engine) 
         def current(session: Session) -> CurrentLocation | Any:
             return get_current_location(student_id, game_id, session)
 
-        first, second = _race(test_engine, [(current, 0), (current, 0)])
+        first, second = run_together(current, current, hold=HOLD)
         assert isinstance(first, CurrentLocation) and isinstance(second, CurrentLocation)
         assert (first.position, second.position) == (3, 3)
         with Session(test_engine) as session:
