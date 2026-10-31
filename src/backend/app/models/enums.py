@@ -23,6 +23,14 @@ class PointsSourceType(StrEnum):
     STREAK_MILESTONE = "streak_milestone"
 
 
+class AchievementCategory(StrEnum):
+    """Categories of unlockable achievements."""
+
+    LEARNING = "learning"
+    STREAK = "streak"
+    DIFFICULTY = "difficulty"
+
+
 class Difficulty(IntEnum):
     BASIC = 1  # numbers only
     ADVANCING = 2  # numbers and a simple description
