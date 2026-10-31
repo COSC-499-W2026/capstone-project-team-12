@@ -22,7 +22,7 @@ import io
 import math
 from dataclasses import dataclass, field
 from fractions import Fraction
-from typing import BinaryIO, cast
+from typing import IO, BinaryIO, cast
 
 import av
 from av.audio.stream import AudioStream
@@ -76,11 +76,17 @@ def check_audio(upload: BinaryIO) -> CheckedAudio:
     """The recording read from `upload` re-encoded without its metadata, or AppError:
     413 FILE_TOO_LARGE, 415 UNSUPPORTED_MEDIA_TYPE (not MP3 or M4A audio, or unreadable) or
     422 AUDIO_TOO_LONG. Reads one byte more than the size limit at most."""
-    max_mb = get_settings().max_media_file_mb
-    data = read_upload(upload, max_mb * BYTES_PER_MB, f"Audio files can be at most {max_mb} MB")
+    data = read_audio_file(upload)
     audio_format = _detect_format(data)
     encoded, duration = _reencode(data, audio_format)
     return CheckedAudio(encoded, audio_format.suffix, duration, math.ceil(len(encoded) / 1024))
+
+
+def read_audio_file(upload: IO[bytes]) -> bytes:
+    """The bytes of an audio file (an upload, or a file in an uploaded zip), or 413
+    FILE_TOO_LARGE over `max_media_file_mb`. Reads one byte more than the limit at most."""
+    max_mb = get_settings().max_media_file_mb
+    return read_upload(upload, max_mb * BYTES_PER_MB, f"Audio files can be at most {max_mb} MB")
 
 
 def _unsupported(message: str = "Upload an MP3 or M4A recording") -> AppError:
