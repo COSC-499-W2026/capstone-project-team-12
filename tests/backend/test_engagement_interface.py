@@ -1,4 +1,4 @@
-"""Tests for the public engagement interface (Issues #11 and #15)."""
+"""Tests for the public engagement interface (Issues #11, #15, and #86)."""
 
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError
@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.engagement.interface import (
@@ -19,8 +20,13 @@ from app.engagement.interface import (
 )
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
-from app.models.engagement import Class, ClassEnrollment
-from app.models.enums import EnrollmentEndReason, Language, LocationStatus
+from app.models.engagement import (
+    Class,
+    ClassEnrollment,
+    PointsLedger,
+    UserLanguageStats,
+)
+from app.models.enums import EnrollmentEndReason, Language, LocationStatus, SkipReason
 from app.models.game import GameSession, SessionLocation
 
 
@@ -68,6 +74,7 @@ def test_inactive_enrolment(
     school_class = make_class()
     enrollment = make_enrollment(student, school_class)
 
+    db.refresh(enrollment)
     enrollment.is_active = False
     enrollment.end_reason = EnrollmentEndReason.LEFT
     enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
@@ -174,13 +181,17 @@ def test_require_active_enrolment_errors(
     expected: ErrorCode,
 ) -> None:
     student, school_class = make_user(), make_class()
+
     if ended_by is not None:
         enrollment = make_enrollment(student, school_class)
+        db.refresh(enrollment)
         enrollment.is_active = False
         enrollment.end_reason = ended_by
-        enrollment.left_at = datetime.now(UTC)
+        enrollment.left_at = max(datetime.now(UTC), enrollment.joined_at)
+
     if archived:
         school_class.archived_at = datetime.now(UTC)
+
     db.flush()
 
     with pytest.raises(AppError) as error:
@@ -235,13 +246,12 @@ def test_engagement_result_is_frozen() -> None:
         result.total_points = 100  # type: ignore[misc]
 
 
-def test_apply_location_result_returns_placeholder(
+def test_apply_location_result_awards_completed_location(
     db: Session,
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
 ) -> None:
-    """Verify the stub response using a completed location owned by the student."""
     student = make_user()
     game = make_game_session(student=student)
     location = make_session_location(
@@ -253,20 +263,39 @@ def test_apply_location_result_returns_placeholder(
     )
 
     result = apply_location_result(
-        session_location_id=location.id,
-        student_id=student.id,
+        location.id,
+        student.id,
+        completed=True,
+        target_language=game.target_language,
+        class_id=game.class_id,
         db=db,
     )
 
     assert result == EngagementResult(
-        location_points_awarded=0,
-        total_points=0,
+        location_points_awarded=100,
+        total_points=100,
         level=1,
         level_up=False,
         streak_days=0,
         challenges_completed=(),
         achievements_unlocked=(),
     )
+
+    award = db.scalar(
+        select(PointsLedger).where(
+            PointsLedger.user_id == student.id,
+            PointsLedger.source_type == "location",
+            PointsLedger.source_ref == str(location.id),
+        )
+    )
+    assert award is not None
+    assert award.points == 100
+    assert award.language == game.target_language
+    assert award.class_id == game.class_id
+
+    stats = db.get(UserLanguageStats, (student.id, game.target_language))
+    assert stats is not None
+    assert stats.total_points == 100
 
 
 def test_apply_location_result_does_not_manage_transaction(
@@ -276,7 +305,6 @@ def test_apply_location_result_does_not_manage_transaction(
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
 ) -> None:
-    """Ensure the interface stub does not commit or roll back."""
     student = make_user()
     game = make_game_session(student=student)
     location = make_session_location(
@@ -288,10 +316,240 @@ def test_apply_location_result_does_not_manage_transaction(
     )
 
     apply_location_result(
-        session_location_id=location.id,
-        student_id=student.id,
+        location.id,
+        student.id,
+        completed=True,
+        target_language=game.target_language,
+        class_id=game.class_id,
         db=db,
     )
 
     assert "commit" not in transaction_calls
     assert "rollback" not in transaction_calls
+
+
+def test_completed_location_awarded_only_once(
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    student = make_user()
+    game = make_game_session(student=student)
+    location = make_session_location(
+        game,
+        position=1,
+        status=LocationStatus.COMPLETED,
+        points_awarded=100,
+        completed_at=datetime.now(UTC),
+    )
+
+    first = apply_location_result(
+        location.id,
+        student.id,
+        completed=True,
+        target_language=game.target_language,
+        class_id=game.class_id,
+        db=db,
+    )
+    second = apply_location_result(
+        location.id,
+        student.id,
+        completed=True,
+        target_language=game.target_language,
+        class_id=game.class_id,
+        db=db,
+    )
+
+    assert first.location_points_awarded == 100
+    assert second.location_points_awarded == 0
+    assert second.total_points == 100
+
+    awards = db.scalars(
+        select(PointsLedger).where(
+            PointsLedger.user_id == student.id,
+            PointsLedger.source_type == "location",
+        )
+    ).all()
+    assert len(awards) == 1
+
+
+@pytest.mark.parametrize(
+    "status",
+    [LocationStatus.FAILED, LocationStatus.SKIPPED],
+)
+def test_unsuccessful_location_awards_zero(
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    status: LocationStatus,
+) -> None:
+    student = make_user()
+    game = make_game_session(student=student)
+    location = make_session_location(game, position=1)
+
+    location.status = status
+    location.points_awarded = 0
+    if status == LocationStatus.SKIPPED:
+        location.skip_reason = SkipReason.SESSION_ENDED
+    db.flush()
+
+    result = apply_location_result(
+        location.id,
+        student.id,
+        completed=False,
+        target_language=game.target_language,
+        class_id=game.class_id,
+        db=db,
+    )
+
+    assert result.location_points_awarded == 0
+    assert result.total_points == 0
+    assert result.level == 1
+    assert db.get(UserLanguageStats, (student.id, game.target_language)) is None
+
+
+@pytest.mark.parametrize(
+    ("starting_points", "expected_level", "expected_level_up"),
+    [
+        (399, 1, False),
+        (400, 2, True),
+        (1399, 2, False),
+        (1400, 3, True),
+        (2899, 3, False),
+        (2900, 4, True),
+        (4899, 4, False),
+        (4900, 5, True),
+    ],
+)
+def test_level_thresholds(
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    starting_points: int,
+    expected_level: int,
+    expected_level_up: bool,
+) -> None:
+    student = make_user()
+    game = make_game_session(student=student)
+
+    db.add(
+        UserLanguageStats(
+            user_id=student.id,
+            language=game.target_language,
+            total_points=starting_points,
+        )
+    )
+    db.flush()
+
+    location = make_session_location(
+        game,
+        position=1,
+        status=LocationStatus.COMPLETED,
+        points_awarded=100,
+        completed_at=datetime.now(UTC),
+    )
+
+    result = apply_location_result(
+        location.id,
+        student.id,
+        completed=True,
+        target_language=game.target_language,
+        class_id=game.class_id,
+        db=db,
+    )
+
+    assert result.total_points == starting_points + 100
+    assert result.level == expected_level
+    assert result.level_up is expected_level_up
+
+
+def test_location_award_preserves_other_language_totals(
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    student = make_user()
+    game = make_game_session(student=student, target_language=Language.JA)
+
+    db.add(
+        UserLanguageStats(
+            user_id=student.id,
+            language=Language.FR,
+            total_points=500,
+        )
+    )
+    db.flush()
+
+    location = make_session_location(
+        game,
+        position=1,
+        status=LocationStatus.COMPLETED,
+        points_awarded=100,
+        completed_at=datetime.now(UTC),
+    )
+
+    result = apply_location_result(
+        location.id,
+        student.id,
+        completed=True,
+        target_language=game.target_language,
+        class_id=game.class_id,
+        db=db,
+    )
+
+    japanese = db.get(UserLanguageStats, (student.id, Language.JA))
+    french = db.get(UserLanguageStats, (student.id, Language.FR))
+
+    assert result.total_points == 100
+    assert japanese is not None and japanese.total_points == 100
+    assert french is not None and french.total_points == 500
+
+
+def test_completed_classroom_location_records_class_id(
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    student = make_user()
+    school_class = make_class(target_language=Language.JA)
+    game = make_game_session(
+        student=student,
+        class_id=school_class.id,
+        target_language=Language.JA,
+    )
+    location = make_session_location(
+        game,
+        position=1,
+        status=LocationStatus.COMPLETED,
+        points_awarded=100,
+        completed_at=datetime.now(UTC),
+    )
+
+    result = apply_location_result(
+        location.id,
+        student.id,
+        completed=True,
+        target_language=game.target_language,
+        class_id=game.class_id,
+        db=db,
+    )
+
+    award = db.scalar(
+        select(PointsLedger).where(
+            PointsLedger.user_id == student.id,
+            PointsLedger.source_type == "location",
+            PointsLedger.source_ref == str(location.id),
+        )
+    )
+
+    assert result.location_points_awarded == 100
+    assert award is not None
+    assert award.class_id == school_class.id
+    assert award.language == Language.JA
+    assert award.points == 100
