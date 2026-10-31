@@ -229,7 +229,7 @@ class RejectedFile(BaseModel):
 
 
 class AudioImportReport(BaseModel):
-    """Every file of an audio zip, in the zip's order, imported or rejected."""
+    """Every file of an audio zip, imported or rejected; each list in the zip's order."""
 
     imported: list[ImportedFile] = Field(default_factory=list)
     rejected: list[RejectedFile] = Field(default_factory=list)

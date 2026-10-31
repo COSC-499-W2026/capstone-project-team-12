@@ -1,11 +1,13 @@
 import io
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.dml import Insert
 from test_clue_audio_import import MB, zip_of
 
 from app.config import get_settings
@@ -173,11 +175,14 @@ def test_file_is_deleted_when_its_row_cannot_be_saved(
     make_audio: Callable[..., bytes],
     import_zip: Callable[[bytes], AudioImportReport],
 ) -> None:
-    def fail() -> None:
-        if db.new or db.dirty:  # not the flush before a query
-            raise RuntimeError("cannot save")
+    real_execute = db.execute
 
-    monkeypatch.setattr(db, "flush", fail)
+    def fail_upsert(statement: Any, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(statement, Insert):  # the upsert, the only insert
+            raise RuntimeError("cannot save")
+        return real_execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db, "execute", fail_upsert)
 
     with pytest.raises(RuntimeError):
         import_zip(zip_of({"NAV_START_fr.mp3": make_audio(3)}))
@@ -185,15 +190,14 @@ def test_file_is_deleted_when_its_row_cannot_be_saved(
     assert not list(stored_media_dir.iterdir())
 
 
-def test_import_flushes_but_never_commits(
+def test_import_leaves_the_transaction_to_the_caller(
     db: Session,
     make_audio: Callable[..., bytes],
     import_zip: Callable[[bytes], AudioImportReport],
-    transaction_calls: list[str],
 ) -> None:
+    # not transaction_calls: it also counts releasing a savepoint as a commit
     import_zip(zip_of({"NAV_START_fr.mp3": make_audio(3), "bad.mp3": make_audio(3)}))
 
-    assert not (db.new or db.dirty)
-    assert "flush" in transaction_calls
-    assert "commit" not in transaction_calls
-    assert "rollback" not in transaction_calls
+    assert set(phrases(db)) == {("NAV_START", "fr")}  # written and not rolled back
+    db.rollback()
+    assert not phrases(db)  # not committed

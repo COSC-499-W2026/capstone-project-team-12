@@ -3,6 +3,7 @@ import zipfile
 import zlib
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 from sqlalchemy import select
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.content import audio_import
 from app.content.audio_import import import_clue_audio
+from app.content.locations import get_or_create_clue
 from app.content.schemas import AudioImportReport
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
@@ -368,19 +370,99 @@ def test_error_after_the_file_is_read_is_not_reported_as_unreadable(
         import_zip(zip_of({file_name(make_location()): make_audio(3)}))
 
 
-def test_import_flushes_but_never_commits(
+def test_import_leaves_the_transaction_to_the_caller(
     db: Session,
     make_location: Callable[..., Location],
     make_audio: Callable[..., bytes],
     import_zip: Callable[[bytes], AudioImportReport],
-    transaction_calls: list[str],
 ) -> None:
+    # not transaction_calls: it also counts releasing a savepoint as a commit
     location = make_location()
+    location_id = location.id
     files = {file_name(location): make_audio(3), "bad.mp3": make_audio(3)}
 
     import_zip(zip_of(files))
 
-    assert not (db.new or db.dirty)
-    assert "flush" in transaction_calls
-    assert "commit" not in transaction_calls
-    assert "rollback" not in transaction_calls
+    assert recordings(location, db) == [(2, "fr", True)]  # written and not rolled back
+    db.rollback()
+    assert db.scalars(select(Clue).filter_by(location_id=location_id)).first() is None
+
+
+def spy_on_recordings(
+    monkeypatch: pytest.MonkeyPatch, record: Callable[..., None]
+) -> list[tuple[int, str]]:
+    """The (difficulty, language) of each add_clue_recording call, in order; `record` runs in
+    place of the real function."""
+    calls: list[tuple[int, str]] = []
+
+    def spy(location_id: Any, difficulty: int, language: str, *args: Any, **kwargs: Any) -> None:
+        calls.append((difficulty, language))
+        record(location_id, difficulty, language, *args, **kwargs)
+
+    monkeypatch.setattr(audio_import, "add_clue_recording", spy)
+    return calls
+
+
+def test_files_are_imported_in_name_order_and_reported_in_zip_order(
+    monkeypatch: pytest.MonkeyPatch,
+    make_location: Callable[..., Location],
+    make_audio: Callable[..., bytes],
+    import_zip: Callable[[bytes], AudioImportReport],
+) -> None:
+    location = make_location()
+    names = [file_name(location, 3, "ja"), file_name(location, 1, "ja"), file_name(location)]
+    names += ["bad.mp3", "ZZZ9999_1_ja.mp3"]  # rejected: after and before by name
+    calls = spy_on_recordings(monkeypatch, audio_import.add_clue_recording)
+
+    report = import_zip(zip_of({name: make_audio(1) for name in names}))
+
+    # the same order in every import, so two imports cannot lock each other's clues crosswise
+    assert calls == [(1, "ja"), (2, "fr"), (3, "ja")]
+    assert [imported.file for imported in report.imported] == names[:3]
+    assert [rejected.file for rejected in report.rejected] == names[3:]
+
+
+def test_rejected_file_leaves_nothing_in_the_database(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    make_location: Callable[..., Location],
+    make_audio: Callable[..., bytes],
+    import_zip: Callable[[bytes], AudioImportReport],
+) -> None:
+    location = make_location()
+
+    def write_then_reject(
+        location_id: Any, difficulty: Any, language: Any, *_: Any, **__: Any
+    ) -> None:
+        get_or_create_clue(location_id, difficulty, language, db)
+        raise AppError(ErrorCode.UNSUPPORTED_MEDIA_TYPE, "rejected after writing")
+
+    spy_on_recordings(monkeypatch, write_then_reject)
+
+    report = import_zip(zip_of({file_name(location): make_audio(1)}))
+
+    assert [rejected.reason for rejected in report.rejected] == ["rejected after writing"]
+    assert not recordings(location, db)
+    assert db.scalars(select(Clue).filter_by(location_id=location.id)).first() is None
+
+
+def test_file_is_read_no_further_than_the_size_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    make_location: Callable[..., Location],
+    import_zip: Callable[[bytes], AudioImportReport],
+) -> None:
+    real_read = zipfile.ZipExtFile.read
+    read: list[int] = []
+
+    def spy(self: zipfile.ZipExtFile, n: int | None = -1) -> bytes:
+        data = real_read(self, n)
+        read.append(len(data))
+        return data
+
+    monkeypatch.setattr(zipfile.ZipExtFile, "read", spy)
+
+    # 20 MB that compresses to a few KB, as a zip bomb's would
+    report = import_zip(zip_of({file_name(make_location()): bytes(20 * MB)}))
+
+    assert [rejected.code for rejected in report.rejected] == [ErrorCode.FILE_TOO_LARGE]
+    assert sum(read) == get_settings().max_media_file_mb * MB + 1

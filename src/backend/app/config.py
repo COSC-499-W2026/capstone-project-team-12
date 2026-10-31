@@ -41,9 +41,11 @@ class Settings(BaseSettings):
     # proposed, not in the spec: size of one locations CSV. 1000 rows are about 35 KB; parsing
     # holds about 23 times the file in memory at worst (one row of commas)
     max_import_file_kb: PositiveInt = 512
-    # proposed too: files in one audio zip; every clue of 30 locations is 540, and each file is
-    # re-encoded (about 0.15 s for a 20 s clip), so a full zip takes a minute or two
-    max_import_files: PositiveInt = 600
+    # proposed too: files in one audio zip. One import is one transaction that locks each clue it
+    # touches until it commits, and each file is re-encoded (0.08 s for a 10 s clip, 0.41 s for
+    # 60 s), so 100 files take under 45 s, inside a 60 s proxy timeout: a zip per language (90
+    # clues for 30 locations), and every feedback phrase (78) in one
+    max_import_files: PositiveInt = 100
     audio_service_type: AudioServiceType = "uploaded"
     gps_radius_meters: PositiveInt = 30  # default for a new location; each location stores its own
     # game rules from the spec (Configuration). The services check these upper limits;

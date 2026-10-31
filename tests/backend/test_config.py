@@ -58,8 +58,8 @@ def test_import_limits_default_to_1000_rows_and_512_kb(monkeypatch: pytest.Monke
     assert (settings.max_import_rows, settings.max_import_file_kb) == (50, 64)
 
 
-def test_import_file_limit_defaults_to_600(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert Settings(_env_file=None).max_import_files == 600
+def test_import_file_limit_defaults_to_100(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert Settings(_env_file=None).max_import_files == 100
     monkeypatch.setenv("MAX_IMPORT_FILES", "50")
     assert Settings(_env_file=None).max_import_files == 50
 
