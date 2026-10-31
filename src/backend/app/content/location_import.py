@@ -9,9 +9,12 @@ they still need the client's confirmation.
 
 Every row is checked as a location created through the API, and the valid rows are imported
 even when others are rejected. A room number already in use, by an earlier row or by an inactive
-location, is rejected: a deactivated location is reactivated (`is_active`), not imported again.
+location, is rejected; for a deactivated location the reason says to reactivate it instead.
 A problem with the file itself (not UTF-8 CSV, wrong header) rejects the whole file; that
 includes a quoting mistake, because after one the rows can no longer be told apart.
+
+Imports run one at a time (a lock held until the caller's transaction ends): two inserting the
+same room numbers in different orders would each wait for the other's row, a deadlock.
 
 A dry run makes the same inserts in a savepoint of its own and rolls back only that savepoint,
 also when a row raises, so its preview rejects exactly the rows the import would and the
@@ -27,6 +30,7 @@ from typing import Annotated
 
 from pydantic import BeforeValidator, Field, ValidationError
 from pydantic_core import ErrorDetails
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.content.locations import create_location, invalid_field
@@ -42,6 +46,9 @@ from app.errors import AppError, ErrorCode
 COLUMNS = ("name", "building_name", "floor_number", "room_number", "entrances", "gps_radius_meters")
 OPTIONAL_COLUMNS = frozenset({"floor_number", "gps_radius_meters"})
 REQUIRED_COLUMNS = frozenset(COLUMNS) - OPTIONAL_COLUMNS
+# makes imports wait for each other; held until the transaction ends (see the module docstring)
+IMPORT_LOCK_KEY = func.hashtext("content.location_import")
+IMPORT_LOCK = select(func.pg_advisory_xact_lock(IMPORT_LOCK_KEY))
 
 
 def _entrance_points(cell: str) -> list[dict[str, str]]:
@@ -67,6 +74,7 @@ def import_locations(csv_data: bytes, db: Session, dry_run: bool = False) -> Loc
     reason; VALIDATION_ERROR on `file` if the whole file is refused (see above)."""
     header, rows = _read_csv(csv_data)
     report = LocationImportReport(dry_run=dry_run)
+    db.execute(IMPORT_LOCK)  # before the savepoint, so rolling a dry run back keeps it
     preview = db.begin_nested() if dry_run else None
     try:
         for row, cells in rows:
@@ -149,7 +157,7 @@ def _import_row(
     except ValidationError as error:
         reason = "; ".join(_problem(problem) for problem in error.errors())
         report.rejected.append(RejectedRow(row=row, code=ErrorCode.VALIDATION_ERROR, reason=reason))
-    except AppError as error:  # the cell count, or a room number another location has
+    except AppError as error:  # the cell count, or a room number already in use
         report.rejected.append(RejectedRow(row=row, code=error.code, reason=error.message))
     else:
         report.imported.append(ImportedRow(row=row, room_number=location.room_number))

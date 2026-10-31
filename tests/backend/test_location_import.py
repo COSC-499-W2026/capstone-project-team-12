@@ -1,12 +1,12 @@
 from collections.abc import Callable
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import Engine, func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.content import location_import
-from app.content.location_import import import_locations
+from app.content.location_import import IMPORT_LOCK_KEY, import_locations
 from app.content.locations import create_location
 from app.content.schemas import ImportedRow, LocationFields, LocationOut
 from app.errors import AppError, ErrorCode
@@ -103,6 +103,7 @@ def test_stray_semicolons_in_entrances_are_ignored(entrances: str, db: Session) 
         ('Lab,Sci,,QZX 902,";",', "entrances: List should have at least 1 item"),
         ("Lab,Sci,,QZX 902", "entrances: Field required"),
         (' ,Sci,,QZX 902,"49.9,-119.3",', "name: Field required"),
+        (' ,Sci,,QZX 902,"91,-119.3",', "name: Field required; entrances.1.lat: Input should"),
         ('Lab,Sci,1st,QZX 902,"49.9,-119.3",', "floor_number: Input should be a valid integer"),
         ('Lab,Sci,,QZX 902,"49.9,-119.3",0', "gps_radius_meters: Input should be greater than 0"),
         (
@@ -131,7 +132,8 @@ def test_room_number_already_in_use_is_reported(
     dry_run: bool, db: Session, make_location: Callable[..., Location]
 ) -> None:
     make_location(room_number="QZX 902", accepted_answers=["QZX902"], is_active=False)
-    data = csv_file(row("QZX 901"), row("qzx-901"), row("QZX 902"))
+    make_location(room_number="QZX 903", accepted_answers=["QZX903"])
+    data = csv_file(row("QZX 901"), row("qzx-901"), row("QZX 902"), row("QZX 903"))
 
     report = import_locations(data, db, dry_run)
 
@@ -144,6 +146,7 @@ def test_room_number_already_in_use_is_reported(
             "Another location already has room number QZX 902; it is deactivated: reactivate it"
             " (is_active true) instead",
         ),
+        (5, ErrorCode.VALIDATION_ERROR, "Another location already has room number QZX 903"),
     ]
 
 
@@ -233,6 +236,18 @@ def test_unreadable_file_is_refused_whole(data: bytes, problem: str, db: Session
     assert problem in raised.value.message
     assert [detail["field"] for detail in raised.value.details] == ["file"]
     assert location_count(db) == count
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_another_import_waits_until_this_transaction_ends(
+    dry_run: bool, db: Session, test_engine: Engine
+) -> None:
+    # two imports listing the same rooms in different orders would otherwise deadlock
+    import_locations(csv_file(row("QZX 901")), db, dry_run)
+
+    with test_engine.connect() as other_request:  # rolled back when closed
+        taken = other_request.scalar(select(func.pg_try_advisory_xact_lock(IMPORT_LOCK_KEY)))
+    assert taken is False
 
 
 def test_import_leaves_the_transaction_to_the_caller(
