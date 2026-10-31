@@ -6,7 +6,7 @@ from typing import Annotated, Self, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, NonNegativeInt, model_validator
+from pydantic import BaseModel, Field, NonNegativeInt, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
@@ -14,12 +14,14 @@ from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.control import pause_game, quit_game, reset_game, resume_game
 from app.game.current_location import Stage, get_current_location
+from app.game.navigation import Ping, Trend, process_ping
 from app.game.shuffle import shuffle_game
 from app.game.start import start_game
 from app.game.status import GameStatus, find_current_game, get_game
 from app.models.accounts import User
 from app.models.enums import (
     Difficulty,
+    FeedbackCode,
     Language,
     LocationStatus,
     SessionEndReason,
@@ -220,6 +222,76 @@ def current_location(
     if isinstance(result, GameStatus):
         return GameStatusResponse.model_validate(result, from_attributes=True)
     return CurrentLocationResponse.model_validate(result, from_attributes=True)
+
+
+class PingRequest(BaseModel):
+    lat: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    lng: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    # the browser's accuracy radius in metres
+    accuracy_m: float = Field(ge=0, allow_inf_nan=False)
+
+
+class FeedbackResponse(BaseModel):
+    code: FeedbackCode
+    audio_url: str
+
+
+class PingResponse(BaseModel):
+    # closer / farther / steady, or null when no trend was evaluated on this ping
+    trend: Trend | None
+    can_confirm: bool
+    # play the feedback only when true
+    speak: bool
+    feedback: FeedbackResponse
+    # when "Continue without GPS" is allowed; compare with the current time, don't count down
+    gps_override_available_at: datetime
+
+
+@games_router.post(
+    "/{game_id}/navigation/ping",
+    operation_id="sendNavigationPing",
+    response_model=PingResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.CONFLICT,
+        HTTPStatus.TOO_MANY_REQUESTS,
+    ),
+)
+def navigation_ping(
+    game_id: UUID,
+    request: PingRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> PingResponse:
+    """Send the student's position in Stage 1, about every 5 seconds.
+
+    Returns one feedback code with its audio link. Play it only when `speak` is true: a phrase is
+    spoken when a trend is evaluated (about every 25 s), NAV_START on the first good fix,
+    NAV_ARRIVED once on entering the radius, and NAV_GPS_WEAK on the first weak fix (accuracy over
+    50 m), then at most every 25 s. Other pings return the last spoken code with `speak` false
+    and `trend` null. `can_confirm` is true within the radius only when this fix is not weak
+    (accuracy ≤ 50 m); a weak fix is never confirmable. A good ping after a weak signal, before
+    the next trend, shows NAV_KEEP_GOING (NAV_VERY_CLOSE when near) with `speak` false. No
+    direction or target position is ever returned. `gps_override_available_at` is as in GET
+    .../current-location: 3 weak pings in a row make it the latest ping's time (already passed),
+    and a good ping moves it back to 3 minutes after the location became current.
+    409 SESSION_NOT_ACTIVE for a paused game (resume first), a game that has ended, or one idle
+    for the expiry limit (24 hours by default), which is expired. 409 INVALID_STAGE unless the
+    current location is in Stage 1. 429 RATE_LIMITED for a ping less than 2 s after the last one.
+    404 NOT_FOUND for another student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED
+    for a disabled account.
+    """
+    ping = Ping(request.lat, request.lng, request.accuracy_m)
+    outcome = _play(lambda: process_ping(user.id, game_id, ping, db), user, db)
+    return PingResponse(
+        trend=outcome.trend,
+        can_confirm=outcome.can_confirm,
+        speak=outcome.speak,
+        feedback=FeedbackResponse(code=outcome.feedback, audio_url=outcome.feedback_audio_url),
+        gps_override_available_at=outcome.gps_override_available_at,
+    )
 
 
 class PausedGameResponse(GameStatusResponse):

@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     gps_weak_pings_for_override: PositiveInt = 3  # weak pings in a row that allow the override
     gps_override_after_minutes: PositiveInt = 3  # or this long in Stage 1
     speed_anomaly_mps: PositiveInt = 10  # faster than this between pings is flagged
+    ping_min_interval_seconds: PositiveInt = 2  # pings closer together get 429 RATE_LIMITED
     # "today" for day-based rules, e.g. carry-over
     app_timezone: str = "America/Vancouver"
 

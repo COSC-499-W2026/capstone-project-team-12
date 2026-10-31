@@ -8,12 +8,20 @@ the student still has to understand the clue.
 """
 
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from uuid import UUID
+
+from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.errors import AppError, ErrorCode
+from app.game.control import lock_open_game, session_not_active
 from app.game.geo import Band, band, haversine_m, nearest_entrance
-from app.models.enums import FeedbackCode
+from app.game.progress import current_row
+from app.models.enums import FeedbackCode, Language, LocationStatus, SessionState
+from app.models.game import SessionLocation
+from app.services.audio import get_audio_service
 
 
 class Trend(StrEnum):
@@ -85,6 +93,97 @@ class PingResult:
     feedback: FeedbackCode
     speak: bool
     speed_anomaly: bool
+
+
+@dataclass(frozen=True)
+class PingOutcome:
+    """What the app gets back for a ping. Never a direction or the target's position."""
+
+    trend: Trend | None
+    can_confirm: bool
+    speak: bool
+    feedback: FeedbackCode
+    feedback_audio_url: str
+    gps_override_available_at: datetime
+
+
+def process_ping(student_id: UUID, game_id: UUID, ping: Ping, db: Session) -> PingOutcome:
+    """POST /games/{id}/navigation/ping (spec, Stage 1 steps 1-8; DFD 2.0 process 2.3).
+
+    409 SESSION_NOT_ACTIVE unless the game is active (a paused game too), 409 INVALID_STAGE
+    unless the current location is in Stage 1, and 429 RATE_LIMITED for a ping less than
+    `ping_min_interval_seconds` after the last one (about 30 a minute). The same lookup errors as
+    pause_game. Everything that can fail comes before the first write. A ping is a game action,
+    so it sets last_activity_at. Flushed; doesn't commit.
+    """
+    game = lock_open_game(student_id, game_id, db)
+    if game.state != SessionState.ACTIVE:
+        raise session_not_active(game, "Resume the game before sending pings")
+    row = current_row(game, db)
+    if row.status != LocationStatus.NAVIGATING:
+        raise AppError(
+            ErrorCode.INVALID_STAGE,
+            "The current location isn't in Stage 1",
+            details=[{"session_id": str(game.id), "position": row.position, "status": row.status}],
+        )
+    now = datetime.now(UTC)
+    limit = timedelta(seconds=get_settings().ping_min_interval_seconds)
+    if row.last_ping_at is not None and now - row.last_ping_at < limit:
+        raise AppError(ErrorCode.RATE_LIMITED, "Pings are coming in too fast")
+
+    rules = NavigationRules.from_settings()
+    result = evaluate(tracking_of(row), ping, now, rules)
+    language = Language(game.target_language)
+    audio_url = get_audio_service().feedback_audio_url(result.feedback, language, db)
+
+    _store(row, result.tracking)
+    if result.speed_anomaly and "speed_anomaly" not in row.flags:
+        row.flags.append("speed_anomaly")
+    game.last_activity_at = now
+    db.flush()
+    return PingOutcome(
+        trend=result.trend,
+        can_confirm=result.can_confirm,
+        speak=result.speak,
+        feedback=result.feedback,
+        feedback_audio_url=audio_url,
+        gps_override_available_at=override_available_at(
+            row.started_at or now, row.weak_pings_in_row, row.last_ping_at, rules
+        ),
+    )
+
+
+def tracking_of(row: SessionLocation) -> Tracking:
+    """The tracking state stored on a session location, with its target from the snapshot."""
+    code = row.last_feedback_code
+    return Tracking(
+        entrances=tuple((point["lat"], point["lng"]) for point in row.gps_points_snapshot),
+        radius_m=row.radius_snapshot,
+        last_lat=row.last_lat,
+        last_lng=row.last_lng,
+        last_accuracy_m=row.last_accuracy_m,
+        last_distance_m=row.last_distance_m,
+        last_ping_at=row.last_ping_at,
+        ref_point_index=row.ref_point_index,
+        ref_distance_m=row.ref_distance_m,
+        ref_at=row.ref_at,
+        last_feedback_code=FeedbackCode(code) if code else None,
+        last_spoken_at=row.last_spoken_at,
+        weak_pings_in_row=row.weak_pings_in_row,
+    )
+
+
+def _store(row: SessionLocation, tracking: Tracking) -> None:
+    row.last_lat, row.last_lng = tracking.last_lat, tracking.last_lng
+    row.last_accuracy_m = tracking.last_accuracy_m
+    row.last_distance_m = tracking.last_distance_m
+    row.last_ping_at = tracking.last_ping_at
+    row.ref_point_index = tracking.ref_point_index
+    row.ref_distance_m = tracking.ref_distance_m
+    row.ref_at = tracking.ref_at
+    row.last_feedback_code = tracking.last_feedback_code
+    row.last_spoken_at = tracking.last_spoken_at
+    row.weak_pings_in_row = tracking.weak_pings_in_row
 
 
 def is_weak(accuracy_m: float, rules: NavigationRules) -> bool:
