@@ -36,6 +36,7 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.game import GameSession, SessionLocation
+from app.services.audio import UploadedAudioService
 from app.services.storage import MEDIA_URL_PREFIX, get_storage_service
 
 
@@ -360,7 +361,7 @@ def make_session_location(db: Session) -> Callable[..., SessionLocation]:
             "location_id": uuid4(),
             "position": position,
             "clue_id": uuid4(),
-            "audio_asset_id": uuid4(),
+            "audio_asset_id": UploadedAudioService().clue_audio_asset_id(uuid4(), db),
             "accepted_answers_snapshot": ["SCI333"],
             "gps_points_snapshot": [{"lat": 49.9394, "lng": -119.3948}],
             "radius_snapshot": 30,
