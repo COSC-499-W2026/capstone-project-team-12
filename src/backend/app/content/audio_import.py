@@ -8,12 +8,14 @@ in ('/' or '\\', which some Windows tools write). Folders and hidden files (such
 
 Each file is read whole (at most `max_media_file_mb`) before anything is imported, then checked
 as a single upload is (add_clue_recording) and becomes its clue's primary recording; the old
-primary keeps its row, as an open game may still play it. The valid files are imported even when
-others are rejected, and the report gives each rejected file's reason: a name not in the format,
-more than one file for a clue (none of them is imported, as which one is meant cannot be told),
-a file that cannot be read from the zip, a room number no location has, or the audio checks'
-reasons. Nothing is written for a rejected file. An upload that is not a zip, or that has more
-than `max_import_files` files, is refused whole.
+primary keeps its row, as an open game may still play it (so importing the same zip again adds a
+new primary recording to each clue, as uploading a file twice does). The valid files are
+imported even when others are rejected, and the report gives each rejected file's reason: a name
+not in the format, more than one file for a clue (none of them is imported, as which one is
+meant cannot be told), a file that cannot be read from the zip, a room number no location has,
+or the audio checks' reasons. Nothing is written for a rejected file. An upload that is not a
+zip, or that has more than `max_import_files` files, is refused whole. Files are reported by
+their path in the zip, as given.
 
 A feedback zip works the same way with files named {CODE}_{language}.mp3 (or .m4a), e.g.
 NAV_START_fr.mp3, CODE being one of the feedback codes. Each file replaces the language's phrase
@@ -29,12 +31,13 @@ import re
 import zipfile
 import zlib
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import PurePosixPath
 from typing import IO
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -81,6 +84,7 @@ _ZIP_ERRORS = (
 
 # imports one file: the groups of its name, and the file's bytes
 _ImportFile = Callable[[tuple[str, ...], bytes], None]
+_Outcome = ImportedFile | RejectedFile
 
 
 def import_clue_audio(zip_file: IO[bytes], uploaded_by: UUID, db: Session) -> AudioImportReport:
@@ -101,7 +105,7 @@ def import_clue_audio(zip_file: IO[bytes], uploaded_by: UUID, db: Session) -> Au
             make_primary=True,
         )
 
-    return _import_zip(zip_file, _CLUE_FILE_NAME, _CLUE_FILE_FORMAT, import_file)
+    return _import_zip(zip_file, _CLUE_FILE_NAME, _CLUE_FILE_FORMAT, import_file, db)
 
 
 def import_feedback_audio(zip_file: IO[bytes], db: Session) -> AudioImportReport:
@@ -113,30 +117,29 @@ def import_feedback_audio(zip_file: IO[bytes], db: Session) -> AudioImportReport
         code, language = phrase
         _replace_phrase(code, language, data, db)
 
-    return _import_zip(zip_file, _FEEDBACK_FILE_NAME, _FEEDBACK_FILE_FORMAT, import_file)
+    return _import_zip(zip_file, _FEEDBACK_FILE_NAME, _FEEDBACK_FILE_FORMAT, import_file, db)
 
 
 def _replace_phrase(code: str, language: str, data: bytes, db: Session) -> None:
     """Check the recording and make it the phrase `code` in `language`, adding the phrase if the
-    language has none; the checks' AppError, nothing stored then."""
+    language has none; the checks' AppError, nothing stored then. One upsert, so two imports
+    adding the same phrase at once do not fail: the later one waits, then replaces it."""
     checked = check_audio(io.BytesIO(data))
-    phrase = db.get(FeedbackAudio, (code, language))
     storage = get_storage_service()
     key = storage.save(checked.data, checked.suffix)
+    phrase = insert(FeedbackAudio).values(code=code, language=language, file_path=key)
+    replace = {"file_path": key, "transcript": None}
     try:
-        if phrase is None:
-            db.add(FeedbackAudio(code=code, language=language, file_path=key))
-        else:
-            phrase.file_path = key
-            phrase.transcript = None
-        db.flush()
+        db.execute(phrase.on_conflict_do_update(index_elements=["code", "language"], set_=replace))
     except Exception:
         storage.delete(key)  # no row points at it
         raise
 
 
 def _location_id(room: str, db: Session) -> UUID:
-    """The location with the room number of a file name ("SCI333"); VALIDATION_ERROR if none."""
+    """The location with the room number of a file name ("SCI333"); VALIDATION_ERROR if none.
+    A deactivated location counts, as for a single upload: its audio can be ready before it is
+    reactivated."""
     room_number = room_number_sign(room)
     location = db.scalars(select(Location).filter_by(room_number=room_number)).one_or_none()
     if location is None:
@@ -145,12 +148,21 @@ def _location_id(room: str, db: Session) -> UUID:
 
 
 def _import_zip(
-    zip_file: IO[bytes], name: re.Pattern[str], name_format: str, import_file: _ImportFile
+    zip_file: IO[bytes],
+    name: re.Pattern[str],
+    name_format: str,
+    import_file: _ImportFile,
+    db: Session,
 ) -> AudioImportReport:
-    """Report every file of the zip that is not skipped, in its order: rejected if its name
-    does not match `name` (described by `name_format`), if another file's name gives the same
-    groups, if it cannot be read or if `import_file` raises AppError; imported otherwise."""
-    report = AudioImportReport()
+    """Report every file of the zip that is not skipped: rejected if its name does not match
+    `name` (described by `name_format`), if another file's name gives the same groups, if it
+    cannot be read or if `import_file` raises AppError; imported otherwise.
+
+    Files are imported in the order of their name's groups, not the zip's, so two imports at
+    once lock the clues or phrases they share in the same order and cannot deadlock; each list
+    of the report keeps the zip's order. Each file is imported in a savepoint, so a rejected one
+    leaves nothing in the database.
+    """
     with _open_zip(zip_file) as archive:
         files = [
             (info, name.fullmatch(PurePosixPath(_path(info)).name))
@@ -159,15 +171,35 @@ def _import_zip(
         ]
         _check_file_count(len(files))
         counts = Counter(match.groups() for _, match in files if match)
-        for info, match in files:
+
+        def import_one(info: zipfile.ZipInfo, match: re.Match[str] | None) -> _Outcome:
             try:
                 key = _file_key(match, counts, name_format)
-                import_file(key, _read_file(archive, info))
+                data = _read_file(archive, info)
+                with db.begin_nested():
+                    import_file(key, data)
             except AppError as error:
-                rejected = RejectedFile(file=_path(info), code=error.code, reason=error.message)
-                report.rejected.append(rejected)
-            else:
-                report.imported.append(ImportedFile(file=_path(info)))
+                return RejectedFile(file=_path(info), code=error.code, reason=error.message)
+            return ImportedFile(file=_path(info))
+
+        by_name = sorted(range(len(files)), key=lambda index: _lock_order(files[index][1]))
+        outcomes = {index: import_one(*files[index]) for index in by_name}
+    return _report(outcomes[index] for index in range(len(files)))
+
+
+def _lock_order(match: re.Match[str] | None) -> tuple[str, ...]:
+    """Where a file comes in the import: by its name's groups, a file with a wrong name first
+    (it locks nothing)."""
+    return match.groups() if match else ()
+
+
+def _report(outcomes: Iterable[_Outcome]) -> AudioImportReport:
+    report = AudioImportReport()
+    for outcome in outcomes:
+        if isinstance(outcome, ImportedFile):
+            report.imported.append(outcome)
+        else:
+            report.rejected.append(outcome)
     return report
 
 

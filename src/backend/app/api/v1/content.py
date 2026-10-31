@@ -1,5 +1,5 @@
-"""Content management (A20): locations, clue text and clue audio, and the coverage report, for
-staff only.
+"""Content management (A20): locations, clue text and clue audio, the coverage report and the
+locations CSV import, for staff only.
 
 Room numbers and accepted answers are the game's answers, so only staff accounts may read them:
 students, including students who are a class's TA, and admins get 403. Changes also need content
@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.accounts.interface import can_manage_content, get_current_user, require_staff
 from app.content.clue_audio import add_clue_recording
 from app.content.coverage import coverage_report
+from app.content.location_import import import_locations
 from app.content.locations import (
     create_location,
     deactivate_location,
@@ -29,6 +30,7 @@ from app.content.schemas import (
     ClueText,
     CoverageReport,
     LocationFields,
+    LocationImportReport,
     LocationOut,
     LocationReplacement,
 )
@@ -217,3 +219,37 @@ def get_coverage(db: Annotated[Session, Depends(get_db)]) -> CoverageReport:
     numbers are the answers) and admins.
     """
     return coverage_report(db)
+
+
+@content_router.post(
+    "/import/locations",
+    operation_id="importLocations",
+    summary="Import locations from a CSV",
+    dependencies=CONTENT_MANAGER,
+    response_model=LocationImportReport,
+    responses=error_responses(*ACCESS_ERRORS, HTTPStatus.REQUEST_ENTITY_TOO_LARGE),
+)
+def post_location_import(
+    file: UploadFile, db: Annotated[Session, Depends(get_db)], dry_run: bool = False
+) -> LocationImportReport:
+    """Add a location for each valid row of a CSV (multipart `file`, UTF-8) and report every row,
+    imported or rejected with its reason. The valid rows are imported even when others are
+    rejected. With `dry_run=true` nothing is saved, and the report is the one the import would give.
+
+    The first row names the columns, in any order: `name`, `building_name`, `room_number` and
+    `entrances`, and optionally `floor_number` and `gps_radius_meters` (blank means no floor, or
+    the `GPS_RADIUS_METERS` setting). `entrances` holds every entrance in one quoted cell:
+    `"49.9394,-119.3948;49.9401,-119.3952"`. Each row is checked as in `createLocation`; a room
+    number another row or location has (a deactivated one included: reactivate it with
+    `replaceLocation`) is rejected. Imports, dry runs included, run one at a time: a second one
+    waits until the first has finished.
+
+    413 FILE_TOO_LARGE over `MAX_IMPORT_FILE_KB`; 422 VALIDATION_ERROR on `file` without a file,
+    or when the whole file is refused: not UTF-8, not valid CSV (e.g. a quote left open), a header
+    without those columns, or more than `MAX_IMPORT_ROWS` rows. Needs content rights: 403
+    FORBIDDEN_ROLE otherwise.
+    """
+    report = import_locations(file.file, db, dry_run)
+    # a dry run's inserts were already undone; this ends the transaction, and the import's lock
+    db.commit()
+    return report
