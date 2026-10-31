@@ -17,6 +17,8 @@ from sqlalchemy.orm import Session
 from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game.current_location import CurrentLocation, Stage, get_current_location
+from app.game.progress import current_row, move_on
+from app.game.shuffle import shuffle_game
 from app.game.status import GameStatus
 from app.models.accounts import User
 from app.models.enums import Difficulty, Language, LocationStatus, SessionState, SkipReason
@@ -126,6 +128,36 @@ def test_a_row_replaced_by_a_shuffle_is_ignored(
     assert isinstance(found, CurrentLocation)
     assert (found.position, found.attempts_used) == (1, 0)
     assert rows[0].status == LocationStatus.NAVIGATING
+
+
+def test_move_on_ignores_rows_a_shuffle_replaced(
+    db: Session, game_with: Callable[..., Any], active: list[UUID]
+) -> None:
+    game, rows = game_with([(N, active[0]), (P, active[1]), (LocationStatus.COMPLETED, active[2])])
+    replaced, later = rows[:2], rows[2]
+    shuffle_game(game.student_id, game.id, 0, db)
+    current = current_row(game, db)
+    current.location_id = uuid4()
+    db.flush()
+
+    found = get_current_location(game.student_id, game.id, db)
+    landed = current_row(game, db)
+
+    assert isinstance(found, CurrentLocation)
+    assert landed.id not in {row.id for row in replaced}
+    assert (found.position, landed.status, game.current_position) == (2, N, 2)
+    assert [(row.status, row.skip_reason) for row in replaced] == [
+        (LocationStatus.SKIPPED, SkipReason.SHUFFLED)
+    ] * 2
+    landed.status = LocationStatus.COMPLETED
+    landed.points_awarded, landed.completed_at = 100, NOW
+    move_on(game, NOW, db)
+    assert game.state == SessionState.COMPLETED
+    assert (later.status, later.skip_reason, later.points_awarded) == (
+        LocationStatus.COMPLETED,
+        None,
+        100,
+    )
 
 
 def test_deactivated_locations_are_skipped_until_an_active_one(
