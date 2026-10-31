@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     max_resets_per_day: NonNegativeInt = 3
     max_photo_attempts: PositiveInt = 6
     session_idle_expiry_hours: PositiveInt = 24
+    # Stage 1 navigation (spec, Stage 1: Navigation)
+    gps_trend_interval_seconds: PositiveInt = 25  # compare with a reference about this old
+    gps_trend_reset_seconds: PositiveInt = 60  # an older reference is reset, no trend that ping
+    gps_dead_band_meters: PositiveInt = 10  # a smaller change counts as steady
     # "today" for day-based rules, e.g. carry-over
     app_timezone: str = "America/Vancouver"
 
