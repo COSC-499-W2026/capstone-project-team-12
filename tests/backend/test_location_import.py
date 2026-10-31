@@ -111,16 +111,17 @@ def test_stray_semicolons_in_entrances_are_ignored(entrances: str, db: Session) 
 @pytest.mark.parametrize(
     ("bad_row", "reason"),
     [
-        ('Lab,Sci,,QZX 90,"49.9,-119.3",', "room_number: Value error, expected 3 letters and"),
+        ('Lab,Sci,,QZX 90,"49.9,-119.3",', "room_number: expected 3 letters and 3 or 4 digits"),
         ('Lab,Sci,,QZX 902,"49.9,-119.3;91,-119.3",', "entrances.2.lat: Input should be less"),
         ('Lab,Sci,,QZX 902,"nan,-119.3",', "entrances.1.lat: Input should be less than or equal"),
-        ('Lab,Sci,,QZX 902,"49.9;-119.3",', "entrances: Value error, expected lat,lng pairs"),
+        ('Lab,Sci,,QZX 902,"49.9;-119.3",', "entrances: expected lat,lng pairs"),
         # without quotes and with the radius left out, the row still has 6 cells
-        ("Lab,Sci,,QZX 902,49.9,-119.3", "entrances: Value error, expected lat,lng pairs"),
+        ("Lab,Sci,,QZX 902,49.9,-119.3", "entrances: expected lat,lng pairs"),
         ('Lab,Sci,,QZX 902,";",', "entrances: List should have at least 1 item"),
-        ("Lab,Sci,,QZX 902", "entrances: Field required"),
-        (' ,Sci,,QZX 902,"49.9,-119.3",', "name: Field required"),
-        (' ,Sci,,QZX 902,"91,-119.3",', "name: Field required; entrances.1.lat: Input should"),
+        ("Lab,Sci,,QZX 902", "entrances: is blank"),
+        (' ,Sci,,QZX 902,"49.9,-119.3",', "name: is blank"),
+        ('Lab\x00,Sci,,QZX 902,"49.9,-119.3",', "name: contains an invalid character"),
+        (' ,Sci,,QZX 902,"91,-119.3",', "name: is blank; entrances.1.lat: Input should be"),
         ('Lab,Sci,1st,QZX 902,"49.9,-119.3",', "floor_number: Input should be a valid integer"),
         ('Lab,Sci,,QZX 902,"49.9,-119.3",0', "gps_radius_meters: Input should be greater than 0"),
         (
@@ -156,7 +157,7 @@ def test_room_number_already_in_use_is_reported(
 
     assert report.imported == [ImportedRow(row=2, room_number="QZX 901")]
     assert [(rejected.row, rejected.code, rejected.reason) for rejected in report.rejected] == [
-        (3, ErrorCode.VALIDATION_ERROR, "Another location already has room number QZX 901"),
+        (3, ErrorCode.VALIDATION_ERROR, "Same room number as row 2"),
         (
             4,
             ErrorCode.VALIDATION_ERROR,
@@ -275,24 +276,25 @@ def test_file_over_the_row_limit_is_refused_whole(
     assert len(import_csv(csv_file(*rows, ""), db, dry_run=True).imported) == 2
 
     # reading stops after the first row over the limit, before the broken line
-    with pytest.raises(AppError, match="more than 2 rows") as raised:
+    with pytest.raises(AppError, match="more than 2 rows; split it into files of at most 2"):
         import_csv(csv_file(*rows, row("QZX 999"), '"not closed'), db)
 
-    assert raised.value.code == ErrorCode.VALIDATION_ERROR
     assert saved("QZX 901", db) is None
 
 
 def test_file_over_the_size_limit_is_refused_unread(
     set_setting: Callable[[str, int], None], db: Session
 ) -> None:
-    set_setting("MAX_MEDIA_FILE_MB", 1)
-    upload = io.BytesIO(csv_file(row("QZX 901"), "," * 2**21))
+    set_setting("MAX_IMPORT_FILE_KB", 1)
+    exactly_the_limit = csv_file(row("QZX 901")).ljust(1024, b"\n")  # empty lines are ignored
+    assert len(import_csv(exactly_the_limit, db, dry_run=True).imported) == 1
 
-    with pytest.raises(AppError, match="CSV files can be at most 1 MB") as raised:
+    upload = io.BytesIO(exactly_the_limit + b"\n" * 5000)
+    with pytest.raises(AppError, match="CSV files can be at most 1 KB") as raised:
         import_locations(upload, db)
 
     assert raised.value.code == ErrorCode.FILE_TOO_LARGE
-    assert upload.tell() == 2**20 + 1
+    assert upload.tell() == 1024 + 1  # read no further than one byte past the limit
 
 
 def test_import_leaves_the_transaction_to_the_caller(

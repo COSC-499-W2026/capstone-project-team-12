@@ -10,7 +10,7 @@ they still need the client's confirmation.
 Every row is checked as a location created through the API, and the valid rows are imported
 even when others are rejected. A room number already in use, by an earlier row or by an inactive
 location, is rejected; for a deactivated location the reason says to reactivate it instead.
-A problem with the file itself (over `max_media_file_mb`, not UTF-8 CSV, wrong header, more
+A problem with the file itself (over `max_import_file_kb`, not UTF-8 CSV, wrong header, more
 than `max_import_rows` rows) rejects the whole file; that includes a quoting mistake, because
 after one the rows can no longer be told apart.
 
@@ -44,7 +44,7 @@ from app.content.schemas import (
     LocationImportReport,
     RejectedRow,
 )
-from app.content.uploads import read_upload
+from app.content.uploads import BYTES_PER_KB, read_upload
 from app.errors import AppError, ErrorCode
 
 COLUMNS = ("name", "building_name", "floor_number", "room_number", "entrances", "gps_radius_meters")
@@ -53,6 +53,8 @@ REQUIRED_COLUMNS = frozenset(COLUMNS) - OPTIONAL_COLUMNS
 # makes imports wait for each other; held until the transaction ends (see the module docstring)
 IMPORT_LOCK_KEY = func.hashtext("content.location_import")
 IMPORT_LOCK = select(func.pg_advisory_xact_lock(IMPORT_LOCK_KEY))
+# kinder words than pydantic's for what a content manager most often gets wrong
+_MESSAGES = {"missing": "is blank", "string_pattern_mismatch": "contains an invalid character"}
 
 
 def _entrance_points(cell: str) -> list[dict[str, str]]:
@@ -77,9 +79,11 @@ def import_locations(
     csv_file: BinaryIO, db: Session, dry_run: bool = False
 ) -> LocationImportReport:
     """Import each valid row of `csv_file` and report every row, imported or rejected with its
-    reason; 413 FILE_TOO_LARGE over `max_media_file_mb`, or VALIDATION_ERROR on `file` if the
+    reason; 413 FILE_TOO_LARGE over `max_import_file_kb`, or VALIDATION_ERROR on `file` if the
     whole file is refused (see above)."""
-    header, rows = _read_csv(read_upload(csv_file, "CSV files"))
+    max_kb = get_settings().max_import_file_kb
+    csv_data = read_upload(csv_file, max_kb * BYTES_PER_KB, f"CSV files can be at most {max_kb} KB")
+    header, rows = _read_csv(csv_data)
     report = LocationImportReport(dry_run=dry_run)
     db.execute(IMPORT_LOCK)  # before the savepoint, so rolling a dry run back keeps it
     preview = db.begin_nested() if dry_run else None
@@ -108,7 +112,7 @@ def _read_csv(csv_data: bytes) -> tuple[list[str], list[tuple[int, list[str]]]]:
     limit = get_settings().max_import_rows
     rows = list(islice(lines, limit + 1))  # one more than the limit means the file is too long
     if len(rows) > limit:
-        message = f"The file has more than {limit} rows, the most one import takes"
+        message = f"The file has more than {limit} rows; split it into files of at most {limit}"
         raise invalid_field("file", message)
     return header, rows
 
@@ -164,15 +168,27 @@ def _import_row(
     row: int, header: list[str], cells: list[str], report: LocationImportReport, db: Session
 ) -> None:
     """Create the location of one row and add the row to the report, imported or rejected."""
+    fields = None
     try:
-        location = create_location(_location_row(header, cells), db)
+        fields = _location_row(header, cells)
+        location = create_location(fields, db)
     except ValidationError as error:
         reason = "; ".join(_problem(problem) for problem in error.errors())
         report.rejected.append(RejectedRow(row=row, code=ErrorCode.VALIDATION_ERROR, reason=reason))
     except AppError as error:  # the cell count, or a room number already in use
-        report.rejected.append(RejectedRow(row=row, code=error.code, reason=error.message))
+        reason = _same_room_as(fields, report) or error.message
+        report.rejected.append(RejectedRow(row=row, code=error.code, reason=reason))
     else:
         report.imported.append(ImportedRow(row=row, room_number=location.room_number))
+
+
+def _same_room_as(fields: LocationRow | None, report: LocationImportReport) -> str | None:
+    """ "Same room number as row N" if an earlier row of the file imported the room of `fields`
+    (only looked up once a save has failed, so the rows that import pay nothing for it)."""
+    room_number = fields.room_number if fields else None
+    earlier = (imported.row for imported in report.imported if imported.room_number == room_number)
+    row = next(earlier, None)
+    return None if row is None else f"Same room number as row {row}"
 
 
 def _location_row(header: list[str], cells: list[str]) -> LocationRow:
@@ -191,4 +207,8 @@ def _problem(problem: ErrorDetails) -> str:
     `field` (app.errors), which names the JSON body from 0, this names the CSV's columns and
     numbers entrances from 1, as rows are: the report is read by people looking at the file."""
     parts = (part + 1 if isinstance(part, int) else part for part in problem["loc"])
-    return f"{'.'.join(map(str, parts))}: {problem['msg']}"
+    if problem["type"] == "value_error":  # our own words, without pydantic's "Value error, "
+        message = str(problem["ctx"]["error"])
+    else:
+        message = _MESSAGES.get(problem["type"], problem["msg"])
+    return f"{'.'.join(map(str, parts))}: {message}"
