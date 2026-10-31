@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.accounts.interface import get_current_user
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
-from app.game.control import pause_game
+from app.game.control import pause_game, resume_game
 from app.game.start import start_game
 from app.game.status import find_current_game, get_game
 from app.models.accounts import User
@@ -195,6 +195,30 @@ def pause(
     """
     paused = _play(lambda: pause_game(user.id, game_id, db), user, db)
     return PausedGameResponse(**asdict(paused.status), expires_at=paused.expires_at)
+
+
+@games_router.post(
+    "/{game_id}/resume",
+    operation_id="resumeGame",
+    response_model=GameStatusResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def resume(
+    game_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> GameStatusResponse:
+    """Resume the student's paused game where it was left.
+
+    Resuming an active game changes nothing and returns it. A game that has been idle for the
+    expiry limit (24 hours by default) can't be resumed: it is expired and gives 409
+    SESSION_NOT_ACTIVE, the same as a completed or abandoned game. 404 NOT_FOUND for another
+    student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.
+    """
+    status = _play(lambda: resume_game(user.id, game_id, db), user, db)
+    return GameStatusResponse.model_validate(status, from_attributes=True)
 
 
 def _play(action: Callable[[], T], user: User, db: Session) -> T:
