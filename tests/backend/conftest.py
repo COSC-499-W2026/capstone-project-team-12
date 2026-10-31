@@ -32,6 +32,7 @@ from app.models.enums import (
     EnrollmentEndReason,
     FeedbackCode,
     Language,
+    LocationStatus,
     SessionState,
     UserRole,
 )
@@ -373,6 +374,33 @@ def make_session_location(db: Session) -> Callable[..., SessionLocation]:
 
 # Unique test room numbers: "TST 1000", "TST 1001", ... (4 digits match the room number format).
 _room_numbers = count(1000)
+
+
+@pytest.fixture
+def navigating_game(
+    db: Session,
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    freeze_clock: Callable[..., None],
+) -> Callable[..., tuple[GameSession, SessionLocation]]:
+    """An active game at its first location, navigating since a minute before `now`; the last
+    game action was an hour before. `game` holds fields for the game, the other keywords are
+    for the location. The clock is frozen at `now` in app.game.control, app.game.status and
+    the modules given."""
+
+    def make(
+        now: datetime, *clock: str, game: dict[str, Any] | None = None, **fields: Any
+    ) -> tuple[GameSession, SessionLocation]:
+        freeze_clock(now, "app.game.control", "app.game.status", *clock)
+        played = make_game_session(
+            current_position=1, last_activity_at=now - timedelta(hours=1), **(game or {})
+        )
+        values = {"status": LocationStatus.NAVIGATING, "started_at": now - timedelta(minutes=1)}
+        row = make_session_location(played, 1, **(values | fields))
+        db.flush()
+        return played, row
+
+    return make
 
 
 @pytest.fixture
