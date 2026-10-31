@@ -99,9 +99,8 @@ def _saving_room_number(room_number: str, db: Session) -> Iterator[None]:
     """Save what the block changes; VALIDATION_ERROR if another location has `room_number`.
 
     The unique constraint is the check, so two requests cannot both save the same room number.
-    The spec has no error code for it. The block runs in a savepoint (opening one flushes, so
-    the changes must be made inside), so a failed save undoes only itself. If the location that
-    has it is deactivated, the message says to bring that one back instead.
+    The spec makes it 422 VALIDATION_ERROR. The block runs in a savepoint (opening one flushes, so
+    the changes must be made inside), so a failed save undoes only itself.
     """
     try:
         with db.begin_nested():
