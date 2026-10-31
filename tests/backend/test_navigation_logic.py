@@ -24,6 +24,10 @@ RULES = NavigationRules(
     trend_interval=timedelta(seconds=25),
     trend_reset=timedelta(seconds=60),
     dead_band_m=10,
+    weak_accuracy_m=50,
+    weak_pings_for_override=3,
+    override_after=timedelta(minutes=3),
+    speed_anomaly_mps=10,
 )
 T0 = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
 TARGET = (49.9394, -119.3948)
