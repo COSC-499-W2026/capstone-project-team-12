@@ -233,3 +233,16 @@ def test_the_route_returns_the_status_when_the_game_completes(
     )
     db.refresh(game)
     assert game.state == SessionState.COMPLETED
+
+
+def test_three_weak_pings_allow_the_override_from_the_last_ping(
+    db: Session, game_with: Callable[..., Any], active: list[UUID]
+) -> None:
+    game, rows = game_with([(N, active[0])])
+    rows[0].weak_pings_in_row, rows[0].last_ping_at = 3, NOW - timedelta(seconds=10)
+    db.flush()
+
+    found = get_current_location(game.student_id, game.id, db)
+
+    assert isinstance(found, CurrentLocation)
+    assert found.gps_override_available_at == NOW - timedelta(seconds=10)
