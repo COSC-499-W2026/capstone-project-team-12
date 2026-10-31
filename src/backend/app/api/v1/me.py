@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.accounts.interface import get_current_user
 from app.accounts.profile import current_class_id, select_class, set_practice_language
 from app.db import get_db
+from app.engagement.interface import get_language_engagement_stats
 from app.errors import AppError, ErrorCode, error_responses
 from app.models.accounts import User
 from app.models.enums import Language, UserRole
@@ -99,3 +100,51 @@ def update_profile(
     response = _profile(user, db)
     db.commit()
     return response
+
+
+class EngagementStatsResponse(BaseModel):
+    """The signed-in student's cumulative statistics for one language."""
+
+    language: Language
+    total_points: int = Field(description="Cumulative points earned in the selected language.")
+    level: int = Field(
+        ge=1, le=5, description="Current language level derived from cumulative points."
+    )
+
+
+@me_router.get(
+    "/engagement",
+    response_model=EngagementStatsResponse,
+    operation_id="getMyEngagement",
+    summary="Get my engagement statistics",
+    description=(
+        "Return the authenticated student's cumulative points and level "
+        "for the requested target language. Points are tracked separately "
+        "for each language. Students without previous activity start at "
+        "zero points and level one. Streaks and daily challenges are "
+        "implemented separately under A13."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+    ),
+)
+def get_my_engagement(
+    language: Language,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> EngagementStatsResponse:
+    """Read the signed-in student's engagement statistics."""
+    if user.role != UserRole.STUDENT:
+        raise AppError(
+            ErrorCode.FORBIDDEN_ROLE,
+            "Only students can view student engagement statistics",
+        )
+
+    stats = get_language_engagement_stats(user.id, language, db)
+
+    return EngagementStatsResponse(
+        language=stats.language,
+        total_points=stats.total_points,
+        level=stats.level,
+    )
