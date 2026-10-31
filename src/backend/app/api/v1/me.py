@@ -1,5 +1,6 @@
 """The signed-in user's own profile."""
 
+from datetime import datetime
 from http import HTTPStatus
 from typing import Annotated, Self
 from uuid import UUID
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.accounts.interface import get_current_user
 from app.accounts.profile import current_class_id, select_class, set_practice_language
 from app.db import get_db
-from app.engagement.interface import get_language_engagement_stats
+from app.engagement.interface import get_language_engagement_stats, list_unlocked_achievements
 from app.errors import AppError, ErrorCode, error_responses
 from app.models.accounts import User
 from app.models.enums import Language, UserRole
@@ -147,4 +148,63 @@ def get_my_engagement(
         language=stats.language,
         total_points=stats.total_points,
         level=stats.level,
+    )
+
+
+class AchievementResponse(BaseModel):
+    """One achievement earned by a student."""
+
+    achievement_key: str
+    category: str
+    icon_key: str
+    language: Language | None
+    unlocked_at: datetime
+
+
+class AchievementsResponse(BaseModel):
+    """Unlocked achievements for the selected language."""
+
+    achievements: list[AchievementResponse]
+
+
+@me_router.get(
+    "/achievements",
+    response_model=AchievementsResponse,
+    operation_id="getMyAchievements",
+    summary="Get my unlocked achievements",
+    description=(
+        "Return the authenticated student's unlocked achievements "
+        "for the requested language, including global achievements. "
+        "Results are ordered by unlock time, newest first."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+    ),
+)
+def get_my_achievements(
+    language: Language,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AchievementsResponse:
+    """Read the signed-in student's unlocked achievements."""
+    if user.role != UserRole.STUDENT:
+        raise AppError(
+            ErrorCode.FORBIDDEN_ROLE,
+            "Only students can view student achievements",
+        )
+
+    achievements = list_unlocked_achievements(user.id, language, db)
+
+    return AchievementsResponse(
+        achievements=[
+            AchievementResponse(
+                achievement_key=item.achievement_key,
+                category=item.category,
+                icon_key=item.icon_key,
+                language=item.language,
+                unlocked_at=item.unlocked_at,
+            )
+            for item in achievements
+        ]
     )
