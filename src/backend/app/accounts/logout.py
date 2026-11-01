@@ -6,5 +6,6 @@ from sqlalchemy.orm import Session
 from app.accounts.tokens import revoke_refresh_tokens
 from app.models.accounts import User
 
-def logout_user(user: User, db: Session):
+
+def logout_user(user: User, db: Session) -> None:
     revoke_refresh_tokens(user.id, db)

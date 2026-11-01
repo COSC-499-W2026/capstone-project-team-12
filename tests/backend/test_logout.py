@@ -1,17 +1,17 @@
 from collections.abc import Callable
 
 import pytest
-
 from fastapi import Response
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.accounts.password import hash_password
-from app.errors import AppError, ErrorCode
+from app.errors import ErrorCode
 from app.models.accounts import User
 
 VALID_EMAIL = "test@email.com"
 VALID_PASSWORD = "ValidPassword1"
+
 
 @pytest.fixture
 def student(make_user: Callable[..., User]) -> User:
@@ -35,8 +35,7 @@ def refresh(client: TestClient, refresh_token: str) -> Response:
 
 def logout(client: TestClient, access_token: str = None) -> Response:
     response = client.post(
-        "/api/v1/auth/logout",
-        headers={"Authorization": f"Bearer {access_token}"}
+        "/api/v1/auth/logout", headers={"Authorization": f"Bearer {access_token}"}
     )
     return response
 
