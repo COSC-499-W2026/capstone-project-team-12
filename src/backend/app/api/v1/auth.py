@@ -100,6 +100,7 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
     )
 
 
+
 @auth_router.post(
     "/logout",
     tags=["logout"],
