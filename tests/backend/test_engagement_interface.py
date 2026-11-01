@@ -21,12 +21,14 @@ from app.engagement.interface import (
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.engagement import (
+    Achievement,
     Class,
     ClassEnrollment,
     PointsLedger,
+    UserAchievement,
     UserLanguageStats,
 )
-from app.models.enums import EnrollmentEndReason, Language, LocationStatus, SkipReason
+from app.models.enums import EnrollmentEndReason, Language, LocationStatus, SessionState, SkipReason
 from app.models.game import GameSession, SessionLocation
 
 
@@ -278,7 +280,7 @@ def test_apply_location_result_awards_completed_location(
         level_up=False,
         streak_days=0,
         challenges_completed=(),
-        achievements_unlocked=(),
+        achievements_unlocked=("first_step",),
     )
 
     award = db.scalar(
@@ -553,3 +555,237 @@ def test_completed_classroom_location_records_class_id(
     assert award.class_id == school_class.id
     assert award.language == Language.JA
     assert award.points == 100
+
+
+def test_first_step_badge_is_unlocked_only_once(
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    """Retrying a completed location must not duplicate its badge."""
+    student = make_user()
+    game = make_game_session(student=student)
+    location = make_session_location(
+        game,
+        position=1,
+        status=LocationStatus.COMPLETED,
+        points_awarded=100,
+        completed_at=datetime.now(UTC),
+    )
+
+    def apply() -> EngagementResult:
+        return apply_location_result(
+            location.id,
+            student.id,
+            completed=True,
+            target_language=game.target_language,
+            class_id=game.class_id,
+            db=db,
+        )
+
+    first = apply()
+    second = apply()
+
+    assert first.achievements_unlocked == ("first_step",)
+    assert second.achievements_unlocked == ()
+    assert second.location_points_awarded == 0
+    assert second.total_points == 100
+
+    badge = db.scalar(select(Achievement).where(Achievement.achievement_key == "first_step"))
+    assert badge is not None
+
+    unlocks = db.scalars(
+        select(UserAchievement).where(
+            UserAchievement.user_id == student.id,
+            UserAchievement.achievement_id == badge.id,
+            UserAchievement.language == game.target_language,
+        )
+    ).all()
+    assert len(unlocks) == 1
+
+
+def test_failed_location_does_not_unlock_first_step(
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    """A failed location must not earn points or unlock a badge."""
+    student = make_user()
+    game = make_game_session(student=student)
+    location = make_session_location(
+        game,
+        position=1,
+        status=LocationStatus.FAILED,
+        points_awarded=0,
+    )
+
+    result = apply_location_result(
+        location.id,
+        student.id,
+        completed=False,
+        target_language=game.target_language,
+        class_id=game.class_id,
+        db=db,
+    )
+
+    assert result.location_points_awarded == 0
+    assert result.achievements_unlocked == ()
+    assert (
+        db.scalars(select(UserAchievement).where(UserAchievement.user_id == student.id)).all() == []
+    )
+
+
+def test_first_step_badge_is_tracked_per_language(
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    """The first completed location in each language earns its own badge."""
+    student = make_user()
+
+    japanese_game = make_game_session(student=student, target_language=Language.JA)
+    japanese_location = make_session_location(
+        japanese_game,
+        position=1,
+        status=LocationStatus.COMPLETED,
+        points_awarded=100,
+        completed_at=datetime.now(UTC),
+    )
+
+    japanese_result = apply_location_result(
+        japanese_location.id,
+        student.id,
+        completed=True,
+        target_language=Language.JA,
+        class_id=japanese_game.class_id,
+        db=db,
+    )
+
+    japanese_game.state = SessionState.COMPLETED
+    japanese_game.completed_at = datetime.now(UTC)
+    db.flush()
+
+    french_game = make_game_session(student=student, target_language=Language.FR)
+    french_location = make_session_location(
+        french_game,
+        position=1,
+        status=LocationStatus.COMPLETED,
+        points_awarded=100,
+        completed_at=datetime.now(UTC),
+    )
+
+    french_result = apply_location_result(
+        french_location.id,
+        student.id,
+        completed=True,
+        target_language=Language.FR,
+        class_id=french_game.class_id,
+        db=db,
+    )
+
+    assert japanese_result.achievements_unlocked == ("first_step",)
+    assert french_result.achievements_unlocked == ("first_step",)
+
+    badge = db.scalar(select(Achievement).where(Achievement.achievement_key == "first_step"))
+    assert badge is not None
+
+    unlocks = db.scalars(
+        select(UserAchievement).where(
+            UserAchievement.user_id == student.id,
+            UserAchievement.achievement_id == badge.id,
+        )
+    ).all()
+
+    assert len(unlocks) == 2
+    assert {unlock.language for unlock in unlocks} == {Language.JA, Language.FR}
+
+
+@pytest.mark.parametrize(
+    ("badge_key", "threshold"),
+    [
+        ("starter", 5),
+        ("explorer", 20),
+    ],
+)
+def test_completion_badge_unlocks_at_threshold(
+    db: Session,
+    make_user: Callable[..., User],
+    badge_key: str,
+    threshold: int,
+) -> None:
+    student = make_user()
+
+    db.add_all(
+        [
+            PointsLedger(
+                user_id=student.id,
+                source_type="location",
+                source_ref=str(uuid4()),
+                class_id=None,
+                language=Language.JA,
+                points=100,
+            )
+            for _ in range(threshold - 1)
+        ]
+    )
+    db.flush()
+
+    from app.engagement.badges import unlock_completion_badges
+
+    before = unlock_completion_badges(student.id, Language.JA, db)
+
+    assert badge_key not in before
+
+    db.add(
+        PointsLedger(
+            user_id=student.id,
+            source_type="location",
+            source_ref=str(uuid4()),
+            class_id=None,
+            language=Language.JA,
+            points=100,
+        )
+    )
+    db.flush()
+
+    at_threshold = unlock_completion_badges(student.id, Language.JA, db)
+
+    assert badge_key in at_threshold
+
+    repeated = unlock_completion_badges(student.id, Language.JA, db)
+
+    assert badge_key not in repeated
+
+
+def test_completion_badge_counts_are_language_specific(
+    db: Session,
+    make_user: Callable[..., User],
+) -> None:
+    student = make_user()
+
+    db.add_all(
+        [
+            PointsLedger(
+                user_id=student.id,
+                source_type="location",
+                source_ref=str(uuid4()),
+                class_id=None,
+                language=language,
+                points=100,
+            )
+            for language in [Language.JA] * 4 + [Language.FR]
+        ]
+    )
+    db.flush()
+
+    from app.engagement.badges import unlock_completion_badges
+
+    french_unlocked = unlock_completion_badges(student.id, Language.FR, db)
+    japanese_unlocked = unlock_completion_badges(student.id, Language.JA, db)
+
+    assert "first_step" in french_unlocked
+    assert "starter" not in french_unlocked
+    assert "starter" not in japanese_unlocked
