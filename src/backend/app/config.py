@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     session_idle_expiry_hours: PositiveInt = 24
     # "today" for day-based rules, e.g. carry-over
     app_timezone: str = "America/Vancouver"
+    global_rate_limit: int = 100  # number of requests allowed per minute per IP on all endpoints
 
     @field_validator("app_timezone")
     @classmethod

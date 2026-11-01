@@ -4,12 +4,14 @@ from fastapi import FastAPI
 
 from app.api.v1 import api_router
 from app.errors import add_error_handlers
+from app.limiter import add_limiter
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Japanese Scavenger Hunt Game API", version="0.1.0")
     app.include_router(api_router)
     add_error_handlers(app)
+    add_limiter(app)
 
     @app.get("/health", tags=["health"], operation_id="getHealth")
     def health() -> dict[str, str]:
