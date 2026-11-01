@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, model_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
@@ -13,6 +14,7 @@ from app.accounts.profile import current_class_id, select_class, set_practice_la
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
 from app.models.accounts import User
+from app.models.engagement import ClassEnrollment
 from app.models.enums import Language, UserRole
 
 me_router = APIRouter(prefix="/me", tags=["me"])
@@ -23,7 +25,9 @@ class ProfileResponse(BaseModel):
 
     id: UUID
     username: str
+    email: str
     role: UserRole
+    classes: list[UUID] | None = None
     current_class_id: UUID | None = Field(
         description="The class the app follows. Null means Practice (or no active class)."
     )
@@ -53,10 +57,19 @@ class UpdateProfileRequest(BaseModel):
 
 
 def _profile(user: User, db: Session) -> ProfileResponse:
+    classes = db.execute(
+        select(ClassEnrollment.class_id).where(ClassEnrollment.student_id == user.id)
+    ).all()
+    class_list = []
+    for class_id in classes:
+        class_list.append(class_id)
+
     return ProfileResponse(
         id=user.id,
         username=user.username,
+        email=user.email,
         role=user.role,
+        classes=class_list,
         current_class_id=current_class_id(user, db),
         preferred_language=user.preferred_language,
     )
@@ -99,3 +112,16 @@ def update_profile(
     response = _profile(user, db)
     db.commit()
     return response
+
+
+@me_router.get(
+    "/profile",
+    response_model=ProfileResponse,
+    operation_id="getProfile",
+    summary="Get the current user's profile details.",
+    responses=error_responses(HTTPStatus.UNAUTHORIZED),
+)
+def get_profile(
+    user: Annotated[User, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]
+) -> ProfileResponse:
+    return _profile(user, db)
