@@ -8,8 +8,14 @@ from slowapi import Limiter
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
+from app.config import get_settings
+
 # Limits requests to all endpoints to 100 requests per minute per IP.
-limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"], headers_enabled=True)
+limiter = Limiter(
+    key_func=get_remote_address, 
+    default_limits=[f"{get_settings().global_rate_limit}/minute"], 
+    headers_enabled=True
+)
 
 
 def add_limiter(app: FastAPI) -> None:
