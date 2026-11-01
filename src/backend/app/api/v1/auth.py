@@ -62,7 +62,6 @@ def login(
     operation_id="refreshTokens",
     responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
 )
-@limiter.limit("1/min")
 def refresh(
     request: Request,
     response: Response,
