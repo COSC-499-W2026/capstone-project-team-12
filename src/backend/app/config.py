@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # clue and feedback recordings at most 60 s
     max_media_file_mb: PositiveInt = 5
     max_audio_seconds: PositiveInt = 60
+    # proposed, not in the spec: the largest request body (MiB), so a request cannot make the
+    # server read without limit. A multipart upload to a route that takes a file (streamed to
+    # disk; fits a zip import of a whole campus), and any other body (held in memory)
+    max_upload_body_mb: PositiveInt = 500
+    max_request_body_mb: PositiveInt = 1
     audio_service_type: AudioServiceType = "uploaded"
     gps_radius_meters: PositiveInt = 30  # default for a new location; each location stores its own
     # game rules from the spec (Configuration). The services check these upper limits;

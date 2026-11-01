@@ -155,10 +155,12 @@ def error_responses(*statuses: HTTPStatus) -> dict[int | str, dict[str, Any]]:
 
 
 # HTTPExceptions raised by FastAPI itself (unknown route, wrong method, missing bearer token)
+# and by the request body limit (app.api.body_limit)
 _FRAMEWORK_CODES = {
     HTTPStatus.UNAUTHORIZED: ErrorCode.NOT_AUTHENTICATED,
     HTTPStatus.NOT_FOUND: ErrorCode.NOT_FOUND,
     HTTPStatus.METHOD_NOT_ALLOWED: ErrorCode.METHOD_NOT_ALLOWED,
+    HTTPStatus.REQUEST_ENTITY_TOO_LARGE: ErrorCode.FILE_TOO_LARGE,
 }
 
 
@@ -194,7 +196,9 @@ async def _http_error(request: Request, exc: Exception) -> JSONResponse:
         body = {"error": {"code": status.name, "message": status.phrase, "details": []}}
         return JSONResponse(body, status_code=status, headers=exc.headers)
     headers = dict(exc.headers) if exc.headers else None
-    return _response(AppError(code, headers=headers))
+    # keep a message the raiser gave; without one, Starlette's detail is the status phrase
+    message = "" if exc.detail == HTTPStatus(exc.status_code).phrase else exc.detail
+    return _response(AppError(code, message, headers=headers))
 
 
 async def _unexpected_error(request: Request, exc: Exception) -> JSONResponse:

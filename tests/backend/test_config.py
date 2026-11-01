@@ -42,6 +42,11 @@ def test_upload_limits_default_to_5_mb_and_60_seconds() -> None:
     assert (settings.max_media_file_mb, settings.max_audio_seconds) == (5, 60)
 
 
+def test_request_body_limits_default_to_500_mb_for_uploads_and_1_mb_otherwise() -> None:
+    settings = Settings(_env_file=None)
+    assert (settings.max_upload_body_mb, settings.max_request_body_mb) == (500, 1)
+
+
 def test_upload_limits_can_be_changed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MAX_MEDIA_FILE_MB", "8")
     monkeypatch.setenv("MAX_AUDIO_SECONDS", "90")
@@ -49,7 +54,10 @@ def test_upload_limits_can_be_changed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert (settings.max_media_file_mb, settings.max_audio_seconds) == (8, 90)
 
 
-@pytest.mark.parametrize("variable", ["MAX_MEDIA_FILE_MB", "MAX_AUDIO_SECONDS"])
+@pytest.mark.parametrize(
+    "variable",
+    ["MAX_MEDIA_FILE_MB", "MAX_AUDIO_SECONDS", "MAX_UPLOAD_BODY_MB", "MAX_REQUEST_BODY_MB"],
+)
 def test_upload_limits_must_be_positive(monkeypatch: pytest.MonkeyPatch, variable: str) -> None:
     monkeypatch.setenv(variable, "0")
     with pytest.raises(ValidationError, match=variable.lower()):
