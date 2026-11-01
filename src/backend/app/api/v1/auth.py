@@ -5,11 +5,14 @@ from fastapi import APIRouter, Cookie, Depends, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
+from app.accounts.interface import get_current_user
 from app.accounts.login import login_account
+from app.accounts.logout import logout_user
 from app.accounts.register import RegisterRequest, RegisterResponse, register_account
 from app.accounts.tokens import TokenResponse, rotate_tokens
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
+from app.models.accounts import User
 
 auth_router = APIRouter(prefix="/auth")
 
@@ -71,3 +74,17 @@ def refresh(
         tokens = rotate_tokens(refresh_token, db)
         response.set_cookie("refresh_token", tokens["refresh_token"])
         return TokenResponse(access_token=tokens["access_token"])
+
+@auth_router.post(
+    "/logout",
+    tags=["logout"],
+    status_code=204,
+    operation_id="logoutUser",
+    responses=error_responses(HTTPStatus.UNAUTHORIZED)
+)
+def logout(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)]
+) -> None:
+    logout_user(user, db)
+    db.commit()
