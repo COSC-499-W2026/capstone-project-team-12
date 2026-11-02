@@ -117,7 +117,15 @@ class SessionLocation(Base):
 
     __tablename__ = "session_locations"
     __table_args__ = (
-        UniqueConstraint("session_id", "position"),
+        # one live row per position: a row replaced by a shuffle stays, and its replacement gets
+        # the same position (spec Session Lifecycle, Shuffle)
+        Index(
+            "uq_session_locations_session_id_position",
+            "session_id",
+            "position",
+            unique=True,
+            postgresql_where=text(f"skip_reason IS DISTINCT FROM '{SkipReason.SHUFFLED}'"),
+        ),
         UniqueConstraint("session_id", "location_id"),  # 5 different locations per game
         # upper limits are settings (locations_per_game, max_photo_attempts); services check them
         CheckConstraint("position >= 1", name="position"),

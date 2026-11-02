@@ -1,0 +1,424 @@
+"""POST /api/v1/games/{id}/pause, /resume (A8), /quit and /reset (A9) over HTTP.
+
+The rules are tested in test_game_control.py, test_quit_game.py and test_reset_game.py. These
+check the status codes, the response body and that the route commits, also when an idle game is
+expired before the 409.
+"""
+
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from typing import Any
+from uuid import uuid4
+
+import pytest
+from fastapi.testclient import TestClient
+from httpx2 import Response
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.content import interface as content
+from app.errors import AppError, ErrorCode
+from app.game.sessions import session_idle_limit
+from app.models.accounts import User
+from app.models.enums import (
+    Difficulty,
+    Language,
+    LocationStatus,
+    SessionEndReason,
+    SessionState,
+    UserRole,
+)
+from app.models.game import GameSession, SessionLocation
+
+URL = "/api/v1/games"
+ACTIONS = ["pause", "resume", "quit", "reset"]
+
+GAME_FIELDS = {
+    "session_id",
+    "state",
+    "end_reason",
+    "class_id",
+    "language",
+    "difficulty",
+    "current_position",
+    "shuffles_used",
+    "total_score",
+    "started_at",
+    "paused_at",
+    "locations",
+}
+
+
+@pytest.fixture
+def post(client: TestClient, auth_headers: Callable[[User], dict[str, str]]) -> Callable[..., Any]:
+    """POST a game action as the user."""
+
+    def request(user: User, game_id: object, action: str) -> Response:
+        return client.post(f"{URL}/{game_id}/{action}", headers=auth_headers(user))
+
+    return request
+
+
+def test_pause(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    transaction_calls: list[str],
+) -> None:
+    student = make_user()
+    game = make_game_session(student)
+    make_session_location(game, 1, status=LocationStatus.VERIFYING, attempts_used=2)
+    transaction_calls.clear()
+
+    response = post(student, game.id, "pause")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body) == GAME_FIELDS | {"expires_at"}
+    assert body["state"] == SessionState.PAUSED.value
+    assert body["expires_at"].endswith("Z")
+    expires_at = datetime.fromisoformat(body["expires_at"])
+    assert expires_at == datetime.fromisoformat(body["paused_at"]) + session_idle_limit()
+    assert (body["locations"][0]["status"], body["locations"][0]["attempts_used"]) == (
+        LocationStatus.VERIFYING.value,
+        2,
+    )
+    # no room, answers or coordinates
+    assert "SCI333" not in response.text
+    assert transaction_calls.count("commit") == 1
+    db.refresh(game)
+    assert game.state == SessionState.PAUSED
+
+
+def test_pausing_again_is_200(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+) -> None:
+    student = make_user()
+    paused_at = (datetime.now(UTC) - timedelta(hours=3)).replace(microsecond=0)
+    game = make_game_session(
+        student, state=SessionState.PAUSED, paused_at=paused_at, last_activity_at=paused_at
+    )
+
+    response = post(student, game.id, "pause")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["state"] == SessionState.PAUSED.value
+    # the first pause time stays, so the expiry does not start again
+    assert datetime.fromisoformat(body["paused_at"]) == paused_at
+    assert datetime.fromisoformat(body["expires_at"]) == paused_at + session_idle_limit()
+    db.refresh(game)
+    assert (game.paused_at, game.last_activity_at) == (paused_at, paused_at)
+
+
+def test_resume(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    transaction_calls: list[str],
+) -> None:
+    student = make_user()
+    paused_at = (datetime.now(UTC) - timedelta(hours=3)).replace(microsecond=0)
+    game = make_game_session(
+        student, state=SessionState.PAUSED, paused_at=paused_at, last_activity_at=paused_at
+    )
+    make_session_location(game, 1, status=LocationStatus.VERIFYING, attempts_used=2)
+    transaction_calls.clear()
+    before = datetime.now(UTC)
+
+    response = post(student, game.id, "resume")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body) == GAME_FIELDS
+    assert (body["state"], body["paused_at"]) == (SessionState.ACTIVE.value, None)
+    assert body["locations"][0]["attempts_used"] == 2
+    assert transaction_calls.count("commit") == 1
+    db.refresh(game)
+    assert (game.state, game.resume_count) == (SessionState.ACTIVE, 1)
+    # resume is a game action, so the idle time starts again
+    assert before <= game.last_activity_at <= datetime.now(UTC)
+
+
+def test_resuming_an_active_game_is_200(
+    db: Session,
+    client: TestClient,
+    auth_headers: Callable[[User], dict[str, str]],
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+) -> None:
+    student = make_user()
+    played_at = (datetime.now(UTC) - timedelta(hours=3)).replace(microsecond=0)
+    game = make_game_session(student, last_activity_at=played_at)
+    headers = auth_headers(student)
+    before = client.get(f"{URL}/{game.id}", headers=headers)
+    assert before.status_code == 200, before.text
+
+    response = post(student, game.id, "resume")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == SessionState.ACTIVE.value
+    assert response.json() == before.json()
+    db.refresh(game)
+    assert (game.resume_count, game.last_activity_at) == (0, played_at)
+
+
+@pytest.mark.parametrize("state", [SessionState.ACTIVE, SessionState.PAUSED])
+def test_quit(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    transaction_calls: list[str],
+    state: SessionState,
+) -> None:
+    student = make_user()
+    paused_at = datetime.now(UTC) if state == SessionState.PAUSED else None
+    game = make_game_session(student, state=state, paused_at=paused_at, total_score=100)
+    make_session_location(
+        game, 1, status=LocationStatus.COMPLETED, points_awarded=100, completed_at=datetime.now(UTC)
+    )
+    make_session_location(game, 2, status=LocationStatus.NAVIGATING)
+    transaction_calls.clear()
+    before = datetime.now(UTC)
+
+    response = post(student, game.id, "quit")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body) == GAME_FIELDS
+    assert (body["state"], body["end_reason"], body["paused_at"], body["total_score"]) == (
+        SessionState.ABANDONED.value,
+        SessionEndReason.QUIT.value,
+        None,
+        100,
+    )
+    assert [location["status"] for location in body["locations"]] == [
+        LocationStatus.COMPLETED.value,
+        LocationStatus.SKIPPED.value,
+    ]
+    assert "SCI333" not in response.text
+    assert transaction_calls.count("commit") == 1
+    db.refresh(game)
+    assert (game.state, game.end_reason) == (SessionState.ABANDONED, SessionEndReason.QUIT)
+    assert before <= game.last_activity_at <= datetime.now(UTC)
+
+
+def test_reset(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    transaction_calls: list[str],
+) -> None:
+    student = make_user()
+    paused_at = datetime.now(UTC)
+    old = make_game_session(student, state=SessionState.PAUSED, paused_at=paused_at)
+    transaction_calls.clear()
+
+    response = post(student, old.id, "reset")
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    # the same body as POST /games
+    assert set(body) == {"session_id", "state", "position", "clue_audio_url"}
+    assert (body["state"], body["position"]) == (SessionState.ACTIVE.value, 1)
+    assert body["session_id"] != str(old.id)
+    # the new game's savepoint fires a commit event too; the other is the route's own commit
+    assert transaction_calls.count("commit") == 2
+    db.refresh(old)
+    assert (old.state, old.end_reason) == (SessionState.ABANDONED, SessionEndReason.RESET)
+
+
+def test_the_fourth_reset_today_is_409(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    assert_error: Callable[..., None],
+) -> None:
+    student = make_user()
+    game = make_game_session(student)
+    for _ in range(3):
+        response = post(student, game.id, "reset")
+        assert response.status_code == 201, response.text
+        game = db.get_one(GameSession, response.json()["session_id"])
+
+    assert_error(post(student, game.id, "reset"), 409, ErrorCode.RESET_LIMIT_REACHED)
+    db.refresh(game)
+    assert (game.state, game.end_reason) == (SessionState.ACTIVE, None)
+
+
+def test_a_reset_that_cannot_save_the_new_game_is_not_counted(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    monkeypatch: pytest.MonkeyPatch,
+    assert_error: Callable[..., None],
+) -> None:
+    student = make_user()
+    game = make_game_session(student)
+    # the game is already saved, so the route's rollback only undoes this reset
+    db.commit()
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AppError(ErrorCode.SESSION_ALREADY_OPEN)
+
+    monkeypatch.setattr("app.game.control.save_new_game", fail)
+
+    assert_error(post(student, game.id, "reset"), 409, ErrorCode.SESSION_ALREADY_OPEN)
+    db.refresh(game)
+    assert (game.state, game.end_reason) == (SessionState.ACTIVE, None)
+    resets = db.scalar(
+        select(func.count())
+        .select_from(GameSession)
+        .where(
+            GameSession.student_id == student.id,
+            GameSession.end_reason == SessionEndReason.RESET,
+        )
+    )
+    assert resets == 0
+
+
+def test_not_enough_content_returns_409(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    monkeypatch: pytest.MonkeyPatch,
+    assert_error: Callable[..., None],
+) -> None:
+    student = make_user()
+    game = make_game_session(student)
+    db.commit()
+    four = frozenset(list(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))[:4])
+    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: four)
+
+    assert_error(post(student, game.id, "reset"), 409, ErrorCode.NOT_ENOUGH_CONTENT)
+    db.refresh(game)
+    assert (game.state, game.end_reason) == (SessionState.ACTIVE, None)
+    resets = db.scalar(
+        select(func.count())
+        .select_from(GameSession)
+        .where(
+            GameSession.student_id == student.id,
+            GameSession.end_reason == SessionEndReason.RESET,
+        )
+    )
+    assert resets == 0
+
+
+@pytest.mark.parametrize("action", ACTIONS)
+def test_idle_game_is_409_and_the_expiry_is_committed(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    transaction_calls: list[str],
+    action: str,
+    assert_error: Callable[..., None],
+) -> None:
+    student = make_user()
+    idle_since = datetime.now(UTC) - session_idle_limit() - timedelta(minutes=1)
+    game = make_game_session(
+        student, state=SessionState.PAUSED, paused_at=idle_since, last_activity_at=idle_since
+    )
+    transaction_calls.clear()
+
+    assert_error(post(student, game.id, action), 409, ErrorCode.SESSION_NOT_ACTIVE)
+
+    # committed before the 409, so the game doesn't look open on the next request
+    assert transaction_calls.count("commit") == 1
+    db.refresh(game)
+    assert (game.state, game.end_reason) == (SessionState.ABANDONED, SessionEndReason.EXPIRED)
+
+
+@pytest.mark.parametrize("action", ACTIONS)
+def test_finished_game_is_409(
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    action: str,
+    assert_error: Callable[..., None],
+) -> None:
+    student = make_user()
+    game = make_game_session(student, state=SessionState.COMPLETED, completed_at=datetime.now(UTC))
+
+    response = post(student, game.id, action)
+
+    assert_error(response, 409, ErrorCode.SESSION_NOT_ACTIVE)
+    assert response.json()["error"]["details"] == [
+        {"session_id": str(game.id), "state": SessionState.COMPLETED.value}
+    ]
+
+
+@pytest.mark.parametrize("action", ACTIONS)
+def test_another_students_game_or_an_unknown_id_is_404(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    action: str,
+    assert_error: Callable[..., None],
+) -> None:
+    student = make_user()
+    game = make_game_session(student)
+    # saved already, so a rolled-back 404 does not remove the account
+    db.commit()
+
+    assert_error(post(make_user(), game.id, action), 404, ErrorCode.NOT_FOUND)
+    assert_error(post(student, uuid4(), action), 404, ErrorCode.NOT_FOUND)
+    db.refresh(game)
+    assert game.state == SessionState.ACTIVE
+
+
+@pytest.mark.parametrize("action", ACTIONS)
+def test_an_id_that_is_not_a_uuid_is_422(
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    action: str,
+    assert_error: Callable[..., None],
+) -> None:
+    assert_error(post(make_user(), "not-a-uuid", action), 422, ErrorCode.VALIDATION_ERROR)
+
+
+@pytest.mark.parametrize("action", ACTIONS)
+def test_admin_is_403(
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    action: str,
+    assert_error: Callable[..., None],
+) -> None:
+    # the same as starting a game: admins don't play
+    response = post(make_user(role=UserRole.ADMIN), uuid4(), action)
+
+    assert_error(response, 403, ErrorCode.FORBIDDEN_ROLE)
+
+
+@pytest.mark.parametrize("action", ACTIONS)
+def test_disabled_account_is_403(
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    action: str,
+    assert_error: Callable[..., None],
+) -> None:
+    assert_error(post(make_user(is_active=False), uuid4(), action), 403, ErrorCode.ACCOUNT_DISABLED)
+
+
+@pytest.mark.parametrize("action", ACTIONS)
+def test_needs_a_signed_in_user(
+    client: TestClient, action: str, assert_error: Callable[..., None]
+) -> None:
+    response = client.post(f"{URL}/{uuid4()}/{action}")
+
+    assert_error(response, 401, ErrorCode.NOT_AUTHENTICATED)
