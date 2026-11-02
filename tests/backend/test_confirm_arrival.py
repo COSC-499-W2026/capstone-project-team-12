@@ -277,6 +277,8 @@ def test_the_route(
     split_media_url: _Split,
 ) -> None:
     game, row = playing()
+    # saved already, so a rolled-back 409 does not remove the account
+    db.commit()
     student = db.get(User, game.student_id)
     assert student is not None
     url = f"/api/v1/games/{game.id}/navigation/confirm-arrival"
