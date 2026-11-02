@@ -9,9 +9,9 @@ not affect play.
 
 Read-only, two queries however many locations there are: locations with their clues and primary
 recordings in one statement (so a location committed meanwhile cannot appear without its clues),
-and the feedback phrases. A phrase import committed between the two only makes the report show
-the newer phrase list; each language's missing phrases and playable flags come from the same read.
-Never flushes or commits.
+and the feedback phrases, read first. A phrase import committed between the two is not in the
+report (READ COMMITTED), which then shows the phrase list as it was when the read began; each
+language's missing phrases and playable flags come from that one read. Never flushes or commits.
 """
 
 from collections import Counter
