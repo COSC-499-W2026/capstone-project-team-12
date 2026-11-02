@@ -2,70 +2,103 @@
 
 Author: Fabiha Afifa
 
-This week, we focused on extending the game's core functionality beyond class management and session status. The main goals were to finish pause and resume support, add automatic session expiration, implement points and achievements, and move forward with quitting, resetting, shuffling, content imports, and GPS navigation. We also continued improving authentication tests and checking concurrency behavior so that overlapping requests do not corrupt session or content data.
+This week, we focused on finishing the game session lifecycle and on the engagement and content groundwork behind it. The main goals were to let a student pause, resume, quit, reset and shuffle a game, to end idle games automatically, to add the points, levels and achievements that the game will award, and to add the content import and coverage services. We also added login tests and checked concurrent requests so that overlapping requests do not corrupt session data.
 
-The work was distributed so that:
+The work was distributed so that (PRs merged into main this week are listed first, then PRs that were still open at the end of the week):
 
-- **Mia** worked on game session control (A8: #257, #259; A9: #277, #278, #279, #280, #281, #282, #283, #284). A8 added the pause endpoint and the scheduled expiration job, completing the pause/resume workflow. A9 added quitting, resetting and shuffling games. A reset starts a new game with the same class, language and difficulty, with a limit of three resets per local day. A shuffle replaces unfinished locations without changing completed locations or earned points, with at most two shuffles per game. She also began GPS navigation and arrival confirmation (A19: #305–#310).
+- **Mia** worked on game session control.
+  - *Merged:* A8: #255, #257, #258, #259; A9: #277, #278, #279, #280, #281, #282, #283, #284. A8 added pause and resume, with the pause and resume endpoints, and the scheduled job that expires idle games. A9 added quitting, resetting and shuffling a game. A reset starts a new game with the same class, language and difficulty, with a limit of three resets per local day. A shuffle replaces the unfinished locations without changing completed locations or earned points, with at most two shuffles per game.
+  - *Not merged yet:* A19 (#305-#310), the GPS navigation and arrival confirmation work, which is still in a stack of open PRs.
 
-- **Fabiha** worked on points, levels and achievements (A12, #86: #225, #228, #229, #230, #298, #299, #300). The work added a points ledger, per-language statistics, idempotent location scoring, levels 1–5, and achievements for completing 1, 5 and 20 locations. The student endpoints expose points, levels and achievements, while the gameplay integration provides a shared function for finalizing a location's score. The first four PRs merged on Nov. 1; the remaining three were still open. She also reviewed authentication, game-session and navigation PRs, including the session-expiration job and the reset and shuffle workflows.
+- **Fabiha** worked on points, levels and achievements (A12).
+  - *Merged:* #225, #228, #229, #230. The work added a points ledger, per-language statistics, idempotent location scoring, levels 1-5, and the achievement definitions and the service that unlocks completion badges for 1, 5 and 20 locations.
+  - *Not merged yet:* #298, #299 and #300, which add the student endpoints for points, levels and achievements and `score_finalized_location`, the shared function that finalizes a location's score for the game.
 
-- **Eddy** worked on content management (A20, #60: #287–#296, #301, #303, #304). This included the location CSV import service, import limits, clue and feedback audio ZIP imports, location and clue-text routes, clue audio upload and coverage routes, and request-body limits. The import work validates individual files and reports accepted and rejected entries. The later changes address concurrent imports, including deadlocks when two imports process the same content in different orders.
+- **Eddy** worked on content management (A20).
+  - *Merged:* #285, #287, #288, #290, #291. This included the content coverage report service, the locations CSV import service with a size limit, and the clue audio and feedback audio ZIP imports. The imports validate each row or file and report what was accepted and what was rejected.
+  - *Not merged yet:* #292, #293, #295 (the location, clue-text, clue audio upload and coverage routes), #296 (the request-body size middleware), and #301, #303, #304 (the fixes for concurrent imports, including deadlocks when two imports process the same content in a different order).
 
-- **Kaedyn** finished the login test work (A2: #266), covering successful login, access and refresh tokens, token rotation, revoked and expired tokens, invalid credentials and disabled accounts. The PR merged into main after review corrections. These tests strengthen the authentication functionality introduced in the previous weeks.
+- **Kaedyn** finished the login tests.
+  - *Merged:* A2: #266, covering successful login, access and refresh tokens, token rotation, revoked and expired tokens, invalid credentials and disabled accounts.
+  - *Not merged yet:* global route rate limiting (slowapi), which is still in review.
 
-Based on the PR statuses reviewed, we made substantial progress, although several features remained in stacked PRs rather than being available on main:
+Based on the PRs merged into main this week, we met the goal for game sessions and made progress on engagement and content:
 
-- **Accounts:** login tests merged (#266), with stronger coverage of authentication and refresh-token behavior.
-- **Game sessions:** pause/resume and automatic expiration completed through A8. The expiration job runs every five minutes and ends idle games in batches. A9's quit, reset and shuffle changes were implemented in open PRs but had not all merged.
-- **Engagement:** the A12 database models, scoring service and achievement-unlocking logic merged. Student-facing engagement and achievement endpoints, and the gameplay scoring integration, remained open.
-- **Content:** location management, CSV imports, audio ZIP imports, upload routes and coverage reporting progressed through A20. Much of this work remained under review, including the request-body middleware.
-- **Navigation:** A19's navigation rules, current-location endpoint, GPS ping endpoint, arrival confirmation and race-condition tests were implemented in stacked PRs but had not yet merged.
+- **Accounts:** the login tests are merged (#266), with stronger coverage of authentication and refresh-token behaviour.
+- **Game sessions:** A8 and A9 are complete. A student can pause, resume, quit, reset and shuffle a game, and idle games are expired by the five-minute job.
+- **Engagement:** the points ledger, per-language totals, levels, and the achievement definitions and badge unlocking are merged.
+- **Content:** the coverage report service, the locations CSV import and the two audio ZIP imports are merged.
+- **Still open:** the A19 navigation stack, the A12 student endpoints and gameplay scoring function, the A20 routes, request-body middleware and concurrent-import fixes, and global route rate limiting. None of these are on main yet.
 
 The team collectively worked on the following to avoid duplicated logic, inconsistent state and unnecessary dependencies:
 
-- **One session-expiration rule (#257, #259):** the pause endpoint and the scheduled expiration job use the existing session lifecycle logic. `expire_idle_sessions` selects idle games and ends them through `abandon_sessions`, so unfinished locations are skipped and completed locations retain their points. A session can be expired by an ordinary game request or by the scheduled job without introducing a separate definition of expiration.
+- **One session-expiration rule (#257, #259):** the pause endpoint and the scheduled job use the existing session lifecycle logic. `expire_idle_sessions` selects idle games and ends them through `abandon_sessions`, so unfinished locations are skipped and completed locations keep their points. A game can be expired by an ordinary request or by the scheduled job without a second definition of "expired".
 
-- **Safe concurrent expiration (#259):** the expiration job selects open sessions in ID order using `FOR UPDATE SKIP LOCKED`. If another request is already modifying a game, the job skips it rather than waiting for its lock. The CLI processes batches of 500, commits each batch, and stops when a batch is smaller than the limit. This reduces contention with pause, resume and other game operations.
+- **Safe concurrent expiration (#259):** the job selects open games in id order with `FOR UPDATE SKIP LOCKED`. If another request is already changing a game, the job skips it instead of waiting for its lock. The command processes batches of 500, commits each batch, and stops when a batch is smaller than the limit.
 
-- **Shared game creation and local-day calculations (#278, #279):** `save_new_game` extracts the final game-creation step so that starting and resetting a game use the same logic. `start_of_today` calculates local midnight for daily rules, including reset limits and carry-over behavior. Tests cover local midnight and daylight-saving transitions.
+- **Failed actions do not leave a half-done change (#280):** the helper that runs a game action used to commit when the action raised any error. Reset is the first action that writes in several steps, so it now commits only for the idle expiry and rolls back on any other error. A test shows that a reset failing after the old game is abandoned keeps the old game and does not use up a reset.
 
-- **Consistent locking for resets (#279):** resetting a game locks the student before locking the game, following the same order as starting a game. This prevents two concurrent resets from independently passing the daily limit and avoids inconsistent lock ordering between game operations.
+- **Shared game creation and local-day calculations (#278, #279):** `save_new_game` is the final step of starting a game, and a reset uses it too. `start_of_today` calculates local midnight for daily rules, including the reset limit and the carry-over, so the two cannot disagree about what "today" is. Tests cover local midnight and the night daylight saving ends.
 
-- **Preserving game history during shuffles (#281, #283):** shuffled-out session-location rows are retained, including their previous photo attempts. A partial unique index allows replacement locations to occupy the same positions while the historical rows remain stored. The shuffle excludes locations already used in that game, and completed locations and points are not changed.
+- **Consistent locking for resets (#279):** a reset locks the student before the game, the same order as starting a game. This prevents two resets from both passing the daily limit and avoids a deadlock with a start or a class switch.
 
-- **Stale-request protection for shuffles (#283, #284):** the shuffle request includes `shuffles_used` as a precondition. If the value no longer matches the game, the request returns `409 STATE_CHANGED` without making changes. This prevents a delayed or repeated request from accidentally consuming another shuffle.
+- **Preserving game history during shuffles (#281, #283):** shuffled-out session locations are kept, with their photo attempts. A partial unique index lets the replacement locations take the same positions while the old rows stay in the table. The shuffle excludes every location already in that game, and completed locations and points do not change.
 
-- **Idempotent scoring (#225, #228):** A12 records awarded points through `PointsLedger`, preventing a completed location from receiving points more than once. Completed locations receive 100 points, while failed or skipped locations receive zero. `UserLanguageStats` maintains separate cumulative totals for each language, so progress in one language does not change another language's level.
+- **Stale-request protection for shuffles (#283, #284):** the request includes `shuffles_used`. If it no longer matches the game, the request returns `409 STATE_CHANGED` and changes nothing, so a delayed or repeated request cannot use up another shuffle.
 
-- **Shared scoring and achievement progression (#228, #230, #300):** the scoring service updates language-specific totals and levels, while the achievement logic checks completion thresholds. The gameplay integration introduces `score_finalized_location` so that the game component can finalize a location's score through the engagement interface rather than duplicating the points rules.
+- **Idempotent scoring (#225, #228):** awarded points are recorded in `PointsLedger` with a unique key on student, source type and source reference, so a completed location cannot be scored twice. `UserLanguageStats` keeps a separate total for each language, and the level is calculated from that total instead of being stored.
 
-- **Pure navigation rules (#305):** the distance and trend calculations are separated from database operations. The navigation logic uses distance bands, a 25-second trend reference, a 10-meter dead band and a 60-second reset window. Keeping these calculations independent of database state allows the team to test GPS behavior without waiting for real time to pass.
+- **Shared scoring and achievement rules (#228, #230):** the scoring service updates the language totals, and the badge service checks the completion thresholds in the same place, so the game does not need its own copy of the points or achievement rules.
 
-- **Navigation state and concurrency (#307–#310):** the current-location and navigation endpoints operate on the game's current session location. GPS pings are rate-limited, arrival confirmation checks recent position data or an allowed GPS override, and repeated confirmations are designed to be idempotent. Real-Postgres race tests cover overlapping pings, confirmations, shuffles, quits and deactivated-location transitions.
+- **Shared content validation (#287, #290, #291):** the locations CSV import reuses the location validation rules, and the audio ZIP imports reuse the existing audio checks and recording services. An import reports rejected rows or files without rejecting every valid entry in the same upload, and a CSV dry run uses a savepoint so the preview does not keep any changes.
 
-- **Shared content validation (#287–#291):** location CSV imports reuse the location validation rules, while audio ZIP imports reuse the existing audio checks and recording services. The imports report rejected rows or files without rejecting every valid entry in the same upload. CSV dry runs use a savepoint so the preview can perform validation without retaining the changes.
+The following changes are implemented in PRs that were not merged by the end of the week, so they are listed separately:
 
-- **Content import concurrency (#301, #304):** two imports can target the same clues or feedback phrases. The import changes process shared content in a consistent lock order and use an upsert for feedback phrases that may be created concurrently. Separate PostgreSQL connections and transactions are used in the concurrency tests, rather than relying only on mocked database behavior.
+- **Shared scoring function (#300):** `score_finalized_location` lets the game finalize a location's score through the engagement interface instead of repeating the points rules. The photo verification step (A10) still needs to call it.
 
-- **Request-body protection (#296):** the proposed ASGI middleware limits request bodies before the application reads an unbounded amount of data. It distinguishes ordinary request bodies from file uploads and handles requests with and without `Content-Length`. Review identified the need for tighter per-route limits so that a single small-audio upload cannot consume the full ZIP-import allowance.
+- **Pure navigation rules (#305):** the distance and trend calculations are separated from database operations, using distance bands, a 25-second trend reference, a 10-meter dead band and a 60-second reset window. This lets us test GPS behaviour without waiting for real time to pass.
 
-These changes support the team's architectural goal of keeping business rules within their owning components. Game session transitions remain in game, points and achievements remain in engagement, authentication remains in accounts, and content validation remains in content. API routes coordinate these services rather than implementing separate versions of their rules.
+- **Navigation state and concurrency (#307-#310):** the current-location and navigation endpoints work on the game's current session location. GPS pings are rate-limited, arrival confirmation checks recent position data or an allowed GPS override and is idempotent, and real-Postgres race tests cover overlapping pings, confirmations, shuffles, quits and deactivated locations.
 
-We considered alternative implementations and identified several tradeoffs:
+- **Content import concurrency (#301, #304):** two imports can target the same clues or feedback phrases. The import code processes shared content in a consistent lock order and uses an upsert for feedback phrases that may be created at the same time. The concurrency tests use separate PostgreSQL connections and transactions instead of relying only on mocks.
 
-- **Expire every idle session through a single scheduled job.** We kept expiration in normal game operations as well, so an expired session can be recognized immediately when it is accessed rather than waiting for the next five-minute job.
+- **Request-body protection (#296):** the proposed ASGI middleware limits request bodies before the application reads an unbounded amount of data and handles requests with and without `Content-Length`. Review found that it still needs tighter per-route limits, so that one small audio upload cannot use the whole ZIP-import allowance.
 
-- **Delete shuffled-out session locations.** We kept the old rows instead, preserving historical attempts and allowing replacement rows to reuse positions through a partial unique index.
+These changes support the team's architectural goal of keeping business rules inside the component that owns them. Game session transitions stay in game, points and achievements stay in engagement, authentication stays in accounts, and content validation stays in content. Routes call these components through their interfaces and do not repeat their rules.
 
-- **Allow resets and shuffles without request limits.** We introduced a daily reset limit and a per-game shuffle limit to prevent repeatedly drawing new locations until a preferred set appears. Shuffle requests also require the client's expected shuffle count to prevent stale updates.
+With everyone's newly merged work for this week, one of the DFDs below is updated and marked **Updated**. The other merged PRs fill in processes and flows that were already drawn.
 
-- **Calculate points directly in game.** We placed scoring in engagement and exposed an integration function, so the game component does not need to reproduce the ledger, level or achievement rules.
+We considered alternative data flows:
 
-- **Import ZIP entries in their original order.** Concurrent imports containing the same content in opposite orders can deadlock. Processing shared records in a consistent order avoids this, while the import report can still preserve the original ZIP order.
+- **Count resets in a new column.** We kept no counter. The daily limit counts the student's games that ended by reset today, using `last_activity_at`, so the count cannot drift from the games themselves.
+- **Hide the clue audio in the reset and shuffle response.** The first clue of a reset and the new clue of a shuffle are read from Media Storage like the clue of a new game, so process 2.5 now shows that flow.
 
-- **Rely only on the per-file upload limit.** This would not protect the server from a very large multipart request, because the framework processes the request body before route-level validation. The proposed request-body middleware addresses that earlier stage, with per-route limits still needing review.
+### DFD Level 0
+![DFD Level 0](img/dfd_level0_context.png)
 
-- **Test concurrency with ordinary database fixtures.** Uncommitted fixture data is not visible to a second database connection. The team added real-Postgres tests using separate committed transactions to verify locking, duplicate creation and race-condition behavior.
+### DFD Level 1
+**1.0 Auth & Accounts (not changed)**
 
-The main unfinished work at the end of the reporting period was merging the A9 and A19 stacks, completing the A20 content-management review and request-body protections, and connecting A12 scoring to the live gameplay completion path. The A12 scoring integration had been implemented and tested, but the actual A10 photo-verification caller still needed to be connected.
+![1.0 Auth & Accounts](img/dfd_level1_auth_accounts.png)
+
+**2.0 Game Session (Updated)**
+- The new flow 27a reads the clue audio from Media Storage (D8) into 2.5 Control session, because a reset returns the first clue of the new game and a shuffle returns the clue of the new current location (#279, #280, #283, #284).
+- Flow 25 now reads "Session state, shuffles used, resets today (from ended sessions)", because the reset limit is counted from ended games and not stored.
+- Flow 26 now says that a reset saves a new session and a shuffle keeps the shuffled-away rows, and flow 27 says the locations come from a new draw (reset) or a replacement draw (shuffle).
+- Flow 28 lists what the player gets back from reset and shuffle, and the errors `RESET_LIMIT_REACHED`, `SHUFFLE_LIMIT_REACHED`, `STATE_CHANGED`, `NOT_ENOUGH_CONTENT` and `SESSION_NOT_ACTIVE`.
+
+![2.0 Game Session](img/dfd_level1_game_session.png)
+
+**3.0 Photo Verification (not changed)**
+
+![3.0 Photo Verification](img/dfd_level1_photo_verification.png)
+
+**4.0 Class & Engagement (not changed)**
+
+![4.0 Class & Engagement](img/dfd_level1_class_engagement.png)
+
+**5.0 Content Management (not changed)**
+
+![5.0 Content Management](img/dfd_level1_content_management.png)
+
+The main unfinished work at the end of the week is merging the A19 stack, finishing the A20 review and the request-body limits, merging the A12 student endpoints, and connecting scoring to the live photo verification path. Next week, we will divide up the work for the client demo and continue with the later part of the project.
