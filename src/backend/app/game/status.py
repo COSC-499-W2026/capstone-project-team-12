@@ -83,7 +83,8 @@ def get_game(student_id: UUID, game_id: UUID, db: Session) -> GameStatus:
 def expire_if_idle(game: GameSession, db: Session) -> None:
     """Expire the loaded game if it is open and has been idle for the limit, then reload it.
 
-    Also used by pause and resume. The expiry is written with an UPDATE; doesn't commit.
+    Every game action uses it through lock_open_game, including quit. The expiry is written
+    with an UPDATE; doesn't commit.
     """
     now, limit = datetime.now(UTC), session_idle_limit()
     if game.state not in OPEN_SESSION_STATES or not is_idle(game, now, limit):
