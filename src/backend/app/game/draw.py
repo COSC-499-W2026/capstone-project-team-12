@@ -49,7 +49,15 @@ def draw_locations(
     unplayed = _carried_over(student_id, class_id, language, difficulty, db) if carry_over else []
     carried = [location_id for location_id in unplayed if location_id in eligible]
     rest = eligible.difference(carried)
-    return _pick(count, carried, rest, student_id, language, difficulty, db)
+    return _pick(
+        count=count,
+        first=carried,
+        rest=rest,
+        student_id=student_id,
+        language=language,
+        difficulty=difficulty,
+        db=db,
+    )
 
 
 def draw_replacements(
@@ -67,10 +75,19 @@ def draw_replacements(
     game; there is no carry-over. Raises 409 NOT_ENOUGH_CONTENT. Only reads.
     """
     eligible = content.eligible_location_ids(language, difficulty, db)
-    return _pick(count, [], eligible.difference(exclude), student_id, language, difficulty, db)
+    return _pick(
+        count=count,
+        first=[],
+        rest=eligible.difference(exclude),
+        student_id=student_id,
+        language=language,
+        difficulty=difficulty,
+        db=db,
+    )
 
 
 def _pick(
+    *,
     count: int,
     first: Sequence[UUID],
     rest: AbstractSet[UUID],
