@@ -71,8 +71,26 @@ def start_game(
     snapshots = draw_locations(user.id, class_id, language, difficulty, db)
     # before the game exists, so a missing recording fails like any other draw problem
     clue_url = get_audio_service().clue_audio_url(snapshots[0].audio_asset_id, db)
+    return save_new_game(user.id, class_id, language, difficulty, snapshots, clue_url, db)
 
-    game = _create_game(user.id, class_id, language, difficulty, db)
+
+def save_new_game(
+    student_id: UUID,
+    class_id: UUID | None,
+    language: Language,
+    difficulty: Difficulty,
+    snapshots: Sequence[LocationSnapshot],
+    clue_url: str,
+    db: Session,
+) -> StartedGame:
+    """Save a new active game with the drawn locations; the first is being navigated.
+
+    Used by start_game and by a reset. The caller has already drawn the locations and made the
+    first clue's link, so nothing is written if either fails, and holds the student's lock with
+    no other open game left. Raises SESSION_ALREADY_OPEN if another start won a race. Doesn't
+    commit.
+    """
+    game = _create_game(student_id, class_id, language, difficulty, db)
     db.add_all(_session_locations(game, snapshots))
     db.flush()
     return StartedGame(game.id, SessionState(game.state), game.current_position, clue_url)
