@@ -12,10 +12,12 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from httpx2 import Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.content import interface as content
 from app.errors import ErrorCode
+from app.game import shuffle
 from app.game.sessions import session_idle_limit
 from app.models.accounts import User
 from app.models.enums import (
@@ -27,6 +29,7 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.game import GameSession, SessionLocation
+from app.services.audio import MediaNotFoundError
 
 GAME_FIELDS = {
     "session_id",
@@ -225,6 +228,75 @@ def test_admin_and_disabled_accounts_are_403(
 
     assert_error(post(admin, uuid4()), 403, ErrorCode.FORBIDDEN_ROLE)
     assert_error(post(disabled, uuid4()), 403, ErrorCode.ACCOUNT_DISABLED)
+
+
+def _location_rows(db: Session, game: GameSession) -> list[tuple[object, ...]]:
+    rows = db.scalars(
+        select(SessionLocation)
+        .where(SessionLocation.session_id == game.id)
+        .order_by(SessionLocation.position, SessionLocation.id)
+    )
+    return [(row.id, row.position, row.status, row.skip_reason) for row in rows]
+
+
+def test_not_enough_content_is_409_and_changes_nothing(
+    db: Session,
+    post: Callable[..., Response],
+    playing: Callable[..., tuple[User, GameSession]],
+    assert_error: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+    transaction_calls: list[str],
+) -> None:
+    student, game = playing()
+    # saved already, so a rolled-back refusal does not remove the game
+    db.commit()
+    before = _location_rows(db, game)
+    # every eligible location is already in the game, so the draw fails before any write
+    in_game = set(
+        db.scalars(select(SessionLocation.location_id).where(SessionLocation.session_id == game.id))
+    )
+    monkeypatch.setattr(
+        content, "eligible_location_ids", lambda *_args, **_kwargs: frozenset(in_game)
+    )
+    transaction_calls.clear()
+
+    assert_error(post(student, game.id), 409, ErrorCode.NOT_ENOUGH_CONTENT)
+
+    db.refresh(game)
+    assert (game.state, game.shuffles_used) == (SessionState.ACTIVE, 0)
+    assert _location_rows(db, game) == before
+    assert "rollback" in transaction_calls
+    assert "commit" not in transaction_calls
+
+
+class _WithoutRecordings:
+    def clue_audio_url(self, *_args: object, **_kwargs: object) -> str:
+        raise MediaNotFoundError
+
+
+def test_a_missing_recording_is_404_and_changes_nothing(
+    db: Session,
+    post: Callable[..., Response],
+    playing: Callable[..., tuple[User, GameSession]],
+    assert_error: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+    transaction_calls: list[str],
+) -> None:
+    student, game = playing()
+    # saved already, so a rolled-back 404 does not remove the game
+    db.commit()
+    before = _location_rows(db, game)
+    # the recording is looked up before the old rows are marked shuffled
+    monkeypatch.setattr(shuffle, "get_audio_service", lambda: _WithoutRecordings())
+    transaction_calls.clear()
+
+    assert_error(post(student, game.id), 404, ErrorCode.NOT_FOUND)
+
+    db.refresh(game)
+    assert (game.state, game.shuffles_used) == (SessionState.ACTIVE, 0)
+    assert _location_rows(db, game) == before
+    assert "rollback" in transaction_calls
+    assert "commit" not in transaction_calls
 
 
 def test_needs_a_signed_in_user(client: TestClient, assert_error: Callable[..., None]) -> None:
