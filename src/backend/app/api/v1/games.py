@@ -6,7 +6,7 @@ from typing import Annotated, Self, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, NonNegativeInt, model_validator
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
@@ -281,7 +281,7 @@ def reset(
 
 class ShuffleRequest(BaseModel):
     # the shuffles_used the app last saw, so a retried request can't shuffle twice
-    shuffles_used: NonNegativeInt
+    shuffles_used: Annotated[int, Field(strict=True, ge=0)]
 
 
 class ShuffledGameResponse(GameStatusResponse):

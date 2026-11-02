@@ -178,7 +178,17 @@ def test_idle_game_is_409_and_the_expiry_is_committed(
     assert (game.state, game.end_reason) == (SessionState.ABANDONED, SessionEndReason.EXPIRED)
 
 
-@pytest.mark.parametrize("body", [{}, {"shuffles_used": -1}, {"shuffles_used": "one"}])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"shuffles_used": -1},
+        {"shuffles_used": "one"},
+        {"shuffles_used": "1"},
+        {"shuffles_used": 1.0},
+        {"shuffles_used": True},
+    ],
+)
 def test_shuffles_used_is_required_and_not_negative(
     post: Callable[..., Response],
     playing: Callable[..., tuple[User, GameSession]],
