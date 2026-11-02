@@ -2,6 +2,7 @@
 
 The caller must lock the student, game, then location, validate ownership,
 and set the location's final status before calling this function.
+This helper sets location points before engagement scoring flushes.
 The caller owns the transaction.
 """
 
@@ -31,6 +32,9 @@ def score_finalized_location(
 
     completed = location.status == LocationStatus.COMPLETED
 
+    # Satisfy the completed-location constraint before engagement flushes.
+    location.points_awarded = 100 if completed else 0
+
     result = apply_location_result(
         location.id,
         game.student_id,
@@ -40,19 +44,15 @@ def score_finalized_location(
         db=db,
     )
 
-    if result.location_points_awarded:
-        location.points_awarded = result.location_points_awarded
-
     db.flush()
 
-    game.total_score = (
-        db.scalar(
-            select(func.coalesce(func.sum(SessionLocation.points_awarded), 0)).where(
-                SessionLocation.session_id == game.id
-            )
+    total_score = db.scalar(
+        select(func.coalesce(func.sum(SessionLocation.points_awarded), 0)).where(
+            SessionLocation.session_id == game.id
         )
-        or 0
     )
+    assert total_score is not None
+    game.total_score = total_score
 
     db.flush()
     return result

@@ -228,3 +228,41 @@ def test_scoring_rolls_back_with_transaction(
         is None
     )
     assert db.get(UserLanguageStats, (student.id, Language.JA)) is None
+
+
+def test_pending_location_can_be_finalized_and_scored(
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    student = make_user()
+    game = make_game_session(student=student)
+    location = make_session_location(game, position=1)
+
+    # Persist the location in its original pending state.
+    db.flush()
+    assert location.status == LocationStatus.PENDING
+    assert location.points_awarded == 0
+
+    # Simulate the verification route finalizing the location.
+    location.status = LocationStatus.COMPLETED
+    location.completed_at = datetime.now(UTC)
+
+    # The helper must assign points before the database is flushed.
+    result = score_finalized_location(game, location, db)
+
+    assert result.location_points_awarded == 100
+    assert location.points_awarded == 100
+    assert game.total_score == 100
+
+    db.expire_all()
+
+    persisted_location = db.get(SessionLocation, location.id)
+    assert persisted_location is not None
+    assert persisted_location.status == LocationStatus.COMPLETED
+    assert persisted_location.points_awarded == 100
+
+    stats = db.get(UserLanguageStats, (student.id, Language.JA))
+    assert stats is not None
+    assert stats.total_points == 100
