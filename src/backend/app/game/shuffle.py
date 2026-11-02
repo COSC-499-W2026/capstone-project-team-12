@@ -33,7 +33,8 @@ class ShuffledGame:
 
 def shuffle_game(student_id: UUID, game_id: UUID, shuffles_used: int, db: Session) -> ShuffledGame:
     """Replace the unfinished locations of the student's game (the current one and those not
-    played yet) with new ones. Finished locations and their points don't change.
+    played yet) with new ones. Finished locations and their points don't change. Shuffling the
+    current location while it is still VERIFYING is intended.
 
     `shuffles_used` is what the app last saw. If it no longer matches (e.g. a network retry of a
     shuffle that already happened), 409 STATE_CHANGED and nothing changes; this is checked
@@ -42,8 +43,9 @@ def shuffle_game(student_id: UUID, game_id: UUID, shuffles_used: int, db: Sessio
     max_shuffles_per_session (2): 409 SHUFFLE_LIMIT_REACHED. A paused game can't be shuffled:
     409 SESSION_NOT_ACTIVE (the student resumes first). NOT_ENOUGH_CONTENT if there aren't
     enough eligible locations left that the game hasn't had; the shuffle isn't used up. The same
-    lookup errors as pause_game. Everything that can fail runs before the first write. A shuffle
-    is a game action, so it sets last_activity_at. Flushed; doesn't commit.
+    lookup errors as pause_game. lock_open_game can expire an idle game before raising, and the
+    caller commits that 409. A shuffle is a game action, so it sets last_activity_at. Flushed;
+    doesn't commit.
     """
     game = lock_open_game(student_id, game_id, db)
     if game.state != SessionState.ACTIVE:
@@ -87,8 +89,8 @@ def shuffle_game(student_id: UUID, game_id: UUID, shuffles_used: int, db: Sessio
     for row in replaced:
         row.status = LocationStatus.SKIPPED
         row.skip_reason = SkipReason.SHUFFLED
-    # one flush writes these UPDATEs before the INSERTs below, so the old rows give up their
-    # positions (shuffled rows don't count in the unique index) before the new rows take them
+    # flush the UPDATEs first, so the old rows give up their positions before the new rows take them
+    db.flush()
     db.add_all(
         new_location_row(
             game.id,
