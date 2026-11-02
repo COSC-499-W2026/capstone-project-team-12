@@ -172,7 +172,9 @@ def test_dry_run_saves_nothing_and_keeps_the_callers_changes(
     db: Session, make_location: Callable[..., Location]
 ) -> None:
     earlier = make_location()  # not committed: only the dry run's own inserts are undone
-    count = location_count(db)
+    room_number, count = earlier.room_number, location_count(db)
+    earlier.name = "Renamed"  # not flushed: the savepoint flushes it, outside the savepoint
+    assert earlier in db.dirty
 
     report = import_csv(csv_file(row("QZX 901"), row("QZX 902")), db, dry_run=True)
 
@@ -180,26 +182,9 @@ def test_dry_run_saves_nothing_and_keeps_the_callers_changes(
     assert [imported.room_number for imported in report.imported] == ["QZX 901", "QZX 902"]
     assert location_count(db) == count
     assert db.get(Location, earlier.id) is earlier
-
-
-def test_dry_run_keeps_the_callers_pending_changes(db: Session) -> None:
-    pending = Location(
-        name="Pending",
-        building_name="Science Building",
-        room_number="QZX 800",
-        accepted_answers=["QZX800"],
-        gps_points=[{"lat": 49.9, "lng": -119.3}],
-        gps_radius_meters=30,
-    )
-    db.add(pending)  # added but not flushed: the savepoint flushes it, outside the savepoint
-    assert pending in db.new
-
-    import_csv(csv_file(row("QZX 901")), db, dry_run=True)
-
-    assert saved("QZX 901", db) is None
-    assert saved("QZX 800", db) is pending  # still in the caller's transaction
+    assert db.scalar(select(Location.name).filter_by(id=earlier.id)) == "Renamed"
     db.rollback()
-    assert saved("QZX 800", db) is None  # which the caller can still roll back
+    assert saved(room_number, db) is None  # still in the caller's transaction, to roll back
 
 
 def test_dry_run_is_undone_when_a_row_raises(

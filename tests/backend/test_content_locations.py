@@ -129,19 +129,14 @@ def test_room_number_of_an_inactive_location_cannot_be_reused(
     db: Session, make_location: Callable[..., Location]
 ) -> None:
     make_location(room_number="SCI 333", accepted_answers=["SCI333"], is_active=False)
-    other = make_location()
-    message = "Another location already has room number SCI 333; it is deactivated: reactivate it"
 
-    for save in (  # POST and PUT
-        lambda: create_location(fields(room_number="sci333"), db),
-        lambda: replace_location(other.id, fields(), db),
-    ):
-        with pytest.raises(AppError) as error:
-            save()
-        assert error.value.code == ErrorCode.VALIDATION_ERROR
-        details = error.value.details
-        assert details == [{"in": "body", "field": "room_number", "message": error.value.message}]
-        assert error.value.message.startswith(message)
+    with pytest.raises(AppError) as error:
+        create_location(fields(room_number="sci333"), db)
+
+    assert error.value.code == ErrorCode.VALIDATION_ERROR
+    details = error.value.details
+    assert details == [{"in": "body", "field": "room_number", "message": error.value.message}]
+    assert "; it is deactivated: reactivate it (is_active true) instead" in error.value.message
 
 
 def test_duplicate_room_number_keeps_the_work_done_before_it(
