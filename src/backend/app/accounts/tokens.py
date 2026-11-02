@@ -115,9 +115,8 @@ def validate_refresh_token(token: str, db: Session) -> UUID | None:
 
     if result is not None:
         id = result.id
-        user_id = result.user_id
         if result.replaced_by is not None:
-            revoke_refresh_tokens(user_id, db)
+            revoke_token_family(result.family_id, db)
             raise AppError(ErrorCode.NOT_AUTHENTICATED)
         if (
             result.expires_at > now()
@@ -131,11 +130,18 @@ def validate_refresh_token(token: str, db: Session) -> UUID | None:
 
 def revoke_refresh_tokens(user_id: UUID, db: Session) -> None:
     """Revokes all refresh tokens for the given user_id.
-
     This function does not commit: the caller owns the transaction"""
     stmt = update(RefreshToken).where(RefreshToken.user_id == user_id).values(revoked_at=now())
     db.execute(stmt)
-    db._flush()
+    db.flush()
+
+    
+def revoke_token_family(family_id: UUID, db: Session) -> None:
+    """Revokes every refresh token in one family, which is one sign-in on one device.
+    This function does not commit: the caller owns the transaction"""
+    stmt = update(RefreshToken).where(RefreshToken.family_id == family_id).values(revoked_at=now())
+    db.execute(stmt)
+    db.flush()
 
 
 def now() -> datetime:

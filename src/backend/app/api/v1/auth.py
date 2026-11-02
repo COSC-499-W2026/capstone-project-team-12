@@ -70,10 +70,17 @@ def refresh(
     if refresh_token is None:
         raise AppError(ErrorCode.NOT_AUTHENTICATED, "Invalid token: please sign in again")
     else:
-        tokens = rotate_tokens(refresh_token, db)
-        db.commit()
-        _set_refresh_cookie(response, tokens.refresh_token)
-        return TokenResponse(access_token=tokens.access_token)
+        try:
+            tokens = rotate_tokens(refresh_token, db)
+            _set_refresh_cookie(response, tokens.refresh_token)
+            db.commit()
+            return TokenResponse(access_token=tokens.access_token)
+        except AppError:
+            # a replayed token is refused, but revoking its family must still be saved
+            db.commit()
+            raise
+        
+    
 
 
 def _set_refresh_cookie(response: Response, token: str) -> None:
