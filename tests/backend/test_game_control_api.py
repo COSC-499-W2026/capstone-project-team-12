@@ -1,8 +1,8 @@
-"""POST /api/v1/games/{id}/pause, /resume (A8) and /quit (A9) over HTTP.
+"""POST /api/v1/games/{id}/pause, /resume (A8), /quit and /reset (A9) over HTTP.
 
-The rules are tested in test_game_control.py and test_quit_game.py. These check the status
-codes, the response body and that the route commits, also when an idle game is expired before
-the 409.
+The rules are tested in test_game_control.py, test_quit_game.py and test_reset_game.py. These
+check the status codes, the response body and that the route commits, also when an idle game is
+expired before the 409.
 """
 
 from collections.abc import Callable
@@ -13,16 +13,25 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from httpx2 import Response
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.errors import ErrorCode
+from app.content import interface as content
+from app.errors import AppError, ErrorCode
 from app.game.sessions import session_idle_limit
 from app.models.accounts import User
-from app.models.enums import LocationStatus, SessionEndReason, SessionState, UserRole
+from app.models.enums import (
+    Difficulty,
+    Language,
+    LocationStatus,
+    SessionEndReason,
+    SessionState,
+    UserRole,
+)
 from app.models.game import GameSession, SessionLocation
 
 URL = "/api/v1/games"
-ACTIONS = ["pause", "resume", "quit"]
+ACTIONS = ["pause", "resume", "quit", "reset"]
 
 GAME_FIELDS = {
     "session_id",
@@ -204,6 +213,111 @@ def test_quit(
     assert before <= game.last_activity_at <= datetime.now(UTC)
 
 
+def test_reset(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    transaction_calls: list[str],
+) -> None:
+    student = make_user()
+    paused_at = datetime.now(UTC)
+    old = make_game_session(student, state=SessionState.PAUSED, paused_at=paused_at)
+    transaction_calls.clear()
+
+    response = post(student, old.id, "reset")
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    # the same body as POST /games
+    assert set(body) == {"session_id", "state", "position", "clue_audio_url"}
+    assert (body["state"], body["position"]) == (SessionState.ACTIVE.value, 1)
+    assert body["session_id"] != str(old.id)
+    # the new game's savepoint fires a commit event too; the other is the route's own commit
+    assert transaction_calls.count("commit") == 2
+    db.refresh(old)
+    assert (old.state, old.end_reason) == (SessionState.ABANDONED, SessionEndReason.RESET)
+
+
+def test_the_fourth_reset_today_is_409(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    assert_error: Callable[..., None],
+) -> None:
+    student = make_user()
+    game = make_game_session(student)
+    for _ in range(3):
+        response = post(student, game.id, "reset")
+        assert response.status_code == 201, response.text
+        game = db.get_one(GameSession, response.json()["session_id"])
+
+    assert_error(post(student, game.id, "reset"), 409, ErrorCode.RESET_LIMIT_REACHED)
+    db.refresh(game)
+    assert (game.state, game.end_reason) == (SessionState.ACTIVE, None)
+
+
+def test_a_reset_that_cannot_save_the_new_game_is_not_counted(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    monkeypatch: pytest.MonkeyPatch,
+    assert_error: Callable[..., None],
+) -> None:
+    student = make_user()
+    game = make_game_session(student)
+    # the game is already saved, so the route's rollback only undoes this reset
+    db.commit()
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AppError(ErrorCode.SESSION_ALREADY_OPEN)
+
+    monkeypatch.setattr("app.game.control.save_new_game", fail)
+
+    assert_error(post(student, game.id, "reset"), 409, ErrorCode.SESSION_ALREADY_OPEN)
+    db.refresh(game)
+    assert (game.state, game.end_reason) == (SessionState.ACTIVE, None)
+    resets = db.scalar(
+        select(func.count())
+        .select_from(GameSession)
+        .where(
+            GameSession.student_id == student.id,
+            GameSession.end_reason == SessionEndReason.RESET,
+        )
+    )
+    assert resets == 0
+
+
+def test_not_enough_content_returns_409(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    monkeypatch: pytest.MonkeyPatch,
+    assert_error: Callable[..., None],
+) -> None:
+    student = make_user()
+    game = make_game_session(student)
+    db.commit()
+    four = frozenset(list(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))[:4])
+    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: four)
+
+    assert_error(post(student, game.id, "reset"), 409, ErrorCode.NOT_ENOUGH_CONTENT)
+    db.refresh(game)
+    assert (game.state, game.end_reason) == (SessionState.ACTIVE, None)
+    resets = db.scalar(
+        select(func.count())
+        .select_from(GameSession)
+        .where(
+            GameSession.student_id == student.id,
+            GameSession.end_reason == SessionEndReason.RESET,
+        )
+    )
+    assert resets == 0
+
+
 @pytest.mark.parametrize("action", ACTIONS)
 def test_idle_game_is_409_and_the_expiry_is_committed(
     db: Session,
@@ -259,6 +373,8 @@ def test_another_students_game_or_an_unknown_id_is_404(
 ) -> None:
     student = make_user()
     game = make_game_session(student)
+    # saved already, so a rolled-back 404 does not remove the account
+    db.commit()
 
     assert_error(post(make_user(), game.id, action), 404, ErrorCode.NOT_FOUND)
     assert_error(post(student, uuid4(), action), 404, ErrorCode.NOT_FOUND)

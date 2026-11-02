@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.accounts.interface import get_current_user
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
-from app.game.control import pause_game, quit_game, resume_game
+from app.game.control import pause_game, quit_game, reset_game, resume_game
 from app.game.start import start_game
 from app.game.status import find_current_game, get_game
 from app.models.accounts import User
@@ -248,16 +248,52 @@ def quit_the_game(
     return GameStatusResponse.model_validate(status, from_attributes=True)
 
 
+@games_router.post(
+    "/{game_id}/reset",
+    operation_id="resetGame",
+    status_code=HTTPStatus.CREATED,
+    response_model=StartGameResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def reset(
+    game_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> StartGameResponse:
+    """End the student's game and start a new one with the same class, language and difficulty.
+
+    A paused game can be reset too. Returns the new game, the same body as POST /games. The new
+    locations are a fresh random draw: unplayed locations of a game quit earlier today don't come
+    back. Points already earned stay with the old game.
+    409 RESET_LIMIT_REACHED after 3 resets today (local time). 409 NOT_ENOUGH_CONTENT if the
+    language has too few locations; the current game is left as it is. 409 SESSION_NOT_ACTIVE
+    for a game that has already ended, or one that has been idle for the expiry limit (24 hours
+    by default), which is expired. 404 NOT_FOUND for another student's game, or if the new first
+    clue has no recording. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
+    account.
+    """
+    started = _play(lambda: reset_game(user.id, game_id, db), user, db)
+    return StartGameResponse.model_validate(started, from_attributes=True)
+
+
 def _play(action: Callable[[], T], user: User, db: Session) -> T:
-    """Run a game action and commit, also when it is refused, so an expiry done before the 409 is
-    kept."""
+    """Run a game action and commit it.
+
+    A 409 SESSION_NOT_ACTIVE is committed too, so an idle game expired inside the action stays
+    expired. Any other refusal is rolled back, then re-raised.
+    """
     if user.role == UserRole.ADMIN:
         raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
     try:
         result = action()
-    except AppError:
-        # actions must raise AppError only before a write, or after the expiry: this commits first
-        db.commit()
+    except AppError as error:
+        # an expiry is the one refusal that writes; everything else must not stick
+        if error.code == ErrorCode.SESSION_NOT_ACTIVE:
+            db.commit()
+        else:
+            db.rollback()
         raise
     db.commit()
     return result
