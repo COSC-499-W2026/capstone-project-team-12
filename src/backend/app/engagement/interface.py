@@ -36,6 +36,11 @@ from app.engagement.classes import (
     list_staff_classes,
     update_class_settings,
 )
+from app.engagement.stats import (
+    LanguageEngagementStats,
+    get_language_engagement_stats,
+    level_for_points,
+)
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff
 from app.models.engagement import (
@@ -72,6 +77,8 @@ __all__ = [
     "require_active_enrolment",
     "update_class_settings",
     "validate_code_and_enrol",
+    "LanguageEngagementStats",
+    "get_language_engagement_stats",
 ]
 
 
@@ -109,19 +116,6 @@ class EngagementResult:
     streak_days: int
     challenges_completed: tuple[str, ...]
     achievements_unlocked: tuple[str, ...]
-
-
-def _level_for_points(total_points: int) -> int:
-    """Derive the language level from cumulative points."""
-    if total_points >= 5000:
-        return 5
-    if total_points >= 3000:
-        return 4
-    if total_points >= 1500:
-        return 3
-    if total_points >= 500:
-        return 2
-    return 1
 
 
 def apply_location_result(
@@ -303,7 +297,7 @@ def apply_location_result(
 
     stats = db.get(UserLanguageStats, (student_id, target_language))
     previous_total = stats.total_points if stats is not None else 0
-    previous_level = _level_for_points(previous_total)
+    previous_level = level_for_points(previous_total)
     awarded = 0
 
     if completed:
@@ -345,7 +339,7 @@ def apply_location_result(
     )
 
     total_points = stats.total_points if stats is not None else 0
-    level = _level_for_points(total_points)
+    level = level_for_points(total_points)
 
     return EngagementResult(
         location_points_awarded=awarded,
