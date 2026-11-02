@@ -16,10 +16,18 @@ from httpx2 import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game.sessions import session_idle_limit
 from app.models.accounts import User
-from app.models.enums import LocationStatus, SessionEndReason, SessionState, UserRole
+from app.models.enums import (
+    Difficulty,
+    Language,
+    LocationStatus,
+    SessionEndReason,
+    SessionState,
+    UserRole,
+)
 from app.models.game import GameSession, SessionLocation
 
 URL = "/api/v1/games"
@@ -269,6 +277,34 @@ def test_a_reset_that_cannot_save_the_new_game_is_not_counted(
     monkeypatch.setattr("app.game.control.save_new_game", fail)
 
     assert_error(post(student, game.id, "reset"), 409, ErrorCode.SESSION_ALREADY_OPEN)
+    db.refresh(game)
+    assert (game.state, game.end_reason) == (SessionState.ACTIVE, None)
+    resets = db.scalar(
+        select(func.count())
+        .select_from(GameSession)
+        .where(
+            GameSession.student_id == student.id,
+            GameSession.end_reason == SessionEndReason.RESET,
+        )
+    )
+    assert resets == 0
+
+
+def test_not_enough_content_returns_409(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    monkeypatch: pytest.MonkeyPatch,
+    assert_error: Callable[..., None],
+) -> None:
+    student = make_user()
+    game = make_game_session(student)
+    db.commit()
+    four = frozenset(list(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))[:4])
+    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: four)
+
+    assert_error(post(student, game.id, "reset"), 409, ErrorCode.NOT_ENOUGH_CONTENT)
     db.refresh(game)
     assert (game.state, game.end_reason) == (SessionState.ACTIVE, None)
     resets = db.scalar(
