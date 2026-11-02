@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.accounts.interface import get_current_user
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
-from app.game.control import pause_game, resume_game
+from app.game.control import pause_game, quit_game, resume_game
 from app.game.start import start_game
 from app.game.status import find_current_game, get_game
 from app.models.accounts import User
@@ -218,6 +218,33 @@ def resume(
     student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.
     """
     status = _play(lambda: resume_game(user.id, game_id, db), user, db)
+    return GameStatusResponse.model_validate(status, from_attributes=True)
+
+
+@games_router.post(
+    "/{game_id}/quit",
+    operation_id="quitGame",
+    response_model=GameStatusResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def quit_the_game(
+    game_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> GameStatusResponse:
+    """End the student's game (abandoned, end reason quit). A paused game can be quit too.
+
+    Points already earned stay. The unplayed locations are skipped and come first in the next
+    game started today in the same mode, language and difficulty. Returns the game status for
+    now; once GET /games/{id}/summary exists, it returns the summary instead. 409
+    SESSION_NOT_ACTIVE for a game that has already ended (so quitting twice is a 409), or one that
+    has been idle for the expiry limit (24 hours by default), which is expired. 404 NOT_FOUND for
+    another student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
+    account.
+    """
+    status = _play(lambda: quit_game(user.id, game_id, db), user, db)
     return GameStatusResponse.model_validate(status, from_attributes=True)
 
 
