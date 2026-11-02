@@ -62,10 +62,7 @@ def get_language_engagement_stats(
         .join(Achievement, UserAchievement.achievement_id == Achievement.id)
         .where(
             UserAchievement.user_id == student_id,
-            (
-                (UserAchievement.language == language)
-                | (UserAchievement.language.is_(None))
-            ),
+            ((UserAchievement.language == language) | (UserAchievement.language.is_(None))),
         )
         .order_by(
             UserAchievement.unlocked_at.desc(),
