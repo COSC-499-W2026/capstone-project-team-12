@@ -151,6 +151,8 @@ def test_refused_shuffles_are_409(
     code: ErrorCode,
 ) -> None:
     student, game = playing(**fields)
+    # saved already, so a rolled-back refusal does not remove the game
+    db.commit()
 
     assert_error(post(student, game.id, {"shuffles_used": game.shuffles_used}), 409, code)
     db.refresh(game)
@@ -189,12 +191,15 @@ def test_shuffles_used_is_required_and_not_negative(
 
 
 def test_another_students_game_or_an_unknown_id_is_404(
+    db: Session,
     post: Callable[..., Response],
     make_user: Callable[..., User],
     playing: Callable[..., tuple[User, GameSession]],
     assert_error: Callable[..., None],
 ) -> None:
     student, game = playing()
+    # saved already, so a rolled-back 404 does not remove the account
+    db.commit()
 
     assert_error(post(make_user(), game.id), 404, ErrorCode.NOT_FOUND)
     assert_error(post(student, uuid4()), 404, ErrorCode.NOT_FOUND)
