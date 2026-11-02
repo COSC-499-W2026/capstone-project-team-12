@@ -135,7 +135,7 @@ def revoke_refresh_tokens(user_id: UUID, db: Session) -> None:
     db.execute(stmt)
     db.flush()
 
-    
+
 def revoke_token_family(family_id: UUID, db: Session) -> None:
     """Revokes every refresh token in one family, which is one sign-in on one device.
     This function does not commit: the caller owns the transaction"""

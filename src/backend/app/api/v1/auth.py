@@ -79,8 +79,6 @@ def refresh(
             # a replayed token is refused, but revoking its family must still be saved
             db.commit()
             raise
-        
-    
 
 
 def _set_refresh_cookie(response: Response, token: str) -> None:
