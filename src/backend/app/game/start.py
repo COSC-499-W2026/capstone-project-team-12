@@ -148,17 +148,33 @@ def _session_locations(
 ) -> list[SessionLocation]:
     """One row per drawn location with its content snapshot. The first is being navigated."""
     return [
-        SessionLocation(
-            session_id=game.id,
-            location_id=snapshot.location_id,
-            position=position,
-            status=LocationStatus.NAVIGATING if position == 1 else LocationStatus.PENDING,
-            started_at=game.last_activity_at if position == 1 else None,
-            clue_id=snapshot.clue_id,
-            audio_asset_id=snapshot.audio_asset_id,
-            accepted_answers_snapshot=list(snapshot.accepted_answers),
-            gps_points_snapshot=[{"lat": p.lat, "lng": p.lng} for p in snapshot.gps_points],
-            radius_snapshot=snapshot.radius_meters,
+        new_location_row(
+            game.id, position, snapshot, current=position == 1, now=game.last_activity_at
         )
         for position, snapshot in enumerate(snapshots, start=1)
     ]
+
+
+def new_location_row(
+    session_id: UUID,
+    position: int,
+    snapshot: LocationSnapshot,
+    *,
+    current: bool,
+    now: datetime,
+) -> SessionLocation:
+    """A game's row for a drawn location, with the content snapshot that navigation, OCR and
+    clue playback use. The `current` location is being navigated from `now`; the others are
+    still to come. Used for a new game and for a shuffle's replacements."""
+    return SessionLocation(
+        session_id=session_id,
+        location_id=snapshot.location_id,
+        position=position,
+        status=LocationStatus.NAVIGATING if current else LocationStatus.PENDING,
+        started_at=now if current else None,
+        clue_id=snapshot.clue_id,
+        audio_asset_id=snapshot.audio_asset_id,
+        accepted_answers_snapshot=list(snapshot.accepted_answers),
+        gps_points_snapshot=[{"lat": p.lat, "lng": p.lng} for p in snapshot.gps_points],
+        radius_snapshot=snapshot.radius_meters,
+    )
