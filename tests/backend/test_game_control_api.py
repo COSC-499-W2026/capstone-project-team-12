@@ -13,9 +13,10 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from httpx2 import Response
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.errors import ErrorCode
+from app.errors import AppError, ErrorCode
 from app.game.sessions import session_idle_limit
 from app.models.accounts import User
 from app.models.enums import LocationStatus, SessionEndReason, SessionState, UserRole
@@ -249,6 +250,38 @@ def test_the_fourth_reset_today_is_409(
     assert (game.state, game.end_reason) == (SessionState.ACTIVE, None)
 
 
+def test_a_reset_that_cannot_save_the_new_game_is_not_counted(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    monkeypatch: pytest.MonkeyPatch,
+    assert_error: Callable[..., None],
+) -> None:
+    student = make_user()
+    game = make_game_session(student)
+    # the game is already saved, so the route's rollback only undoes this reset
+    db.commit()
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AppError(ErrorCode.SESSION_ALREADY_OPEN)
+
+    monkeypatch.setattr("app.game.control.save_new_game", fail)
+
+    assert_error(post(student, game.id, "reset"), 409, ErrorCode.SESSION_ALREADY_OPEN)
+    db.refresh(game)
+    assert (game.state, game.end_reason) == (SessionState.ACTIVE, None)
+    resets = db.scalar(
+        select(func.count())
+        .select_from(GameSession)
+        .where(
+            GameSession.student_id == student.id,
+            GameSession.end_reason == SessionEndReason.RESET,
+        )
+    )
+    assert resets == 0
+
+
 @pytest.mark.parametrize("action", ACTIONS)
 def test_idle_game_is_409_and_the_expiry_is_committed(
     db: Session,
@@ -304,6 +337,8 @@ def test_another_students_game_or_an_unknown_id_is_404(
 ) -> None:
     student = make_user()
     game = make_game_session(student)
+    # saved already, so a rolled-back 404 does not remove the account
+    db.commit()
 
     assert_error(post(make_user(), game.id, action), 404, ErrorCode.NOT_FOUND)
     assert_error(post(student, uuid4(), action), 404, ErrorCode.NOT_FOUND)

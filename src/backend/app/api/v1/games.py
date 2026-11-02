@@ -279,15 +279,21 @@ def reset(
 
 
 def _play(action: Callable[[], T], user: User, db: Session) -> T:
-    """Run a game action and commit, also when it is refused, so an expiry done before the 409 is
-    kept."""
+    """Run a game action and commit it.
+
+    A 409 SESSION_NOT_ACTIVE is committed too, so an idle game expired inside the action stays
+    expired. Any other refusal is rolled back, then re-raised.
+    """
     if user.role == UserRole.ADMIN:
         raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
     try:
         result = action()
-    except AppError:
-        # actions must raise AppError only before a write, or after the expiry: this commits first
-        db.commit()
+    except AppError as error:
+        # an expiry is the one refusal that writes; everything else must not stick
+        if error.code == ErrorCode.SESSION_NOT_ACTIVE:
+            db.commit()
+        else:
+            db.rollback()
         raise
     db.commit()
     return result
