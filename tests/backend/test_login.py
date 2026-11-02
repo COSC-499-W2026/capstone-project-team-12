@@ -165,9 +165,15 @@ def test_refresh_cookie_is_protected(client: TestClient, student: User):
     assert f"max-age={14 * 24 * 60 * 60}" in cookie
 
 
-def test_using_replaced_token_revokes_family(client: TestClient, student: User):
+def test_using_replaced_token_revokes_family(client: TestClient, db: Session, student: User):
     first_token = login(client).cookies["refresh_token"]
     second_token = refresh(client, first_token).cookies["refresh_token"]
-    # First should refuses because it was replaced, second should refuse because it was revoked
-    assert refresh(client, first_token).json()["error"]["code"] == ErrorCode.NOT_AUTHENTICATED
-    assert refresh(client, second_token).json()["error"]["code"] == ErrorCode.NOT_AUTHENTICATED
+    other_device = login(client).cookies["refresh_token"]  # a second sign-in is its own family
+
+    replay = refresh(client, first_token)
+    assert replay.status_code == 401
+    assert replay.json()["error"]["code"] == ErrorCode.NOT_AUTHENTICATED
+
+    db.rollback()  # a real request ends here: anything not committed is gone
+    assert refresh(client, second_token).status_code == 401  # same family: revoked
+    assert refresh(client, other_device).status_code == 200  # other family: untouched
