@@ -164,6 +164,26 @@ def test_dry_run_saves_nothing_and_keeps_the_callers_changes(
     assert db.get(Location, earlier.id) is earlier
 
 
+def test_dry_run_keeps_the_callers_pending_changes(db: Session) -> None:
+    pending = Location(
+        name="Pending",
+        building_name="Science Building",
+        room_number="QZX 800",
+        accepted_answers=["QZX800"],
+        gps_points=[{"lat": 49.9, "lng": -119.3}],
+        gps_radius_meters=30,
+    )
+    db.add(pending)  # added but not flushed: the savepoint flushes it, outside the savepoint
+    assert pending in db.new
+
+    import_locations(csv_file(row("QZX 901")), db, dry_run=True)
+
+    assert saved("QZX 901", db) is None
+    assert saved("QZX 800", db) is pending  # still in the caller's transaction
+    db.rollback()
+    assert saved("QZX 800", db) is None  # which the caller can still roll back
+
+
 def test_dry_run_is_undone_when_a_row_raises(
     db: Session, monkeypatch: pytest.MonkeyPatch, make_location: Callable[..., Location]
 ) -> None:

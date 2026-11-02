@@ -19,7 +19,9 @@ same room numbers in different orders would each wait for the other's row, a dea
 A dry run makes the same inserts in a savepoint of its own and rolls back only that savepoint,
 also when a row raises, so its preview rejects exactly the rows the import would and the
 caller's transaction is left as it was (as create_location's savepoint does for a duplicate).
-Otherwise this flushes and never commits or rolls back: the router owns the transaction.
+Changes the caller has pending are flushed first, as by any query or savepoint, and stay in
+its transaction; they are not rolled back. Otherwise this flushes and never commits or rolls
+back: the router owns the transaction.
 """
 
 import csv
