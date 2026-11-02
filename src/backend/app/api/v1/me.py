@@ -1,5 +1,6 @@
 """The signed-in user's own profile."""
 
+from datetime import datetime
 from http import HTTPStatus
 from typing import Annotated, Self
 from uuid import UUID
@@ -47,7 +48,7 @@ class UpdateProfileRequest(BaseModel):
 
     @model_validator(mode="after")
     def _something_to_change(self) -> Self:
-        # a null current_class_id is a change (Practice), so look at what was sent, not the value
+        # A null current_class_id is a change, so inspect which fields were sent.
         if "current_class_id" not in self.model_fields_set and self.preferred_language is None:
             raise ValueError("Send current_class_id, preferred_language or both")
         return self
@@ -102,13 +103,34 @@ def update_profile(
     return response
 
 
+class RecentBadgeResponse(BaseModel):
+    """A recently unlocked achievement."""
+
+    achievement_key: str
+    icon_key: str
+    language: Language | None
+    unlocked_at: datetime
+
+
 class EngagementStatsResponse(BaseModel):
-    """The signed-in student's cumulative statistics for one language."""
+    """The signed-in user's cumulative statistics for one language."""
 
     language: Language
-    total_points: int = Field(description="Cumulative points earned in the selected language.")
+    total_points: int = Field(
+        ge=0,
+        description="Cumulative points earned in the selected language.",
+    )
     level: int = Field(
-        ge=1, le=5, description="Current language level derived from cumulative points."
+        ge=1,
+        le=5,
+        description="Current language level derived from cumulative points.",
+    )
+    points_to_next_level: int | None = Field(
+        ge=0,
+        description="Points needed for the next level; null at level five.",
+    )
+    recent_badges: list[RecentBadgeResponse] = Field(
+        description="Recent unlocks for this language, including global badges."
     )
 
 
@@ -118,11 +140,13 @@ class EngagementStatsResponse(BaseModel):
     operation_id="getMyEngagement",
     summary="Get my engagement statistics",
     description=(
-        "Return the authenticated student's cumulative points and level "
+        "Return the authenticated user's cumulative points, level, "
+        "points needed for the next level, and recently unlocked badges "
         "for the requested target language. Points are tracked separately "
-        "for each language. Students without previous activity start at "
-        "zero points and level one. Streaks and daily challenges are "
-        "implemented separately under A13."
+        "for each language, while global badges are included across languages. "
+        "Users without previous activity start at zero points and level one. "
+        "Students and staff can play and earn points. "
+        "Streaks and daily challenges will be added separately."
     ),
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
@@ -134,12 +158,9 @@ def get_my_engagement(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> EngagementStatsResponse:
-    """Read the signed-in student's engagement statistics."""
-    if user.role != UserRole.STUDENT:
-        raise AppError(
-            ErrorCode.FORBIDDEN_ROLE,
-            "Only students can view student engagement statistics",
-        )
+    """Read the signed-in user's engagement statistics."""
+    if user.role == UserRole.ADMIN:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
 
     stats = get_language_engagement_stats(user.id, language, db)
 
@@ -147,4 +168,14 @@ def get_my_engagement(
         language=stats.language,
         total_points=stats.total_points,
         level=stats.level,
+        points_to_next_level=stats.points_to_next_level,
+        recent_badges=[
+            RecentBadgeResponse(
+                achievement_key=badge.achievement_key,
+                icon_key=badge.icon_key,
+                language=badge.language,
+                unlocked_at=badge.unlocked_at,
+            )
+            for badge in stats.recent_badges
+        ],
     )

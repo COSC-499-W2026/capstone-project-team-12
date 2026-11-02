@@ -118,11 +118,6 @@ class EngagementResult:
     achievements_unlocked: tuple[str, ...]
 
 
-def _level_for_points(total_points: int) -> int:
-    """Derive the language level from cumulative points."""
-    return level_for_points(total_points)
-
-
 def apply_location_result(
     session_location_id: UUID,
     student_id: UUID,
@@ -302,7 +297,7 @@ def apply_location_result(
 
     stats = db.get(UserLanguageStats, (student_id, target_language))
     previous_total = stats.total_points if stats is not None else 0
-    previous_level = _level_for_points(previous_total)
+    previous_level = level_for_points(previous_total)
     awarded = 0
 
     if completed:
@@ -344,7 +339,7 @@ def apply_location_result(
     )
 
     total_points = stats.total_points if stats is not None else 0
-    level = _level_for_points(total_points)
+    level = level_for_points(total_points)
 
     return EngagementResult(
         location_points_awarded=awarded,
