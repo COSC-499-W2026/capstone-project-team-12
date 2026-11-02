@@ -4,7 +4,7 @@ A shuffle marks the rows it replaces as skipped ('shuffled') and adds new rows a
 positions, so the position is unique only among the rows that weren't shuffled.
 
 Revision ID: 7c3e1d9a4b52
-Revises: f4b3b8f11717
+Revises: 3751f18f6d84
 Create Date: 2026-10-27 22:46:12.512331
 """
 
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "7c3e1d9a4b52"
-down_revision: str | None = "f4b3b8f11717"
+down_revision: str | None = "3751f18f6d84"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
