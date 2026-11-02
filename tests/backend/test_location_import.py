@@ -194,7 +194,7 @@ def test_dry_run_keeps_the_callers_pending_changes(db: Session) -> None:
     db.add(pending)  # added but not flushed: the savepoint flushes it, outside the savepoint
     assert pending in db.new
 
-    import_locations(csv_file(row("QZX 901")), db, dry_run=True)
+    import_csv(csv_file(row("QZX 901")), db, dry_run=True)
 
     assert saved("QZX 901", db) is None
     assert saved("QZX 800", db) is pending  # still in the caller's transaction

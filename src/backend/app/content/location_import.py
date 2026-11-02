@@ -3,9 +3,13 @@
 The first row names the columns, in any order: name, building_name, room_number and entrances,
 and optionally floor_number and gps_radius_meters (a blank cell means no floor or the default
 radius). Each further row is one location; entrances holds every entrance in one quoted cell,
-"lat,lng;lat,lng". Accepted answers come from the room number. Empty lines, and the empty cells
-spreadsheets add at the end of a line, are ignored. The spec does not define the columns, so
-they still need the client's confirmation.
+"lat,lng;lat,lng". Empty lines, and the empty cells spreadsheets add at the end of a line, are
+ignored. The spec does not define the columns, so they still need the client's confirmation.
+
+The file cannot set accepted answers or is_active, on purpose: an imported location accepts only
+the answer its room number gives and is active. Extra answers (e.g. a spoken form of the room
+number) are added afterwards by editing the location (PUT), so the portal's import help should
+say so.
 
 Every row is checked as a location created through the API, and the valid rows are imported
 even when others are rejected. A room number already in use, by an earlier row or by an inactive
