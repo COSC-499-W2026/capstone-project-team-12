@@ -181,18 +181,27 @@ def get_my_engagement(
     )
 
 
+class AchievementProgressResponse(BaseModel):
+    """Progress toward an achievement with a measurable threshold."""
+
+    current: int
+    required: int
+
+
 class AchievementResponse(BaseModel):
-    """One achievement earned by a student."""
+    """An achievement and the user's current unlock state."""
 
     achievement_key: str
     category: str
     icon_key: str
     language: Language | None
-    unlocked_at: datetime
+    unlocked: bool
+    unlocked_at: datetime | None
+    progress: AchievementProgressResponse | None
 
 
 class AchievementsResponse(BaseModel):
-    """Unlocked achievements for the selected language."""
+    """Available and previously earned achievements for a language."""
 
     achievements: list[AchievementResponse]
 
@@ -201,11 +210,13 @@ class AchievementsResponse(BaseModel):
     "/achievements",
     response_model=AchievementsResponse,
     operation_id="getMyAchievements",
-    summary="Get my unlocked achievements",
+    summary="Get my achievements",
     description=(
-        "Return the authenticated student's unlocked achievements "
-        "for the requested language, including global achievements. "
-        "Results are ordered by unlock time, newest first."
+        "Return active achievements for the requested language, "
+        "including global achievements and previously earned inactive "
+        "achievements. Each item includes its unlock state and available "
+        "progress. Unlocked achievements appear newest first, followed "
+        "by locked achievements."
     ),
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
@@ -217,12 +228,9 @@ def get_my_achievements(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AchievementsResponse:
-    """Read the signed-in student's unlocked achievements."""
-    if user.role != UserRole.STUDENT:
-        raise AppError(
-            ErrorCode.FORBIDDEN_ROLE,
-            "Only students can view student achievements",
-        )
+    """Read the signed-in user's achievements."""
+    if user.role == UserRole.ADMIN:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
 
     achievements = list_unlocked_achievements(user.id, language, db)
 
@@ -233,7 +241,16 @@ def get_my_achievements(
                 category=item.category,
                 icon_key=item.icon_key,
                 language=item.language,
+                unlocked=item.unlocked,
                 unlocked_at=item.unlocked_at,
+                progress=(
+                    AchievementProgressResponse(
+                        current=item.progress.current,
+                        required=item.progress.required,
+                    )
+                    if item.progress is not None
+                    else None
+                ),
             )
             for item in achievements
         ]

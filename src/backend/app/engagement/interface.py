@@ -43,7 +43,9 @@ from app.engagement.classes import (
 from app.engagement.stats import (
     LanguageEngagementStats,
     get_language_engagement_stats,
-    level_for_points,
+)
+from app.engagement.stats import (
+    level_for_points as _level_for_points,
 )
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff
@@ -303,7 +305,7 @@ def apply_location_result(
 
     stats = db.get(UserLanguageStats, (student_id, target_language))
     previous_total = stats.total_points if stats is not None else 0
-    previous_level = level_for_points(previous_total)
+    previous_level = _level_for_points(previous_total)
     awarded = 0
 
     if completed:
@@ -345,7 +347,7 @@ def apply_location_result(
     )
 
     total_points = stats.total_points if stats is not None else 0
-    level = level_for_points(total_points)
+    level = _level_for_points(total_points)
 
     return EngagementResult(
         location_points_awarded=awarded,
