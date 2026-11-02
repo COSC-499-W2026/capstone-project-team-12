@@ -1,6 +1,6 @@
 # Week 8 Team Log (Oct. 26 - Nov. 1)
 
-Author: Fabiha Afifa
+Authors: Mia Kuang, Fabiha Afifa
 
 This week, we focused on finishing the game session lifecycle and on the engagement and content groundwork behind it. The main goals were to let a student pause, resume, quit, reset and shuffle a game, to end idle games automatically, to add the points, levels and achievements that the game will award, and to add the content import and coverage services. We also added login tests and checked concurrent requests so that overlapping requests do not corrupt session data.
 
