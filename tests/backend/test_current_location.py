@@ -182,12 +182,12 @@ def test_deactivated_locations_are_skipped_until_an_active_one(
 def test_a_paused_game_skips_a_deactivated_location_and_keeps_its_activity(
     db: Session, game_with: Callable[..., Any], active: list[UUID]
 ) -> None:
+    # the fixture already set last_activity_at an hour ago; a pause must leave it there
     played = NOW - timedelta(hours=1)
     game, rows = game_with(
         [(N, uuid4()), (P, active[0])],
         state=SessionState.PAUSED,
         paused_at=played,
-        last_activity_at=played,
     )
 
     found = get_current_location(game.student_id, game.id, db)
