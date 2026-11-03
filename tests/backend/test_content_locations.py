@@ -136,6 +136,7 @@ def test_room_number_of_an_inactive_location_cannot_be_reused(
     assert error.value.code == ErrorCode.VALIDATION_ERROR
     details = error.value.details
     assert details == [{"in": "body", "field": "room_number", "message": error.value.message}]
+    assert "; it is deactivated: reactivate it (is_active true) instead" in error.value.message
 
 
 def test_duplicate_room_number_keeps_the_work_done_before_it(
