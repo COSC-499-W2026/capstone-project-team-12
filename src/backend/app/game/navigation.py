@@ -15,6 +15,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game.control import lock_open_game, session_not_active
 from app.game.geo import Band, band, haversine_m, nearest_entrance
@@ -111,10 +112,11 @@ def process_ping(student_id: UUID, game_id: UUID, ping: Ping, db: Session) -> Pi
     """POST /games/{id}/navigation/ping (spec, Stage 1 steps 1-8; DFD 2.0 process 2.3).
 
     409 SESSION_NOT_ACTIVE unless the game is active (a paused game too), 409 INVALID_STAGE
-    unless the current location is in Stage 1, and 429 RATE_LIMITED for a ping less than
-    `ping_min_interval_seconds` after the last one (about 30 a minute). The same lookup errors as
-    pause_game. Everything that can fail comes before the first write. A ping is a game action,
-    so it sets last_activity_at. Flushed; doesn't commit.
+    unless the current location is in Stage 1, 409 STATE_CHANGED if that location was
+    deactivated (nothing is written; GET /games/{id}/current-location does the skip), and 429
+    RATE_LIMITED for a ping less than `ping_min_interval_seconds` after the last one (about 30 a
+    minute). The same lookup errors as pause_game. Everything that can fail comes before the
+    first write. A ping is a game action, so it sets last_activity_at. Flushed; doesn't commit.
     """
     game = lock_open_game(student_id, game_id, db)
     if game.state != SessionState.ACTIVE:
@@ -125,6 +127,18 @@ def process_ping(student_id: UUID, game_id: UUID, ping: Ping, db: Session) -> Pi
             ErrorCode.INVALID_STAGE,
             "The current location isn't in Stage 1",
             details=[{"session_id": str(game.id), "position": row.position, "status": row.status}],
+        )
+    if not content.is_location_active(row.location_id, db):
+        raise AppError(
+            ErrorCode.STATE_CHANGED,
+            "This location is no longer active",
+            details=[
+                {
+                    "session_id": str(game.id),
+                    "state": game.state,
+                    "current_position": game.current_position,
+                }
+            ],
         )
     now = datetime.now(UTC)
     limit = timedelta(seconds=get_settings().ping_min_interval_seconds)

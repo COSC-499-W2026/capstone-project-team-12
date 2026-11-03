@@ -281,7 +281,9 @@ def navigation_ping(
     and a good ping moves it back to 3 minutes after the location became current.
     409 SESSION_NOT_ACTIVE for a paused game (resume first), a game that has ended, or one idle
     for the expiry limit (24 hours by default), which is expired. 409 INVALID_STAGE unless the
-    current location is in Stage 1. 429 RATE_LIMITED for a ping less than 2 s after the last one.
+    current location is in Stage 1. 409 STATE_CHANGED if that location was deactivated; nothing
+    is written, and the next GET /games/{id}/current-location skips it. 429 RATE_LIMITED for a
+    ping less than 2 s after the last one.
     404 NOT_FOUND for another student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED
     for a disabled account.
     """
