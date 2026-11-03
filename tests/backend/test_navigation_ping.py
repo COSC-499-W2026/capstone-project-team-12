@@ -155,17 +155,6 @@ def test_pings_are_rate_limited(
     assert game.last_activity_at == NOW - timedelta(hours=1)
 
 
-@pytest.mark.parametrize(
-    ("fields", "code"),
-    [
-        ({"game": {"state": SessionState.PAUSED, "paused_at": NOW}}, ErrorCode.SESSION_NOT_ACTIVE),
-        (
-            {"game": {"state": SessionState.COMPLETED, "completed_at": NOW}},
-            ErrorCode.SESSION_NOT_ACTIVE,
-        ),
-        ({"status": LocationStatus.VERIFYING}, ErrorCode.INVALID_STAGE),
-    ],
-)
 def test_a_deactivated_location_is_409_and_changes_nothing(
     db: Session, playing: Callable[..., Any]
 ) -> None:
@@ -195,6 +184,17 @@ def test_a_deactivated_location_is_409_and_changes_nothing(
     ) == before
 
 
+@pytest.mark.parametrize(
+    ("fields", "code"),
+    [
+        ({"game": {"state": SessionState.PAUSED, "paused_at": NOW}}, ErrorCode.SESSION_NOT_ACTIVE),
+        (
+            {"game": {"state": SessionState.COMPLETED, "completed_at": NOW}},
+            ErrorCode.SESSION_NOT_ACTIVE,
+        ),
+        ({"status": LocationStatus.VERIFYING}, ErrorCode.INVALID_STAGE),
+    ],
+)
 def test_only_stage_1_of_an_active_game(
     db: Session, playing: Callable[..., Any], fields: dict[str, Any], code: ErrorCode
 ) -> None:
