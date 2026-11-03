@@ -268,6 +268,23 @@ def test_gps_weak_is_spoken_at_most_every_25_seconds() -> None:
     assert [r.speak for r in results] == [True, False, False, True]
 
 
+def test_a_weak_fix_in_the_dead_band_does_not_repeat_arrived() -> None:
+    # 20 m arrives, 32 m is a weak fix just outside a 30 m radius, then 20 m is good again
+    results = walk(tracking(), [(0, 20, 10), (5, 32, 80), (10, 20, 10)])
+
+    assert [(result.feedback, result.speak) for result in results] == [
+        (FeedbackCode.NAV_ARRIVED, True),
+        (FeedbackCode.NAV_ARRIVED, False),
+        (FeedbackCode.NAV_ARRIVED, False),
+    ]
+
+
+def test_the_weak_count_stops_at_the_override_limit() -> None:
+    results = walk(tracking(), [(i * 5, 250, 80) for i in range(4)])
+
+    assert [result.tracking.weak_pings_in_row for result in results] == [1, 2, 3, 3]
+
+
 def test_weak_jitter_inside_the_radius_does_not_repeat_arrived() -> None:
     # 45 m is still a good fix, 55 m is weak; eight pings, 5 s apart, all inside the radius
     steps = [(float(5 * i), 5.0, 45.0 if i % 2 == 0 else 55.0) for i in range(8)]
@@ -448,7 +465,6 @@ def test_override_is_available_3_minutes_after_stage_1_started() -> None:
 def test_three_weak_pings_make_it_available_from_the_latest_ping() -> None:
     last = T0 + timedelta(seconds=30)
     assert override_available_at(T0, 3, last, RULES) == last
-    # it moves with each further weak ping, and never past the 3-minute time
-    assert override_available_at(T0, 5, T0 + timedelta(minutes=4), RULES) == T0 + timedelta(
-        minutes=3
-    )
+    # a later weak ping moves it, even after the 3 minutes from the start
+    later = T0 + timedelta(minutes=4)
+    assert override_available_at(T0, 5, later, RULES) == later
