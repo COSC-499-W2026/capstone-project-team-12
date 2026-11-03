@@ -36,7 +36,7 @@ def confirm_arrival(
     student_id: UUID,
     game_id: UUID,
     override: ArrivalOverride | None,
-    position: int | None,
+    position: int,
     db: Session,
 ) -> Arrival:
     """Move the current location from Stage 1 to Stage 2.
@@ -47,7 +47,7 @@ def confirm_arrival(
     even paused. Sets last_activity_at except on a repeat. Doesn't commit.
     """
     game = lock_open_game(student_id, game_id, db)
-    if position is not None and position != game.current_position:
+    if position != game.current_position:
         raise _moved_on(game)
     row = current_row(game, db)
     if row.status == LocationStatus.VERIFYING:
