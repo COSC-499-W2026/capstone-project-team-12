@@ -299,7 +299,8 @@ def navigation_ping(
 class ArrivalRequest(BaseModel):
     # "gps_unavailable": "Continue without GPS", allowed from gps_override_available_at on
     override_reason: ArrivalOverride | None = None
-    # the position the app is confirming; a different current position gives 409 STATE_CHANGED
+    # the position the app is confirming; the app should always send position. A different
+    # current position gives 409 STATE_CHANGED
     position: PositiveInt | None = None
 
 
@@ -327,8 +328,9 @@ def navigation_confirm_arrival(
     No override: ping under 30 s and in the radius, else 409 STALE_POSITION or NOT_WITHIN_RADIUS
     (`details` reason `gps_weak` if accuracy is over 50 m). `gps_unavailable` works from
     `gps_override_available_at` (3 min, or 3 weak pings), else 409 GPS_OVERRIDE_NOT_ALLOWED.
-    Stage 2 repeats with no writes, even paused. 409 SESSION_NOT_ACTIVE if paused in Stage 1,
-    ended or expired; STATE_CHANGED for a stale `position`; INVALID_STAGE otherwise. A shuffle
+    The app should always send position. Stage 2 repeats with no writes, even paused. 409
+    SESSION_NOT_ACTIVE if paused in Stage 1, ended or expired; STATE_CHANGED for a stale
+    `position` or a deactivated location; INVALID_STAGE if the row is not navigating. A shuffle
     keeps the position; the new row has no ping (409 STALE_POSITION). 404 for another student's
     game or no recording. 403 FORBIDDEN_ROLE or ACCOUNT_DISABLED.
     """

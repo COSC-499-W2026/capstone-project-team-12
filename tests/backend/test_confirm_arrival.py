@@ -5,17 +5,26 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game.arrival import Arrival, confirm_arrival
 from app.game.current_location import Stage
 from app.game.navigation import Ping, process_ping
 from app.models.accounts import User
-from app.models.enums import ArrivalOverride, FeedbackCode, LocationStatus, SessionState
+from app.models.enums import (
+    ArrivalOverride,
+    Difficulty,
+    FeedbackCode,
+    Language,
+    LocationStatus,
+    SessionState,
+)
 from app.models.game import GameSession
 
 NOW = datetime(2026, 10, 29, 20, 0, tzinfo=UTC)
@@ -27,9 +36,18 @@ _Split = Callable[[str], tuple[str, int, str]]
 
 
 @pytest.fixture
-def playing(navigating_game: Callable[..., Any]) -> Callable[..., Any]:
-    """An active game at its first location, started a minute ago, pinged 5 s ago from 10 m."""
-    recent = {"last_ping_at": NOW - timedelta(seconds=5), "last_distance_m": 10}
+def playing(db: Session, navigating_game: Callable[..., Any]) -> Callable[..., Any]:
+    """An active game at its first location, started a minute ago, pinged 5 s ago from 10 m.
+
+    The location is eligible, so it counts as active. Pass location_id for a deactivated one.
+    """
+    active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
+    assert active, "needs an active ja/basic location"
+    recent = {
+        "last_ping_at": NOW - timedelta(seconds=5),
+        "last_distance_m": 10,
+        "location_id": active[0],
+    }
     return partial(navigating_game, NOW, "app.game.arrival", "app.game.navigation", **recent)
 
 
@@ -162,6 +180,26 @@ def test_weak_pings_allow_the_override_until_a_good_one(
     at(180)
     confirm(game, db, GPS)
     assert row.arrival_override == GPS
+
+
+def test_a_deactivated_location_is_409_and_changes_nothing(
+    db: Session, playing: Callable[..., Any]
+) -> None:
+    game, row = playing(location_id=uuid4())
+
+    assert refused(game, db) == ErrorCode.STATE_CHANGED
+    assert (row.status, row.arrived_at, game.last_activity_at) == (
+        LocationStatus.NAVIGATING,
+        None,
+        NOW - timedelta(hours=1),
+    )
+
+
+def test_a_pending_row_is_invalid_stage(db: Session, playing: Callable[..., Any]) -> None:
+    game, row = playing(status=LocationStatus.PENDING)
+
+    assert refused(game, db) == ErrorCode.INVALID_STAGE
+    assert (row.status, row.arrived_at) == (LocationStatus.PENDING, None)
 
 
 def test_a_repeat_gives_the_same_answer_and_changes_nothing(
