@@ -357,15 +357,28 @@ def test_the_first_weak_ping_is_spoken_even_right_after_another_phrase() -> None
 
 @pytest.mark.parametrize(("moved", "flagged"), [(49.99, False), (50.01, True)])
 def test_moving_faster_than_10_metres_a_second_is_flagged(moved: float, flagged: bool) -> None:
-    # 5 s apart, either side of 10 m/s
-    _, second = walk(tracking(), [(0, 250, 10), (5, 250 - moved, 10)])
+    # 5 s apart, either side of 10 m/s; accuracy 0 so the implied speed is the distance
+    _, second = walk(tracking(), [(0, 250, 0), (5, 250 - moved, 0)])
 
     assert second.speed_anomaly == flagged
 
 
+def test_jitter_inside_both_accuracy_circles_is_not_a_jump() -> None:
+    # 40 m in 1 s looks like 40 m/s, but each fix is only good to 30 m
+    _, second = walk(tracking(), [(0, 0, 30), (1, 40, 30)])
+
+    assert second.speed_anomaly is False
+
+
+def test_a_real_jump_with_a_tight_fix_is_flagged() -> None:
+    _, second = walk(tracking(), [(0, 0, 5), (1, 40, 5)])
+
+    assert second.speed_anomaly is True
+
+
 def test_exactly_10_metres_a_second_is_not_flagged() -> None:
     # the threshold is this trip's own speed over 5 s, so equal is not over the line
-    start, end = ping_at(250), ping_at(200)
+    start, end = ping_at(250, 0), ping_at(200, 0)
     moved = haversine_m(start.lat, start.lng, end.lat, end.lng)
     rules = replace(RULES, speed_anomaly_mps=moved / 5)
     first = evaluate(tracking(), start, T0, rules)

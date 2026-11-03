@@ -304,7 +304,9 @@ def _speed_anomaly(tracking: Tracking, ping: Ping, now: datetime, rules: Navigat
     if seconds <= 0:
         return False
     moved = haversine_m(tracking.last_lat, tracking.last_lng, ping.lat, ping.lng)
-    return moved / seconds > rules.speed_anomaly_mps
+    # both fixes can sit anywhere in their accuracy circles, so only the gap outside them counts
+    gap = max(0.0, moved - tracking.last_accuracy_m - ping.accuracy_m)
+    return gap / seconds > rules.speed_anomaly_mps
 
 
 def _trend(change_m: float, rules: NavigationRules) -> Trend:
