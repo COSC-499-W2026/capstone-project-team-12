@@ -110,9 +110,15 @@ def evaluate(tracking: Tracking, ping: Ping, now: datetime, rules: NavigationRul
 
     if is_weak(ping.accuracy_m, rules):
         # no trend and no speed check: weak fixes jump around
-        stored = replace(stored, weak_pings_in_row=tracking.weak_pings_in_row + 1)
-        if inside and tracking.last_feedback_code == FeedbackCode.NAV_ARRIVED:
-            # still inside after NAV_ARRIVED: keep that phrase, and don't speak it again
+        stored = replace(
+            stored,
+            weak_pings_in_row=min(tracking.weak_pings_in_row + 1, rules.weak_pings_for_override),
+        )
+        if (
+            tracking.last_feedback_code == FeedbackCode.NAV_ARRIVED
+            and distance <= tracking.radius_m + rules.dead_band_m
+        ):
+            # inside the radius, or within the dead band: keep NAV_ARRIVED and don't speak it
             return PingResult(
                 stored, distance, can_confirm, None, FeedbackCode.NAV_ARRIVED, False, False
             )
@@ -178,7 +184,7 @@ def override_available_at(
     start. A good ping resets the count, and the rule falls back to the time in Stage 1.
     """
     if weak_pings_in_row >= rules.weak_pings_for_override and last_ping_at is not None:
-        return min(last_ping_at, started_at + rules.override_after)
+        return last_ping_at
     return started_at + rules.override_after
 
 
