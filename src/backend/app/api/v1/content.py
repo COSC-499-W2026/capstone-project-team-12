@@ -1,4 +1,4 @@
-"""Content management (A20): locations, for staff only.
+"""Content management (A20): locations and clue text, for staff only.
 
 Room numbers and accepted answers are the game's answers, so only staff accounts may read them:
 students, including students who are a class's TA, and admins get 403. Changes also need content
@@ -18,11 +18,19 @@ from app.content.locations import (
     deactivate_location,
     list_locations,
     replace_location,
+    set_clue_text,
 )
-from app.content.schemas import LocationFields, LocationOut, LocationReplacement
+from app.content.schemas import (
+    ClueOut,
+    ClueText,
+    LocationFields,
+    LocationOut,
+    LocationReplacement,
+)
 from app.db import get_db
 from app.errors import error_responses
-from app.models.content import Location
+from app.models.content import Clue, Location
+from app.models.enums import Difficulty, Language
 
 content_router = APIRouter(prefix="/content", tags=["content"])
 
@@ -113,3 +121,30 @@ def delete_location(location_id: UUID, db: Annotated[Session, Depends(get_db)]) 
     """
     deactivate_location(location_id, db)
     db.commit()
+
+
+@content_router.put(
+    "/locations/{location_id}/clues/{difficulty}/{language}",
+    operation_id="setClueText",
+    summary="Set a clue's text",
+    dependencies=CONTENT_MANAGER,
+    response_model=ClueOut,
+    responses=error_responses(*ACCESS_ERRORS, HTTPStatus.NOT_FOUND),
+)
+def put_clue_text(
+    location_id: UUID,
+    difficulty: Difficulty,
+    language: Language,
+    request: ClueText,
+    db: Annotated[Session, Depends(get_db)],
+) -> Clue:
+    """Set the transcript of the location's clue for a difficulty (1-3) and language, creating
+    the clue if it has none yet. `text` is required: send null or blank to clear it (stored as
+    null). Students never see it: clues are only played as audio.
+
+    404 NOT_FOUND for an unknown location (deactivated ones can be edited). Needs content rights:
+    403 FORBIDDEN_ROLE otherwise.
+    """
+    clue = set_clue_text(location_id, difficulty, language, request.text, db)
+    db.commit()
+    return clue

@@ -117,6 +117,24 @@ class LocationOut(BaseModel):
     is_active: bool
 
 
+class ClueText(BaseModel):
+    """A clue's transcript. Required, as a PUT replaces it: send null or blank to clear it."""
+
+    text: str | None
+
+
+class ClueOut(BaseModel):
+    """A clue as content managers see it. Students only ever hear it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    location_id: UUID
+    difficulty: Difficulty
+    language: Language
+    text: str | None
+
+
 class CombinationCoverage(BaseModel):
     """One language and difficulty of a location in the coverage report."""
 

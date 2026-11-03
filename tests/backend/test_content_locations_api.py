@@ -1,4 +1,4 @@
-"""The location routes under /api/v1/content (A20) over HTTP.
+"""The location and clue-text routes under /api/v1/content (A20) over HTTP.
 
 The rules are tested in test_content_locations.py. These check who may call each route, the
 status codes, the response bodies and that the routes commit.
@@ -18,7 +18,7 @@ from app.config import get_settings
 from app.content.schemas import LocationOut
 from app.errors import ErrorCode
 from app.models.accounts import ClassStaff, User
-from app.models.content import Location
+from app.models.content import Clue, Location
 from app.models.engagement import Class
 from app.models.enums import ClassStaffRole, UserRole
 
@@ -43,6 +43,7 @@ WRITES = [
     ("POST", "", NEW_LOCATION),
     ("PUT", "/{id}", REPLACEMENT),
     ("DELETE", "/{id}", None),
+    ("PUT", "/{id}/clues/2/fr", {"text": "trois cent trente-trois"}),
 ]
 # students (TAs too) and admins are refused every route, teachers without content rights changes
 REFUSED = [
@@ -102,8 +103,9 @@ def account(
     return make
 
 
-def location_count(db: Session) -> int | None:
-    return db.scalar(select(func.count(Location.id)))
+def content_rows(db: Session) -> tuple[int | None, int | None]:
+    """How many locations and clues there are."""
+    return db.scalar(select(func.count(Location.id))), db.scalar(select(func.count(Clue.id)))
 
 
 def test_any_staff_account_lists_locations_inactive_ones_too(
@@ -135,14 +137,14 @@ def test_refused_users_see_and_change_nothing(
     body: Any,
 ) -> None:
     location = make_location()
-    user, count = account(kind), location_count(db)
+    user, rows = account(kind), content_rows(db)
 
     response = call(user, method, path.format(id=location.id), body)
 
     assert_error(response, 403, ErrorCode.FORBIDDEN_ROLE)
     assert location.room_number not in response.text  # room numbers are the answers
-    # nothing was written: no new location, and the location is as it was
-    assert location_count(db) == count
+    # nothing was written: no new location or clue, and the location is as it was
+    assert content_rows(db) == rows
     db.refresh(location)
     assert location.room_number != "SCI 333" and location.is_active
 
@@ -274,3 +276,62 @@ def test_unknown_location_is_404(
     response = call(account("manager"), method, path.format(id=uuid4()), body)
 
     assert_error(response, 404, ErrorCode.NOT_FOUND)
+
+
+def test_set_clue_text_creates_the_clue_and_blank_clears_it(
+    call: Callable[..., Response],
+    account: Callable[[str], User],
+    make_location: Callable[..., Location],
+    db: Session,
+    commits: list[str],
+) -> None:
+    location = make_location()
+    manager = account("manager")
+    path = f"/{location.id}/clues/2/fr"
+
+    response = call(manager, "PUT", path, {"text": "  trois cent trente-trois "})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body == {
+        "id": body["id"],
+        "location_id": str(location.id),
+        "difficulty": 2,
+        "language": "fr",
+        "text": "trois cent trente-trois",
+    }
+    assert commits == ["commit"]
+
+    cleared = call(manager, "PUT", path, {"text": "   "})
+
+    assert cleared.json() == body | {"text": None}
+    clue = db.scalars(select(Clue).where(Clue.location_id == location.id)).one()
+    assert clue.text is None
+
+
+def test_clue_text_must_be_sent(
+    call: Callable[..., Response],
+    account: Callable[[str], User],
+    make_location: Callable[..., Location],
+    assert_error: Callable[..., None],
+) -> None:
+    # a PUT replaces the text, so clearing it is an explicit null, not an empty body
+    response = call(account("manager"), "PUT", f"/{make_location().id}/clues/2/fr", {})
+
+    assert_error(response, 422, ErrorCode.VALIDATION_ERROR)
+    assert [d["field"] for d in response.json()["error"]["details"]] == ["text"]
+
+
+@pytest.mark.parametrize(("clue", "field"), [("4/fr", "difficulty"), ("2/xx", "language")])
+def test_unknown_difficulty_or_language_is_422(
+    call: Callable[..., Response],
+    account: Callable[[str], User],
+    make_location: Callable[..., Location],
+    assert_error: Callable[..., None],
+    clue: str,
+    field: str,
+) -> None:
+    response = call(account("manager"), "PUT", f"/{make_location().id}/clues/{clue}", {"text": ""})
+
+    assert_error(response, 422, ErrorCode.VALIDATION_ERROR)
+    assert [(d["in"], d["field"]) for d in response.json()["error"]["details"]] == [("path", field)]
