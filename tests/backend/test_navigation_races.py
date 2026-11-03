@@ -150,11 +150,11 @@ def test_two_confirms_agree_and_record_one_override(
         second_started: dict[str, datetime] = {}
 
         def confirm(session: Session) -> Arrival:
-            return confirm_arrival(student_id, game_id, GPS, None, session)
+            return confirm_arrival(student_id, game_id, GPS, 1, session)
 
         def confirm_later(session: Session) -> Arrival:
             second_started["at"] = datetime.now(UTC)
-            return confirm_arrival(student_id, game_id, GPS, None, session)
+            return confirm_arrival(student_id, game_id, GPS, 1, session)
 
         first, second = run_together(confirm, (confirm_later, HOLD), hold=HOLD)
         assert isinstance(first, Arrival) and isinstance(second, Arrival)
@@ -175,7 +175,7 @@ def test_a_ping_after_confirm_is_the_wrong_stage(
     with _playing(test_engine, [_navigating()]) as (student_id, game_id):
 
         def confirm(session: Session) -> Arrival:
-            return confirm_arrival(student_id, game_id, None, None, session)
+            return confirm_arrival(student_id, game_id, None, 1, session)
 
         def ping(session: Session) -> PingOutcome:
             return process_ping(student_id, game_id, Ping(LAT, LNG, 5), session)
@@ -211,7 +211,7 @@ def test_confirm_after_pause_is_not_active(
             return pause_game(student_id, game_id, session)
 
         def confirm(session: Session) -> Arrival:
-            return confirm_arrival(student_id, game_id, None, None, session)
+            return confirm_arrival(student_id, game_id, None, 1, session)
 
         _paused, confirmed = run_together(pause, (confirm, HOLD), hold=HOLD)
 
@@ -229,7 +229,7 @@ def test_quit_then_a_play_action_is_not_active(
             return quit_game(student_id, game_id, session)
 
         def confirm(session: Session) -> Arrival:
-            return confirm_arrival(student_id, game_id, None, None, session)
+            return confirm_arrival(student_id, game_id, None, 1, session)
 
         def ping(session: Session) -> PingOutcome:
             return process_ping(student_id, game_id, Ping(LAT, LNG, 5), session)

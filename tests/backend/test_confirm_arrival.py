@@ -52,9 +52,9 @@ def playing(db: Session, navigating_game: Callable[..., Any]) -> Callable[..., A
 
 
 def confirm(
-    game: GameSession, db: Session, override: ArrivalOverride | None = None, **kw: Any
+    game: GameSession, db: Session, override: ArrivalOverride | None = None, *, position: int = 1
 ) -> Arrival:
-    return confirm_arrival(game.student_id, game.id, override, kw.get("position"), db)
+    return confirm_arrival(game.student_id, game.id, override, position, db)
 
 
 def _part(split: _Split, url: str) -> str:
@@ -225,12 +225,12 @@ def test_a_repeat_gives_the_same_answer_and_changes_nothing(
         ({}, 2, ErrorCode.STATE_CHANGED),
         (
             {"game": {"state": SessionState.PAUSED, "paused_at": NOW}},
-            None,
+            1,
             ErrorCode.SESSION_NOT_ACTIVE,
         ),
         (
             {"status": LocationStatus.COMPLETED, "completed_at": NOW, "points_awarded": 100},
-            None,
+            1,
             ErrorCode.INVALID_STAGE,
         ),
     ],
@@ -239,7 +239,7 @@ def test_refused_without_changes(
     db: Session,
     playing: Callable[..., Any],
     fields: dict[str, Any],
-    position: int | None,
+    position: int,
     code: ErrorCode,
 ) -> None:
     game, row = playing(**fields)
@@ -322,12 +322,16 @@ def test_the_route(
     url = f"/api/v1/games/{game.id}/navigation/confirm-arrival"
     headers = auth_headers(student)
     assert_error(
-        client.post(url, json={"override_reason": "gps_unavailable"}, headers=headers),
+        client.post(
+            url, json={"override_reason": "gps_unavailable", "position": 1}, headers=headers
+        ),
         409,
         ErrorCode.GPS_OVERRIDE_NOT_ALLOWED,
     )
-    bad = client.post(url, json={"override_reason": "lost"}, headers=headers)
+    bad = client.post(url, json={"override_reason": "lost", "position": 1}, headers=headers)
     assert bad.status_code == 422
+    missing = client.post(url, json={}, headers=headers)
+    assert_error(missing, 422, ErrorCode.VALIDATION_ERROR)
     transaction_calls.clear()
 
     response = client.post(url, json={"position": 1}, headers=headers)
@@ -341,9 +345,13 @@ def test_the_route(
     )
     assert [item["code"] for item in body["feedback"]] == ["VERIFY_START"]
     assert transaction_calls.count("commit") == 1
-    _same_route(client.post(url, json={}, headers=headers).json(), body, split_media_url)
+    _same_route(
+        client.post(url, json={"position": 1}, headers=headers).json(), body, split_media_url
+    )
     other = auth_headers(make_user())
-    assert_error(client.post(url, json={}, headers=other), 404, ErrorCode.NOT_FOUND)
+    assert_error(client.post(url, json={"position": 1}, headers=other), 404, ErrorCode.NOT_FOUND)
     admin = auth_headers(make_user(role="admin"))
-    assert_error(client.post(url, json={}, headers=admin), 403, ErrorCode.FORBIDDEN_ROLE)
-    assert_error(client.post(url, json={}), 401, ErrorCode.NOT_AUTHENTICATED)
+    assert_error(
+        client.post(url, json={"position": 1}, headers=admin), 403, ErrorCode.FORBIDDEN_ROLE
+    )
+    assert_error(client.post(url, json={"position": 1}), 401, ErrorCode.NOT_AUTHENTICATED)
