@@ -37,6 +37,8 @@ from app.services.audio import UploadedAudioService
 
 LAT, LNG = 49.9394, -119.3948
 FAR_LAT = 50.0  # well outside every stub entrance
+# delay before the later job, and how long the first job keeps its lock afterwards.
+# The later job only starts second if the first takes the lock within this time.
 HOLD = 0.3
 GPS = ArrivalOverride.GPS_UNAVAILABLE
 
@@ -141,16 +143,26 @@ def test_two_confirms_agree_and_record_one_override(
     test_engine: Engine, run_together: Callable[..., list[Any]]
 ) -> None:
     with _playing(test_engine, [_navigating()]) as (student_id, game_id):
+        second_started: dict[str, datetime] = {}
 
         def confirm(session: Session) -> Arrival:
             return confirm_arrival(student_id, game_id, GPS, None, session)
 
-        first, second = run_together(confirm, confirm, hold=HOLD)
+        def confirm_later(session: Session) -> Arrival:
+            second_started["at"] = datetime.now(UTC)
+            return confirm_arrival(student_id, game_id, GPS, None, session)
+
+        first, second = run_together(confirm, (confirm_later, HOLD), hold=HOLD)
         assert isinstance(first, Arrival) and isinstance(second, Arrival)
         assert _body(first) == _body(second)
         with Session(test_engine) as session:
             row = _live(session, game_id, 1)
+            game = session.get(GameSession, game_id)
+            assert game is not None
             assert (row.status, row.flags) == (LocationStatus.VERIFYING, ["gps_override"])
+            # the first job wrote these before the second job started
+            assert row.arrived_at is not None and row.arrived_at < second_started["at"]
+            assert game.last_activity_at < second_started["at"]
 
 
 def test_a_ping_after_confirm_is_the_wrong_stage(
@@ -267,6 +279,7 @@ def test_two_current_location_calls_skip_invalid_rows_once(
 ) -> None:
     with Session(test_engine) as session:
         active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, session))
+        assert active, "needs an active ja/basic location"
     rows = [
         _navigating(location_id=uuid4()),
         {"status": LocationStatus.PENDING, "location_id": uuid4()},
