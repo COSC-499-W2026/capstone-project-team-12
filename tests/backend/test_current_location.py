@@ -179,6 +179,32 @@ def test_deactivated_locations_are_skipped_until_an_active_one(
     assert found.gps_override_available_at == NOW + timedelta(minutes=3)
 
 
+def test_a_paused_game_skips_a_deactivated_location_and_keeps_its_activity(
+    db: Session, game_with: Callable[..., Any], active: list[UUID]
+) -> None:
+    played = NOW - timedelta(hours=1)
+    game, rows = game_with(
+        [(N, uuid4()), (P, active[0])],
+        state=SessionState.PAUSED,
+        paused_at=played,
+        last_activity_at=played,
+    )
+
+    found = get_current_location(game.student_id, game.id, db)
+
+    assert isinstance(found, CurrentLocation)
+    assert (found.position, rows[1].status, rows[1].started_at) == (2, N, NOW)
+    assert (rows[0].status, rows[0].skip_reason) == (
+        LocationStatus.SKIPPED,
+        SkipReason.DEACTIVATED,
+    )
+    assert (game.state, game.last_activity_at, game.paused_at) == (
+        SessionState.PAUSED,
+        played,
+        played,
+    )
+
+
 def test_a_deactivated_last_location_completes_a_paused_game(
     db: Session, game_with: Callable[..., Any], active: list[UUID]
 ) -> None:
