@@ -15,6 +15,22 @@ class Language(StrEnum):
     ES = "es"
 
 
+class PointsSourceType(StrEnum):
+    """Sources that can award points to a student."""
+
+    LOCATION = "location"
+    DAILY_CHALLENGE = "daily_challenge"
+    STREAK_MILESTONE = "streak_milestone"
+
+
+class AchievementCategory(StrEnum):
+    """Categories of unlockable achievements."""
+
+    LEARNING = "learning"
+    STREAK = "streak"
+    DIFFICULTY = "difficulty"
+
+
 class Difficulty(IntEnum):
     BASIC = 1  # numbers only
     ADVANCING = 2  # numbers and a simple description
@@ -92,6 +108,8 @@ class LocationStatus(StrEnum):
 class SkipReason(StrEnum):
     SESSION_ENDED = "session_ended"  # quit, reset, expiry or class closed before it was played
     DEACTIVATED = "deactivated"  # a content manager deactivated the location
+    # replaced by a shuffle: the row stays with its photo attempts but is no longer a result
+    SHUFFLED = "shuffled"
 
 
 class ArrivalOverride(StrEnum):

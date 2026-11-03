@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.content import interface as content
 from app.errors import AppError, ErrorCode
-from app.game.draw import _completed, draw_locations
+from app.game.draw import _completed, draw_locations, draw_replacements
 from app.models.accounts import User
 from app.models.engagement import Class
 from app.models.enums import (
@@ -307,6 +307,37 @@ def test_only_locations_skipped_by_the_quit_are_carried_over(
     drawn = _ids(draw_locations(student.id, None, JA, BASIC, db))
 
     assert eligible[1] in drawn and eligible[2] not in drawn
+
+
+def test_replacements_skip_the_excluded_locations_and_prefer_new_ones(
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    eligible: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a shuffle excludes every location already in its game
+    student = make_user()
+    done = make_game_session(student, state=SessionState.COMPLETED, completed_at=datetime.now(UTC))
+    make_session_location(
+        done,
+        1,
+        location_id=eligible[5],
+        status=LocationStatus.COMPLETED,
+        points_awarded=100,
+        completed_at=datetime.now(UTC),
+    )
+    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: frozenset(eligible[:7]))
+
+    drawn = _ids(draw_replacements(student.id, JA, BASIC, eligible[:4], 3, db))
+
+    # eligible[4] and [6] are new to the student, so they come before the completed [5]
+    assert sorted(drawn[:2]) == [eligible[4], eligible[6]]
+    assert drawn[2] == eligible[5]
+    with pytest.raises(AppError) as error:
+        draw_replacements(student.id, JA, BASIC, eligible[:5], 3, db)
+    assert error.value.code == ErrorCode.NOT_ENOUGH_CONTENT
 
 
 def test_drawing_only_reads(

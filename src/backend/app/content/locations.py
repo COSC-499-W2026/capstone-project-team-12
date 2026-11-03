@@ -61,7 +61,7 @@ def set_clue_text(
     """Set the clue's transcript, creating the clue if needed. A blank transcript is stored as
     null (no transcript yet)."""
     if text and "\x00" in text:  # PostgreSQL text cannot hold it
-        raise _invalid_field("text", "The clue text contains an invalid character")
+        raise invalid_field("text", "The clue text contains an invalid character")
     get_location(location_id, db)
     clue = get_or_create_clue(location_id, difficulty, language, db)
     clue.text = (text or "").strip() or None
@@ -99,7 +99,7 @@ def _saving_room_number(room_number: str, db: Session) -> Iterator[None]:
     """Save what the block changes; VALIDATION_ERROR if another location has `room_number`.
 
     The unique constraint is the check, so two requests cannot both save the same room number.
-    The spec has no error code for it. The block runs in a savepoint (opening one flushes, so
+    The spec makes it 422 VALIDATION_ERROR. The block runs in a savepoint (opening one flushes, so
     the changes must be made inside), so a failed save undoes only itself.
     """
     try:
@@ -109,10 +109,12 @@ def _saving_room_number(room_number: str, db: Session) -> Iterator[None]:
         if violated_constraint(error) != "uq_locations_room_number":
             raise
         message = f"Another location already has room number {room_number}"
-        raise _invalid_field("room_number", message) from error
+        if db.scalar(select(Location.is_active).filter_by(room_number=room_number)) is False:
+            message += "; it is deactivated: reactivate it (is_active true) instead"
+        raise invalid_field("room_number", message) from error
 
 
-def _invalid_field(field: str, message: str) -> AppError:
+def invalid_field(field: str, message: str) -> AppError:
     """VALIDATION_ERROR naming the body field, in the shape of the request validation errors."""
     details = [{"in": "body", "field": field, "message": message}]
     return AppError(ErrorCode.VALIDATION_ERROR, message, details)

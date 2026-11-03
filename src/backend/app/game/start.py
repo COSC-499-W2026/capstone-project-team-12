@@ -71,8 +71,26 @@ def start_game(
     snapshots = draw_locations(user.id, class_id, language, difficulty, db)
     # before the game exists, so a missing recording fails like any other draw problem
     clue_url = get_audio_service().clue_audio_url(snapshots[0].audio_asset_id, db)
+    return save_new_game(user.id, class_id, language, difficulty, snapshots, clue_url, db)
 
-    game = _create_game(user.id, class_id, language, difficulty, db)
+
+def save_new_game(
+    student_id: UUID,
+    class_id: UUID | None,
+    language: Language,
+    difficulty: Difficulty,
+    snapshots: Sequence[LocationSnapshot],
+    clue_url: str,
+    db: Session,
+) -> StartedGame:
+    """Save a new active game with the drawn locations; the first is being navigated.
+
+    Used by start_game and by a reset. The caller has already drawn the locations and made the
+    first clue's link, so nothing is written if either fails, and holds the student's lock with
+    no other open game left. Raises SESSION_ALREADY_OPEN if another start won a race. Doesn't
+    commit.
+    """
+    game = _create_game(student_id, class_id, language, difficulty, db)
     db.add_all(_session_locations(game, snapshots))
     db.flush()
     return StartedGame(game.id, SessionState(game.state), game.current_position, clue_url)
@@ -130,17 +148,33 @@ def _session_locations(
 ) -> list[SessionLocation]:
     """One row per drawn location with its content snapshot. The first is being navigated."""
     return [
-        SessionLocation(
-            session_id=game.id,
-            location_id=snapshot.location_id,
-            position=position,
-            status=LocationStatus.NAVIGATING if position == 1 else LocationStatus.PENDING,
-            started_at=game.last_activity_at if position == 1 else None,
-            clue_id=snapshot.clue_id,
-            audio_asset_id=snapshot.audio_asset_id,
-            accepted_answers_snapshot=list(snapshot.accepted_answers),
-            gps_points_snapshot=[{"lat": p.lat, "lng": p.lng} for p in snapshot.gps_points],
-            radius_snapshot=snapshot.radius_meters,
+        new_location_row(
+            game.id, position, snapshot, current=position == 1, now=game.last_activity_at
         )
         for position, snapshot in enumerate(snapshots, start=1)
     ]
+
+
+def new_location_row(
+    session_id: UUID,
+    position: int,
+    snapshot: LocationSnapshot,
+    *,
+    current: bool,
+    now: datetime,
+) -> SessionLocation:
+    """A game's row for a drawn location, with the content snapshot that navigation, OCR and
+    clue playback use. The `current` location is being navigated from `now`; the others are
+    still to come. Used for a new game and for a shuffle's replacements."""
+    return SessionLocation(
+        session_id=session_id,
+        location_id=snapshot.location_id,
+        position=position,
+        status=LocationStatus.NAVIGATING if current else LocationStatus.PENDING,
+        started_at=now if current else None,
+        clue_id=snapshot.clue_id,
+        audio_asset_id=snapshot.audio_asset_id,
+        accepted_answers_snapshot=list(snapshot.accepted_answers),
+        gps_points_snapshot=[{"lat": p.lat, "lng": p.lng} for p in snapshot.gps_points],
+        radius_snapshot=snapshot.radius_meters,
+    )
