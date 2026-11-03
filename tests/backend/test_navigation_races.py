@@ -62,10 +62,14 @@ def _start(engine: Engine, rows: list[dict[str, Any]]) -> tuple[UUID, UUID]:
         session.add(game)
         session.flush()
         audio = UploadedAudioService()
+        # a random id counts as deactivated; a confirm needs an eligible location
+        active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, session))
+        assert active, "needs an active ja/basic location"
+        unused = iter(active)
         for position, fields in enumerate(rows, start=1):
             values: dict[str, Any] = {
                 "session_id": game.id,
-                "location_id": uuid4(),
+                "location_id": uuid4() if "location_id" in fields else next(unused),
                 "position": position,
                 "clue_id": uuid4(),
                 "audio_asset_id": audio.clue_audio_asset_id(uuid4(), session),
