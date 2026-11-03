@@ -88,6 +88,16 @@ def test_app_timezone_must_exist(monkeypatch: pytest.MonkeyPatch, name: str) -> 
         Settings(_env_file=None)
 
 
+@pytest.mark.parametrize(("reset", "interval"), [("20", "25"), ("25", "25")])
+def test_trend_reset_must_exceed_the_interval(
+    monkeypatch: pytest.MonkeyPatch, reset: str, interval: str
+) -> None:
+    monkeypatch.setenv("GPS_TREND_RESET_SECONDS", reset)
+    monkeypatch.setenv("GPS_TREND_INTERVAL_SECONDS", interval)
+    with pytest.raises(ValidationError, match="gps_trend_reset_seconds"):
+        Settings(_env_file=None)
+
+
 def test_get_settings_is_cached() -> None:
     assert get_settings() is get_settings()
 

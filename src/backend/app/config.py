@@ -111,6 +111,12 @@ class Settings(BaseSettings):
             raise ValueError("ACCESS_TOKEN_SECRET_KEY must be at least 16 characters.")
         return self
 
+    @model_validator(mode="after")
+    def _trend_reset_after_interval(self) -> "Settings":
+        if self.gps_trend_reset_seconds <= self.gps_trend_interval_seconds:
+            raise ValueError("gps_trend_reset_seconds must exceed gps_trend_interval_seconds")
+        return self
+
 
 @lru_cache
 def get_settings() -> Settings:
