@@ -206,7 +206,10 @@ async def _unexpected_error(request: Request, exc: Exception) -> JSONResponse:
 
 async def _rate_limit_error(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, RateLimitExceeded)
-    return _response(AppError(ErrorCode.RATE_LIMITED, "Rate limited."))
+    response = _response(AppError(ErrorCode.RATE_LIMITED, "Too many requests. Try again later."))
+    # adds Retry-After and X-RateLimit-* for the limit that was hit, like slowapi's own handler
+    request.app.state.limiter._inject_headers(response, request.state.view_rate_limit)
+    return response
 
 
 def add_error_handlers(app: FastAPI) -> None:
