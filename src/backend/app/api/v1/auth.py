@@ -65,7 +65,6 @@ def login(
     responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
 )
 def refresh(
-    request: Request,
     response: Response,
     db: Annotated[Session, Depends(get_db)],
     refresh_token: Annotated[str | None, Cookie()] = None,
