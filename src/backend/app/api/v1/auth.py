@@ -8,9 +8,10 @@ from sqlalchemy.orm import Session
 from app.accounts.login import get_login_form, get_login_key, login_account
 from app.accounts.register import RegisterRequest, RegisterResponse, register_account
 from app.accounts.tokens import TokenResponse, rotate_tokens
+from app.config import get_settings
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
-from app.limiter import limiter
+from app.services.limiter import limiter
 
 auth_router = APIRouter(prefix="/auth")
 
