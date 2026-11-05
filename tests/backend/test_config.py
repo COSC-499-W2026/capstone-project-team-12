@@ -117,3 +117,22 @@ def test_unsafe_token_settings(
     monkeypatch.setenv(variable, value)
     with pytest.raises(ValidationError, match=message):
         Settings(_env_file=None)
+
+
+def test_rate_limits_default_to_the_spec_values() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.global_rate_limit == 100
+    assert settings.login_attempts_per_email == 5
+    assert settings.login_attempts_per_ip == 100
+
+
+@pytest.mark.parametrize(
+    "name", ["GLOBAL_RATE_LIMIT", "LOGIN_ATTEMPTS_PER_EMAIL", "LOGIN_ATTEMPTS_PER_IP"]
+)
+@pytest.mark.parametrize("value", ["0", "-5"])
+def test_rate_limits_must_be_positive(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError, match=name.lower()):
+        Settings(_env_file=None)
