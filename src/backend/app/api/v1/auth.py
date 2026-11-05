@@ -39,7 +39,8 @@ def register(request: RegisterRequest, db: Annotated[Session, Depends(get_db)]) 
     operation_id="loginUser",
     responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
 )
-@limiter.limit("5/minute", key_func=get_login_key)
+@limiter.limit(lambda: f"{get_settings().login_attempts_per_email}/minute", key_func=get_login_key)
+@limiter.limit(lambda: f"{get_settings().login_attempts_per_ip}/minute")
 def login(
     request: Request,
     response: Response,
