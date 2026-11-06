@@ -24,6 +24,7 @@ from app.models.enums import (
     Language,
     LocationStatus,
     SessionState,
+    SkipReason,
 )
 from app.models.game import GameSession
 
@@ -193,6 +194,63 @@ def test_a_deactivated_location_is_409_and_changes_nothing(
         None,
         NOW - timedelta(hours=1),
     )
+
+
+def _stored(game: GameSession, row: Any) -> tuple[object, ...]:
+    return (
+        game.state,
+        game.current_position,
+        game.last_activity_at,
+        game.end_reason,
+        game.paused_at,
+        game.completed_at,
+        game.shuffles_used,
+        game.total_score,
+        row.status,
+        row.position,
+        row.skip_reason,
+        row.arrived_at,
+        row.arrival_override,
+        row.points_awarded,
+        row.completed_at,
+        row.attempts_used,
+        row.last_ping_at,
+        row.weak_pings_in_row,
+        tuple(row.flags),
+    )
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"status": LocationStatus.COMPLETED, "completed_at": NOW, "points_awarded": 100},
+        {"status": LocationStatus.SKIPPED, "skip_reason": SkipReason.DEACTIVATED},
+    ],
+)
+def test_a_finished_deactivated_row_is_invalid_stage(
+    db: Session, playing: Callable[..., Any], fields: dict[str, Any]
+) -> None:
+    game, row = playing(location_id=uuid4(), **fields)
+    before = _stored(game, row)
+
+    assert refused(game, db) == ErrorCode.INVALID_STAGE
+    assert _stored(game, row) == before
+
+
+def test_a_verifying_deactivated_row_repeats_without_writes(
+    db: Session, playing: Callable[..., Any], split_media_url: _Split
+) -> None:
+    arrived = NOW - timedelta(minutes=1)
+    game, row = playing(location_id=uuid4(), status=LocationStatus.VERIFYING, arrived_at=arrived)
+    before = _stored(game, row)
+
+    first = confirm(game, db)
+    assert first.location.stage == Stage.VERIFICATION
+    assert _stored(game, row) == before
+
+    second = confirm(game, db)
+    _same_arrival(first, second, split_media_url)
+    assert _stored(game, row) == before
 
 
 def test_a_pending_row_is_invalid_stage(db: Session, playing: Callable[..., Any]) -> None:
