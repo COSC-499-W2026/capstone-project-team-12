@@ -52,14 +52,14 @@ def confirm_arrival(
     row = current_row(game, db)
     if row.status == LocationStatus.VERIFYING:
         return _arrival(game, describe(game, row, db), db)
-    if not content.is_location_active(row.location_id, db):
-        raise _inactive(game)
     if row.status != LocationStatus.NAVIGATING:
         raise AppError(
             ErrorCode.INVALID_STAGE,
             "The current location isn't in Stage 1",
             details=[{"session_id": str(game.id), "position": row.position, "status": row.status}],
         )
+    if not content.is_location_active(row.location_id, db):
+        raise _inactive(game)
     if game.state != SessionState.ACTIVE:
         raise session_not_active(game, "Resume the game before confirming arrival")
     now = datetime.now(UTC)
