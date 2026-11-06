@@ -46,14 +46,16 @@ def skip_if_deactivated(
     Content Changes During a Session). Returns whether it was skipped.
 
     Only a location not reached yet (pending or navigating) is skipped: one in Stage 2 lets the
-    student finish the photo. Skipping counts as a game action. Doesn't commit.
+    student finish the photo. Skipping counts as a game action, except a paused game keeps
+    last_activity_at. The next location's clock still starts. Doesn't commit.
     """
     if row.status not in (LocationStatus.PENDING, LocationStatus.NAVIGATING):
         return False
     if content.is_location_active(row.location_id, db):
         return False
     _skip(row)
-    game.last_activity_at = now
+    if game.state != SessionState.PAUSED:
+        game.last_activity_at = now
     move_on(game, now, db)
     return True
 
