@@ -16,6 +16,8 @@ from app.errors import AppError, ErrorCode
 
 limiter = Limiter(key_func=get_remote_address, headers_enabled=True)
 
+# TODO: #322 says that global rate limit must be keyed per user, not IP.
+
 
 # An app dependency, not slowapi's middleware: the middleware cannot find the endpoints of
 # included routers in FastAPI 0.142, so it never limited any /api/v1 route
