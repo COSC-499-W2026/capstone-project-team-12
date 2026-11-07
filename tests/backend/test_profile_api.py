@@ -49,7 +49,9 @@ def test_change_class_and_language(
     assert response.json() == {
         "id": str(roster.student.id),
         "username": roster.student.username,
+        "email": roster.student.email,
         "role": UserRole.STUDENT.value,
+        "classes": [str(roster.french.id), str(roster.japanese.id)],
         "current_class_id": str(roster.french.id),
         "preferred_language": Language.ZH.value,
     }

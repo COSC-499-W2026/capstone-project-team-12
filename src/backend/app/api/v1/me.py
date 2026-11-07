@@ -6,15 +6,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
 from app.accounts.profile import current_class_id, select_class, set_practice_language
 from app.db import get_db
+from app.engagement.interface import get_active_class_ids
 from app.errors import AppError, ErrorCode, error_responses
 from app.models.accounts import User
-from app.models.engagement import ClassEnrollment
 from app.models.enums import Language, UserRole
 
 me_router = APIRouter(prefix="/me", tags=["me"])
@@ -27,7 +26,9 @@ class ProfileResponse(BaseModel):
     username: str
     email: str
     role: UserRole
-    classes: list[UUID] | None = None
+    classes: list[UUID] = Field(
+        description="The classes the student is actively enrolled in, most recently joined first."
+    )
     current_class_id: UUID | None = Field(
         description="The class the app follows. Null means Practice (or no active class)."
     )
@@ -57,19 +58,12 @@ class UpdateProfileRequest(BaseModel):
 
 
 def _profile(user: User, db: Session) -> ProfileResponse:
-    classes = db.execute(
-        select(ClassEnrollment.class_id).where(ClassEnrollment.student_id == user.id)
-    ).all()
-    class_list = []
-    for class_id in classes:
-        class_list.append(class_id)
-
     return ProfileResponse(
         id=user.id,
         username=user.username,
         email=user.email,
         role=user.role,
-        classes=class_list,
+        classes=get_active_class_ids(user.id, db),
         current_class_id=current_class_id(user, db),
         preferred_language=user.preferred_language,
     )
@@ -119,9 +113,14 @@ def update_profile(
     response_model=ProfileResponse,
     operation_id="getProfile",
     summary="Get the current user's profile details.",
+    description=(
+        "The signed-in user's account details, their active classes and the settings of their "
+        "app. Staff and admins have no enrolments, so their classes list is empty."
+    ),
     responses=error_responses(HTTPStatus.UNAUTHORIZED),
 )
 def get_profile(
     user: Annotated[User, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]
 ) -> ProfileResponse:
+    """Return the signed-in user's profile."""
     return _profile(user, db)
