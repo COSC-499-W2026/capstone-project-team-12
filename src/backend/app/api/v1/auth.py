@@ -106,10 +106,14 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
     tags=["logout"],
     status_code=204,
     operation_id="logoutUser",
-    responses=error_responses(HTTPStatus.UNAUTHORIZED),
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
 )
 def logout(
-    user: Annotated[User, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]
+    response: Response,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> None:
+    """Signs the user out on every device by revoking all of their refresh tokens."""
     logout_user(user, db)
     db.commit()
+    response.delete_cookie("refresh_token")
