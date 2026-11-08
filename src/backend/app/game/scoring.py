@@ -9,7 +9,11 @@ The caller owns the transaction.
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.engagement.interface import EngagementResult, apply_location_result
+from app.engagement.interface import (
+    LOCATION_COMPLETION_POINTS,
+    EngagementResult,
+    apply_location_result,
+)
 from app.models.enums import Language, LocationStatus
 from app.models.game import GameSession, SessionLocation
 
@@ -33,7 +37,7 @@ def score_finalized_location(
     completed = location.status == LocationStatus.COMPLETED
 
     # Satisfy the completed-location constraint before engagement flushes.
-    location.points_awarded = 100 if completed else 0
+    location.points_awarded = LOCATION_COMPLETION_POINTS if completed else 0
 
     result = apply_location_result(
         location.id,
