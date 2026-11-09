@@ -20,6 +20,8 @@ from pydantic import (
 )
 
 from app.config import get_settings
+from app.errors import ErrorCode
+from app.models.enums import Difficulty, FeedbackCode, Language
 
 # building code and number with at most one space or hyphen between them; ASCII only, so a
 # full-width or Arabic-Indic digit is refused rather than stored
@@ -51,6 +53,8 @@ INT32_MAX = 2**31 - 1
 NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, pattern=NO_NUL)]
 RoomNumber = Annotated[str, AfterValidator(room_number_sign)]
 Answer = Annotated[str, AfterValidator(room_answer)]
+Floor = Annotated[int | None, Field(ge=-INT32_MAX, le=INT32_MAX)]
+Radius = Annotated[int, Field(gt=0, le=INT32_MAX)]
 
 
 class EntrancePoint(BaseModel):
@@ -61,7 +65,8 @@ class EntrancePoint(BaseModel):
 
 
 class LocationFields(BaseModel):
-    """Every field a content manager sets on a location (create, or replace with PUT).
+    """Every field a content manager sets on a location, with defaults for a new one (a replace
+    uses LocationReplacement).
 
     `accepted_answers` always starts with the room number's answer. Reactivating a deactivated
     location is a replace with `is_active` true: room numbers stay unique across inactive ones.
@@ -69,15 +74,13 @@ class LocationFields(BaseModel):
 
     name: NonBlank  # internal label, never sent to students
     building_name: NonBlank
-    floor_number: int | None = Field(default=None, ge=-INT32_MAX, le=INT32_MAX)
+    floor_number: Floor = None
     room_number: RoomNumber
     # extra answers, e.g. for a sign that reads differently; the room number's own answer is
     # always accepted, so a typo here cannot make the location impossible to complete
     accepted_answers: list[Answer] = Field(default_factory=list)
     gps_points: list[EntrancePoint] = Field(min_length=1)
-    gps_radius_meters: int = Field(
-        default_factory=lambda: get_settings().gps_radius_meters, gt=0, le=INT32_MAX
-    )
+    gps_radius_meters: Radius = Field(default_factory=lambda: get_settings().gps_radius_meters)
     is_active: bool = True
 
     @model_validator(mode="after")
@@ -85,6 +88,17 @@ class LocationFields(BaseModel):
         answers = [room_answer(self.room_number), *self.accepted_answers]
         self.accepted_answers = list(dict.fromkeys(answers))  # drop repeats, keep the order
         return self
+
+
+class LocationReplacement(LocationFields):
+    """A replace (PUT) sends every field, so one left out is a 422 rather than reset to its
+    default: a deactivated location made active again, extra answers dropped, the radius
+    changed."""
+
+    floor_number: Floor
+    accepted_answers: list[Answer]
+    gps_radius_meters: Radius
+    is_active: bool
 
 
 class LocationOut(BaseModel):
@@ -101,3 +115,108 @@ class LocationOut(BaseModel):
     gps_points: list[EntrancePoint]
     gps_radius_meters: int
     is_active: bool
+
+
+class ClueText(BaseModel):
+    """A clue's transcript. Required, as a PUT replaces it: send null or blank to clear it."""
+
+    text: str | None
+
+
+class ClueOut(BaseModel):
+    """A clue as content managers see it. Students only ever hear it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    location_id: UUID
+    difficulty: Difficulty
+    language: Language
+    text: str | None
+
+
+class CombinationCoverage(BaseModel):
+    """One language and difficulty of a location in the coverage report."""
+
+    language: Language
+    difficulty: Difficulty
+    has_clue_text: bool  # a transcript, for teachers; games do not need one
+    has_primary_audio: bool  # the recording new games draw
+    playable: bool  # new games can draw this location in this language and difficulty
+
+
+class LocationCoverage(BaseModel):
+    """A location, inactive ones too, with every language and difficulty."""
+
+    id: UUID
+    name: str
+    room_number: str | None
+    is_active: bool
+    combinations: list[CombinationCoverage]  # by language, then difficulty
+
+
+class DifficultyCoverage(BaseModel):
+    """How many locations new games can draw from in one language and difficulty."""
+
+    difficulty: Difficulty
+    playable_locations: int
+
+
+class LanguageCoverage(BaseModel):
+    """What a language still lacks, and how many locations each difficulty can draw from."""
+
+    language: Language
+    # nothing in the language is playable until this is empty
+    missing_feedback_codes: list[FeedbackCode]
+    difficulties: list[DifficultyCoverage]  # 1 to 3
+
+
+class CoverageReport(BaseModel):
+    """Which location, language and difficulty combinations are playable (staff only)."""
+
+    languages: list[LanguageCoverage]
+    locations: list[LocationCoverage]
+
+
+class ImportedRow(BaseModel):
+    """A CSV row that was imported, or in a dry run would be."""
+
+    row: int  # numbered as in a spreadsheet: the file's first row is 1, empty rows count
+    room_number: str
+
+
+class RejectedRow(BaseModel):
+    """A CSV row that was not imported, and why."""
+
+    row: int
+    code: ErrorCode
+    reason: str
+
+
+class LocationImportReport(BaseModel):
+    """Every row of a locations CSV, imported or rejected; a dry run saves nothing."""
+
+    dry_run: bool
+    imported: list[ImportedRow] = Field(default_factory=list)
+    rejected: list[RejectedRow] = Field(default_factory=list)
+
+
+class ImportedFile(BaseModel):
+    """A file of an audio zip that was imported."""
+
+    file: str  # its path in the zip
+
+
+class RejectedFile(BaseModel):
+    """A file of an audio zip that was not imported, and why."""
+
+    file: str
+    code: ErrorCode
+    reason: str
+
+
+class AudioImportReport(BaseModel):
+    """Every file of an audio zip, in the zip's order, imported or rejected."""
+
+    imported: list[ImportedFile] = Field(default_factory=list)
+    rejected: list[RejectedFile] = Field(default_factory=list)

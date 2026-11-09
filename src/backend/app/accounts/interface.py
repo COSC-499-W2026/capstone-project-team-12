@@ -23,6 +23,7 @@ __all__ = [
     "is_class_staff",
     "can_manage_content",
     "require_admin",
+    "require_staff",
 ]
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
@@ -76,6 +77,13 @@ def require_admin(user: Annotated[User, Depends(get_current_user)]) -> None:
     """Raises a FORBIDDEN_ROLE (403) error if current user does not have the admin role"""
     if user.role != UserRole.ADMIN:
         raise AppError(ErrorCode.FORBIDDEN_ROLE)
+
+
+def require_staff(user: Annotated[User, Depends(get_current_user)]) -> None:
+    """Raises a FORBIDDEN_ROLE (403) error unless the current user is a staff (teacher) account:
+    students, including TAs, and admins are refused"""
+    if user.role != UserRole.STAFF:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Only staff accounts can do this.")
 
 
 def is_class_staff(user_id: UUID, class_id: UUID, db: Session) -> bool:

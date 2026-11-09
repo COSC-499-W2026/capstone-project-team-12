@@ -52,11 +52,6 @@ def get(client: TestClient, auth_headers: Callable[[User], dict[str, str]]) -> C
     return request
 
 
-def assert_error(response: Response, status: int, code: ErrorCode) -> None:
-    assert response.status_code == status, response.text
-    assert response.json()["error"]["code"] == code.value
-
-
 def test_current_game_is_returned_without_giving_locations_away(
     get: Callable[..., Response],
     make_user: Callable[..., User],
@@ -101,13 +96,18 @@ def test_the_app_connects_with_the_utc_time_zone() -> None:
 
 @pytest.mark.parametrize("path", ["current", SOME_GAME_ID])
 def test_admin_is_403(
-    get: Callable[..., Response], make_user: Callable[..., User], path: str
+    get: Callable[..., Response],
+    make_user: Callable[..., User],
+    path: str,
+    assert_error: Callable[..., None],
 ) -> None:
     # the same as starting a game: admins don't play
     assert_error(get(make_user(role=UserRole.ADMIN), path), 403, ErrorCode.FORBIDDEN_ROLE)
 
 
-def test_no_open_game_is_404(get: Callable[..., Response], make_user: Callable[..., User]) -> None:
+def test_no_open_game_is_404(
+    get: Callable[..., Response], make_user: Callable[..., User], assert_error: Callable[..., None]
+) -> None:
     assert_error(get(make_user(), "current"), 404, ErrorCode.NOT_FOUND)
 
 
@@ -117,6 +117,7 @@ def test_expiry_while_reading_is_committed(
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
     transaction_calls: list[str],
+    assert_error: Callable[..., None],
 ) -> None:
     student = make_user()
     idle_since = datetime.now(UTC) - session_idle_limit() - timedelta(minutes=1)
@@ -184,6 +185,7 @@ def test_another_students_game_or_an_unknown_id_is_404(
     get: Callable[..., Response],
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
+    assert_error: Callable[..., None],
 ) -> None:
     student = make_user()
     game = make_game_session(student)
@@ -198,6 +200,7 @@ def test_another_students_idle_game_is_404_and_is_not_expired(
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
     transaction_calls: list[str],
+    assert_error: Callable[..., None],
 ) -> None:
     idle_since = datetime.now(UTC) - session_idle_limit() - timedelta(minutes=1)
     game = make_game_session(make_user(), last_activity_at=idle_since)
@@ -211,13 +214,17 @@ def test_another_students_idle_game_is_404_and_is_not_expired(
 
 
 def test_an_id_that_is_not_a_uuid_is_422(
-    get: Callable[..., Response], make_user: Callable[..., User]
+    get: Callable[..., Response],
+    make_user: Callable[..., User],
+    assert_error: Callable[..., None],
 ) -> None:
     assert_error(get(make_user(), "not-a-uuid"), 422, ErrorCode.VALIDATION_ERROR)
 
 
 @pytest.mark.parametrize("path", ["current", SOME_GAME_ID])
-def test_needs_a_signed_in_user(client: TestClient, path: str) -> None:
+def test_needs_a_signed_in_user(
+    client: TestClient, path: str, assert_error: Callable[..., None]
+) -> None:
     response = client.get(f"{URL}/{path}")
 
     assert_error(response, 401, ErrorCode.NOT_AUTHENTICATED)
@@ -225,6 +232,9 @@ def test_needs_a_signed_in_user(client: TestClient, path: str) -> None:
 
 @pytest.mark.parametrize("path", ["current", SOME_GAME_ID])
 def test_disabled_account_is_403(
-    get: Callable[..., Response], make_user: Callable[..., User], path: str
+    get: Callable[..., Response],
+    make_user: Callable[..., User],
+    path: str,
+    assert_error: Callable[..., None],
 ) -> None:
     assert_error(get(make_user(is_active=False), path), 403, ErrorCode.ACCOUNT_DISABLED)

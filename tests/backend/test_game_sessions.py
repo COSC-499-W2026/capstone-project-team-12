@@ -3,12 +3,13 @@ loaded game (is_idle) and for a query (idle_condition)."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.game.sessions import abandon_sessions, idle_condition, is_idle
+from app.game.sessions import abandon_sessions, idle_condition, is_idle, start_of_today
 from app.models.enums import LocationStatus, SessionEndReason, SessionState, SkipReason
 from app.models.game import GameSession, SessionLocation
 
@@ -43,6 +44,29 @@ def test_an_open_game_is_abandoned_and_its_unfinished_locations_skipped(
             LocationStatus.SKIPPED,
             SkipReason.SESSION_ENDED,
         )
+
+
+def test_last_activity_at_changes_only_for_an_end_the_student_asked_for(
+    db: Session, make_game_session: Callable[..., GameSession]
+) -> None:
+    # quit and reset pass the time; a class closing or an expiry keeps the old value
+    played_at = datetime.now(UTC) - timedelta(hours=2)
+    quit_at = played_at + timedelta(hours=1)
+    by_student = make_game_session(last_activity_at=played_at)
+    by_system = make_game_session(last_activity_at=played_at)
+
+    abandon_sessions(
+        SessionEndReason.QUIT, [GameSession.id == by_student.id], db, last_activity_at=quit_at
+    )
+    abandon_sessions(SessionEndReason.CLASS_CLOSED, [GameSession.id == by_system.id], db)
+
+    db.refresh(by_student)
+    db.refresh(by_system)
+    assert (by_student.end_reason, by_student.last_activity_at) == (SessionEndReason.QUIT, quit_at)
+    assert (by_system.end_reason, by_system.last_activity_at) == (
+        SessionEndReason.CLASS_CLOSED,
+        played_at,
+    )
 
 
 def test_a_game_that_already_ended_is_left_alone(
@@ -120,3 +144,25 @@ def test_a_game_is_idle_from_the_limit_on(
         select(GameSession.id).where(GameSession.id == game.id, idle_condition(now, IDLE_LIMIT))
     )
     assert (in_query == game.id) is expected
+
+
+@pytest.mark.parametrize(
+    "local_now",
+    [
+        datetime(2026, 10, 28, 0, 30),
+        # 07:30 UTC, already the next day in UTC
+        datetime(2026, 10, 28, 23, 30),
+        # the night daylight saving ends: 01:30 happens twice
+        datetime(2026, 11, 1, 1, 30, fold=1),
+    ],
+)
+def test_today_starts_at_local_midnight(
+    local_now: datetime, freeze_clock: Callable[..., None]
+) -> None:
+    vancouver = ZoneInfo("America/Vancouver")
+    freeze_clock(local_now.replace(tzinfo=vancouver), "app.game.sessions")
+
+    start = start_of_today()
+
+    assert start == datetime(local_now.year, local_now.month, local_now.day, tzinfo=vancouver)
+    assert (start.hour, start.minute) == (0, 0)

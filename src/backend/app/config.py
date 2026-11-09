@@ -34,14 +34,33 @@ class Settings(BaseSettings):
     # clue and feedback recordings at most 60 s
     max_media_file_mb: PositiveInt = 5
     max_audio_seconds: PositiveInt = 60
+    # proposed, not in the spec (team and client to confirm): rows in one locations CSV, far
+    # above the campus's few dozen locations, so one import cannot hold its transaction (and its
+    # room number locks) for long; 1000 rows take about 1.5 s
+    max_import_rows: PositiveInt = 1000
+    # proposed, not in the spec: size of one locations CSV. 1000 rows are about 35 KB; parsing
+    # holds about 23 times the file in memory at worst (one row of commas)
+    max_import_file_kb: PositiveInt = 512
+    # proposed too: files in one audio zip; every clue of 30 locations is 540, and each file is
+    # re-encoded (about 0.15 s for a 20 s clip), so a full zip takes a minute or two
+    max_import_files: PositiveInt = 600
     audio_service_type: AudioServiceType = "uploaded"
     gps_radius_meters: PositiveInt = 30  # default for a new location; each location stores its own
     # game rules from the spec (Configuration). The services check these upper limits;
     # the database only checks the lower bounds, so changing a setting needs no migration.
     locations_per_game: PositiveInt = 5
     max_shuffles_per_session: NonNegativeInt = 2
+    max_resets_per_day: NonNegativeInt = 3
     max_photo_attempts: PositiveInt = 6
     session_idle_expiry_hours: PositiveInt = 24
+    # Stage 1 navigation (spec, Stage 1: Navigation)
+    gps_trend_interval_seconds: PositiveInt = 25  # compare with a reference about this old
+    gps_trend_reset_seconds: PositiveInt = 60  # an older reference is reset, no trend that ping
+    gps_dead_band_meters: PositiveInt = 10  # a smaller change counts as steady
+    gps_weak_accuracy_meters: PositiveInt = 50  # worse accuracy is a weak fix
+    gps_weak_pings_for_override: PositiveInt = 3  # weak pings in a row that allow the override
+    gps_override_after_minutes: PositiveInt = 3  # or this long in Stage 1
+    speed_anomaly_mps: PositiveInt = 10  # faster than this between pings is flagged
     # "today" for day-based rules, e.g. carry-over
     app_timezone: str = "America/Vancouver"
     # rate limits per minute (tech spec, Rate Limits)

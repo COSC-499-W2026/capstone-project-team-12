@@ -1,15 +1,19 @@
+from collections.abc import Callable
+from dataclasses import asdict
 from datetime import datetime
 from http import HTTPStatus
-from typing import Annotated, Self
+from typing import Annotated, Self, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
+from app.game.control import pause_game, quit_game, reset_game, resume_game
+from app.game.shuffle import shuffle_game
 from app.game.start import start_game
 from app.game.status import find_current_game, get_game
 from app.models.accounts import User
@@ -24,6 +28,8 @@ from app.models.enums import (
 )
 
 games_router = APIRouter(prefix="/games", tags=["games"])
+
+T = TypeVar("T")
 
 
 class StartGameRequest(BaseModel):
@@ -160,3 +166,177 @@ def game_status(
     status = get_game(user.id, game_id, db)
     db.commit()
     return GameStatusResponse.model_validate(status, from_attributes=True)
+
+
+class PausedGameResponse(GameStatusResponse):
+    # when the game expires if nothing else happens
+    expires_at: datetime
+
+
+@games_router.post(
+    "/{game_id}/pause",
+    operation_id="pauseGame",
+    response_model=PausedGameResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def pause(
+    game_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> PausedGameResponse:
+    """Pause the student's game. The current location keeps its stage and attempts.
+
+    A new pause counts as a game action, so `expires_at` is now plus the expiry limit (24 hours
+    by default). A repeat pause changes nothing and returns the original `expires_at`. 409
+    SESSION_NOT_ACTIVE for a completed or abandoned game, or one that has been idle for the
+    expiry limit, which is expired. 404 NOT_FOUND for another student's game. 403 FORBIDDEN_ROLE
+    for an admin, ACCOUNT_DISABLED for a disabled account.
+    """
+    paused = _play(lambda: pause_game(user.id, game_id, db), user, db)
+    return PausedGameResponse(**asdict(paused.status), expires_at=paused.expires_at)
+
+
+@games_router.post(
+    "/{game_id}/resume",
+    operation_id="resumeGame",
+    response_model=GameStatusResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def resume(
+    game_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> GameStatusResponse:
+    """Resume the student's paused game where it was left.
+
+    Resuming an active game changes nothing and returns it. A game that has been idle for the
+    expiry limit (24 hours by default) can't be resumed: it is expired and gives 409
+    SESSION_NOT_ACTIVE, the same as a completed or abandoned game. 404 NOT_FOUND for another
+    student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.
+    """
+    status = _play(lambda: resume_game(user.id, game_id, db), user, db)
+    return GameStatusResponse.model_validate(status, from_attributes=True)
+
+
+@games_router.post(
+    "/{game_id}/quit",
+    operation_id="quitGame",
+    response_model=GameStatusResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def quit_the_game(
+    game_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> GameStatusResponse:
+    """End the student's game (abandoned, end reason quit). A paused game can be quit too.
+
+    Points already earned stay. The unplayed locations are skipped and come first in the next
+    game started today in the same mode, language and difficulty. Returns the game status for
+    now; once GET /games/{id}/summary exists, it returns the summary instead. 409
+    SESSION_NOT_ACTIVE for a game that has already ended (so quitting twice is a 409), or one that
+    has been idle for the expiry limit (24 hours by default), which is expired. 404 NOT_FOUND for
+    another student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
+    account.
+    """
+    status = _play(lambda: quit_game(user.id, game_id, db), user, db)
+    return GameStatusResponse.model_validate(status, from_attributes=True)
+
+
+@games_router.post(
+    "/{game_id}/reset",
+    operation_id="resetGame",
+    status_code=HTTPStatus.CREATED,
+    response_model=StartGameResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def reset(
+    game_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> StartGameResponse:
+    """End the student's game and start a new one with the same class, language and difficulty.
+
+    A paused game can be reset too. Returns the new game, the same body as POST /games. The new
+    locations are a fresh random draw: unplayed locations of a game quit earlier today don't come
+    back. Points already earned stay with the old game.
+    409 RESET_LIMIT_REACHED after 3 resets today (local time). 409 NOT_ENOUGH_CONTENT if the
+    language has too few locations; the current game is left as it is. 409 SESSION_NOT_ACTIVE
+    for a game that has already ended, or one that has been idle for the expiry limit (24 hours
+    by default), which is expired. 404 NOT_FOUND for another student's game, or if the new first
+    clue has no recording. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
+    account.
+    """
+    started = _play(lambda: reset_game(user.id, game_id, db), user, db)
+    return StartGameResponse.model_validate(started, from_attributes=True)
+
+
+class ShuffleRequest(BaseModel):
+    # the shuffles_used the app last saw, so a retried request can't shuffle twice
+    shuffles_used: Annotated[int, Field(strict=True, ge=0)]
+
+
+class ShuffledGameResponse(GameStatusResponse):
+    # the clue of the new current location
+    clue_audio_url: str
+
+
+@games_router.post(
+    "/{game_id}/shuffle",
+    operation_id="shuffleGame",
+    response_model=ShuffledGameResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def shuffle(
+    game_id: UUID,
+    request: ShuffleRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ShuffledGameResponse:
+    """Replace the unfinished locations of the student's game (the current one and those still
+    to come) with new ones. Finished locations and their points don't change.
+
+    Send the `shuffles_used` from the last game status. Returns the game status plus
+    `clue_audio_url`, the clue of the new current location. 409 STATE_CHANGED if `shuffles_used`
+    no longer matches, for example a retry of a shuffle that already happened; nothing changes,
+    `details` holds the current `shuffles_used`, `state` and `current_position`, and the
+    locations come from GET /games/{id}. 409 SHUFFLE_LIMIT_REACHED after 2 shuffles
+    in this game. 409 NOT_ENOUGH_CONTENT if there aren't enough new locations; the shuffle isn't
+    used up. 409 SESSION_NOT_ACTIVE for a paused game (resume first), a game that has ended, or
+    one that has been idle for the expiry limit (24 hours by default), which is expired. 404
+    NOT_FOUND for another student's game, or if the new clue has no recording. 403
+    FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.
+    """
+    shuffled = _play(lambda: shuffle_game(user.id, game_id, request.shuffles_used, db), user, db)
+    return ShuffledGameResponse(**asdict(shuffled.status), clue_audio_url=shuffled.clue_audio_url)
+
+
+def _play(action: Callable[[], T], user: User, db: Session) -> T:
+    """Run a game action and commit it.
+
+    A 409 SESSION_NOT_ACTIVE is committed too, so an idle game expired inside the action stays
+    expired. Any other refusal is rolled back, then re-raised.
+    """
+    if user.role == UserRole.ADMIN:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
+    try:
+        result = action()
+    except AppError as error:
+        # an expiry is the one refusal that writes; everything else must not stick
+        if error.code == ErrorCode.SESSION_NOT_ACTIVE:
+            db.commit()
+        else:
+            db.rollback()
+        raise
+    db.commit()
+    return result

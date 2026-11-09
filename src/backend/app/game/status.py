@@ -61,10 +61,10 @@ def find_current_game(student_id: UUID, db: Session) -> GameStatus | None:
     )
     if game is None:
         return None
-    _expire_if_idle(game, db)
+    expire_if_idle(game, db)
     if game.state not in OPEN_SESSION_STATES:
         return None
-    return _status(game, db)
+    return status_of(game, db)
 
 
 def get_game(student_id: UUID, game_id: UUID, db: Session) -> GameStatus:
@@ -76,11 +76,16 @@ def get_game(student_id: UUID, game_id: UUID, db: Session) -> GameStatus:
     game = db.get(GameSession, game_id)
     if game is None or game.student_id != student_id:
         raise AppError(ErrorCode.NOT_FOUND, "Game not found")
-    _expire_if_idle(game, db)
-    return _status(game, db)
+    expire_if_idle(game, db)
+    return status_of(game, db)
 
 
-def _expire_if_idle(game: GameSession, db: Session) -> None:
+def expire_if_idle(game: GameSession, db: Session) -> None:
+    """Expire the loaded game if it is open and has been idle for the limit, then reload it.
+
+    Every game action uses it through lock_open_game, including quit. The expiry is written
+    with an UPDATE; doesn't commit.
+    """
     now, limit = datetime.now(UTC), session_idle_limit()
     if game.state not in OPEN_SESSION_STATES or not is_idle(game, now, limit):
         return
@@ -93,10 +98,16 @@ def _expire_if_idle(game: GameSession, db: Session) -> None:
     db.refresh(game)
 
 
-def _status(game: GameSession, db: Session) -> GameStatus:
+def status_of(game: GameSession, db: Session) -> GameStatus:
+    """The status of a loaded game and its live locations (not the rows a shuffle replaced),
+    read fresh from the database."""
     locations = db.scalars(
         select(SessionLocation)
-        .where(SessionLocation.session_id == game.id)
+        .where(
+            SessionLocation.session_id == game.id,
+            # a row replaced by a shuffle is not a result, so the student never sees it
+            SessionLocation.skip_reason.is_distinct_from(SkipReason.SHUFFLED),
+        )
         .order_by(SessionLocation.position)
         # the locations may have just been skipped by an UPDATE
         .execution_options(populate_existing=True)
