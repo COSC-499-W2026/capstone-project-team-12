@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.accounts.interface import get_current_user
 from app.accounts.profile import current_class_id, select_class, set_practice_language
 from app.db import get_db
-from app.engagement.interface import get_language_engagement_stats
+from app.engagement.interface import get_language_engagement_stats, list_unlocked_achievements
 from app.errors import AppError, ErrorCode, error_responses
 from app.models.accounts import User
 from app.models.enums import Language, UserRole
@@ -178,4 +178,80 @@ def get_my_engagement(
             )
             for badge in stats.recent_badges
         ],
+    )
+
+
+class AchievementProgressResponse(BaseModel):
+    """Progress toward an achievement with a measurable threshold."""
+
+    current: int
+    required: int
+
+
+class AchievementResponse(BaseModel):
+    """An achievement and the user's current unlock state."""
+
+    achievement_key: str
+    category: str
+    icon_key: str
+    language: Language | None
+    unlocked: bool
+    unlocked_at: datetime | None
+    progress: AchievementProgressResponse | None
+
+
+class AchievementsResponse(BaseModel):
+    """Available and previously earned achievements for a language."""
+
+    achievements: list[AchievementResponse]
+
+
+@me_router.get(
+    "/achievements",
+    response_model=AchievementsResponse,
+    operation_id="getMyAchievements",
+    summary="Get my achievements",
+    description=(
+        "Return active achievements for the requested language, "
+        "including global achievements and previously earned inactive "
+        "achievements. Each item includes its unlock state and available "
+        "progress. Unlocked achievements appear newest first, followed "
+        "by locked achievements."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+    ),
+)
+def get_my_achievements(
+    language: Language,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AchievementsResponse:
+    """Read the signed-in user's achievements."""
+    if user.role == UserRole.ADMIN:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
+
+    achievements = list_unlocked_achievements(user.id, language, db)
+
+    return AchievementsResponse(
+        achievements=[
+            AchievementResponse(
+                achievement_key=item.achievement_key,
+                category=item.category,
+                icon_key=item.icon_key,
+                language=item.language,
+                unlocked=item.unlocked,
+                unlocked_at=item.unlocked_at,
+                progress=(
+                    AchievementProgressResponse(
+                        current=item.progress.current,
+                        required=item.progress.required,
+                    )
+                    if item.progress is not None
+                    else None
+                ),
+            )
+            for item in achievements
+        ]
     )
