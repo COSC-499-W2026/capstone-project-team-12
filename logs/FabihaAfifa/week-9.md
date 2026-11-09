@@ -61,6 +61,6 @@ I also had to balance capstone responsibilities with an urgent personal administ
 
 ## Next week
 
-I plan to use reading break to catch up on A12 review feedback, rerun relevant tests and code-quality checks, and coordinate with Eddy on the A10 photo-verification integration. Once the live caller is connected, the integration is verified, and the remaining acceptance requirements are satisfied, I will revisit closure of Issue #86.
+I plan to use reading break to catch up on A13 and any task assigned to me for the demo.
 
 **Note to TA:** My contribution volume this week was lower than usual because I was occupied with time-sensitive passport renewal and associated travel. I will use reading break to catch up on outstanding capstone work. The remaining A12 closure dependency is not an unimplemented scoring helper: PR #300 provides that helper, but the live A10 photo-verification flow, owned by Eddy, still needs to connect to it before Issue #86 can be closed.
