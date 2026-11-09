@@ -41,10 +41,20 @@ def hash_password(password: str) -> str:
 
 def check_password_hash(email: str, password: str, db: Session) -> bool:
     """Takes a plaintext password and checks it agaist the stored hash for the user"""
+    return verified_password_hash(email, password, db) is not None
+
+
+def verified_password_hash(email: str, password: str, db: Session) -> str | None:
+    """The stored hash the password matched, or None if it didn't.
+
+    Read without a lock: bcrypt is slow, so a caller that must not act on a password changed in
+    the meantime locks the user afterwards and checks the hash is still this one (login).
+    """
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     password_bytes = password.encode()
     # bcrypt raises past 72 bytes, and registration caps passwords at 70, so longer is never right
     if user is None or len(password_bytes) > 72:
         checkpw(password_bytes[:72], _DUMMY_HASH)  # Dummy check so timing does not reveal why
-        return False
-    return checkpw(password_bytes, str(user.password_hash).encode())
+        return None
+    stored = str(user.password_hash)
+    return stored if checkpw(password_bytes, stored.encode()) else None
