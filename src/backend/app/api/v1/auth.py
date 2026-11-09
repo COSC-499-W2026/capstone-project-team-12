@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.accounts.login import login_account
 from app.accounts.register import RegisterRequest, RegisterResponse, register_account
-from app.accounts.tokens import REFRESH_TOKEN_EXPIRES_DAYS, TokenResponse, rotate_tokens
+from app.accounts.tokens import REFRESH_TOKEN_LIFETIME, TokenResponse, rotate_tokens
 from app.config import get_settings
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
@@ -85,9 +85,9 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         "refresh_token",
         token,
-        max_age=REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60,
+        max_age=int(REFRESH_TOKEN_LIFETIME.total_seconds()),  # same lifetime as the DB row
         path="/api/v1/auth",
         httponly=True,
-        secure=get_settings().app_env != "development",
+        secure=get_settings().refresh_cookie_secure,
         samesite="strict",
     )

@@ -26,6 +26,6 @@ def login_account(form_data: OAuth2PasswordRequestForm, db: Session) -> TokenPai
     if not user.is_active:
         raise AppError(ErrorCode.ACCOUNT_DISABLED, "Your account has been disabled.")
     access_token = create_access_token({"sub": str(user.id)})
-    refresh_token = create_refresh_token(user.id, db)
+    refresh_token, _ = create_refresh_token(user.id, db)
 
     return TokenPair(access_token=access_token, refresh_token=refresh_token)

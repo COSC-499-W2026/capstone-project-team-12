@@ -115,6 +115,29 @@ def test_unsafe_email_settings(
 
 
 @pytest.mark.parametrize(
+    ("app_env", "cookie_secure", "expected"),
+    [
+        ("development", None, False),
+        ("production", None, True),
+        ("production", "false", False),  # staging or test server on plain http
+        ("development", "true", True),
+    ],
+)
+def test_refresh_cookie_secure(
+    monkeypatch: pytest.MonkeyPatch, app_env: str, cookie_secure: str | None, expected: bool
+) -> None:
+    monkeypatch.setenv("APP_ENV", app_env)
+    monkeypatch.setenv("ACCESS_TOKEN_SECRET_KEY", "a-valid-secret-key-123")
+    monkeypatch.setenv("APP_BASE_URL", "https://hunt.example.ca")
+    monkeypatch.setenv("MAIL_FROM", "Hunt <no-reply@hunt.example.ca>")
+    if cookie_secure is None:
+        monkeypatch.delenv("COOKIE_SECURE", raising=False)
+    else:
+        monkeypatch.setenv("COOKIE_SECURE", cookie_secure)
+    assert Settings(_env_file=None).refresh_cookie_secure is expected
+
+
+@pytest.mark.parametrize(
     ("variable", "value", "message"),
     [
         (

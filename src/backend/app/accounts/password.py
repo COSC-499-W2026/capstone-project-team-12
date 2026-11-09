@@ -42,7 +42,9 @@ def hash_password(password: str) -> str:
 def check_password_hash(email: str, password: str, db: Session) -> bool:
     """Takes a plaintext password and checks it agaist the stored hash for the user"""
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
-    if user is None:
-        checkpw(password.encode(), _DUMMY_HASH)  # Dummy check if no user is found
+    password_bytes = password.encode()
+    # bcrypt raises past 72 bytes, and registration caps passwords at 70, so longer is never right
+    if user is None or len(password_bytes) > 72:
+        checkpw(password_bytes[:72], _DUMMY_HASH)  # Dummy check so timing does not reveal why
         return False
-    return checkpw(password.encode(), str(user.password_hash).encode())
+    return checkpw(password_bytes, str(user.password_hash).encode())
