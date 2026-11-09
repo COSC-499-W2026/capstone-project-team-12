@@ -1,6 +1,6 @@
 # Week 9 Team Log (Nov. 2 - Nov. 8)
 
-Authors: Mia Kuang, Fabiha Afifa
+Authors: Mia Kuang
 
 This week, we finished the Stage 1 navigation work (A19), merged the student endpoints for points, levels and achievements (A12) and the first A20 content routes, added the sign-in follow-ups and global rate limiting (A2), and started the account routes for logout, profile and password change. We also discussed the demo for the client on Discord and wrote a first proposal for the student game screens. No frontend code has been written yet.
 
@@ -18,7 +18,7 @@ The work was distributed so that (PRs merged into main this week are listed firs
 - **Eddy** worked on content management (A20).
   - *Merged:* #292, #293, #295, the routes for locations, clue text, and clue audio upload and coverage.
   - *Opened this week:* #321, which refuses a ZIP whose list of files is too long before reading it. It has changes requested.
-  - *Not merged yet:* #321, and #296, #301, #303, #304 (request-body size middleware and the concurrent-import fixes), which are not on main yet.
+  - *Not merged yet:* #321, #296 (request-body size middleware), #301 and #303 (the routes for the locations CSV and audio ZIP imports, with the concurrent-import fixes) and #304 (the concurrency tests).
 
 - **Kaedyn** worked on accounts (A2, A22, A24).
   - *Merged:* #286 (sign-in follow-ups) and #314 (rate limiting). #286 added refresh token rotation with a 30-second grace window, so two tabs refreshing together are not signed out, revokes the whole token family when an old token is reused, and runs a dummy password check for unknown emails and over-long passwords so timing does not reveal why a login failed. #314 added the slowapi limiter with a global limit shared by all routes and a login limit per email and IP, a 429 error, and exempts `/health`.
@@ -33,7 +33,7 @@ Based on the PRs merged into main this week, we met the main goals for navigatio
 - **Accounts:** the sign-in follow-ups and global rate limiting are merged. Logout, profile and change password are open.
 - **Still open:** the A20 request-body limits and concurrent-import fixes, the account routes (#323-#325, #328), and the GPS replay script (#326, #327).
 
-Many PRs were opened but not merged this week. Everyone was busy and reviews took longer than we planned, so the open PRs above are mostly waiting for review.
+Many PRs were opened but not merged this week. Reviews took longer than we planned: #296, #301 and #321 have changes requested, #303 has comments, #304 is approved, #323–#325 have one approval and need a second, and #326–#328 were opened on Nov 8 and are waiting for review.
 
 The team collectively worked on the following to avoid duplicated logic, inconsistent state and unnecessary dependencies:
 
@@ -48,7 +48,7 @@ These changes keep each rule inside the component that owns it: game session tra
 
 ## Test results
 
-GitHub Actions could not run this week because of the organization's billing, so we ran the CI checks locally on the merged main branch: `ruff check`, `ruff format --check`, `mypy` and `pytest --cov=app`. All of them pass. pytest reports 1470 passed, 5 skipped, and 99% coverage of `app`.
+GitHub Actions could not run this week because of the organization's billing, so we ran the CI checks locally on the merged main branch: `ruff check`, `ruff format --check`, `mypy` and `pytest --cov=app`. All of them pass. pytest reports 1470 passed, 5 skipped, and 99% coverage of `app`. We changed our collaboration process so that the CI check is no longer required to merge, and each author posts their local `ruff`, `mypy` and `pytest` results as a comment on the PR before it is merged. The reason we did this is that GitHub Actions jobs could not start because of the organization's billing issue, so no PR could get a CI result. We considered waiting for the billing issue to be fixed, but that would have blocked every merge this week.
 
 ![pytest on main](img/pytest-main-week9.png)
 
@@ -57,13 +57,13 @@ GitHub Actions could not run this week because of the organization's billing, so
 This week we discussed the demo for the client on Discord. We have not written any frontend code or opened any frontend PR yet. The discussion produced a first proposal for the student game screens, written from a clickable demo that Mia built. It is a proposal and has not been agreed by the team yet.
 
 - **What the demo shows:** the whole student game flow in one clickable page: Home, Stage 1 (walking to the location), Stage 2 (taking the photo), Result and Summary, and the menu for Shuffle, Reset and Quit. It runs on a phone, and it has a simulator panel for walking speed, weak GPS, being inside the radius and the OCR result of the next photo. The demo page is a design reference only, not code for the app.
-- **Main idea:** replace the Stage 1 map, which only shows the student's own dot, with a pixel pet that walks with the student. The pet can be fed and cleaned, hatches and grows as the student walks, and gives them something to look at between locations without hinting where to go. The art is a small pixel grid with a 3-colour screen palette so people who are not artists can draw it.
+- **Main idea:** replace the Stage 1 map, which only shows the student's own dot, with a pixel pet that walks with the student. The pet can be fed and cleaned, hatches and grows as the student walks, and gives them something to look at between locations without hinting where to go. The art is a small pixel grid with a 64x48 grid with a 3-4 colour LCD palette so people who are not artists can draw it.
 - **Rules the design keeps:** feedback that carries direction or distance (the `NAV_*` codes) is audio only, and nothing on screen changes with it, including the pet. The pet depends only on how far the student has walked, feeding and cleaning, never on the distance to the target. Weak GPS and the I'm here button can show on screen because they reveal no direction. No room number appears anywhere, including the camera guide.
 - **Backend mapping:** each screen maps to endpoints we already have or are building: the game status and shuffles (A8, A9), the current location, ping and confirm-arrival (A19), the photo verification (A10), engagement (A12, A14) and the summary (A23). Two gaps came up: no endpoint returns how many resets are left today, and the override time is server time, so the client should not compare it with its own clock.
 - **Spec changes this would need:** replace the Stage 1 map with the pet screen, decide where pet state lives (on the client first, in the backend later), make themes a profile preference (A24), add the two gaps above, and confirm with the client that hand-drawn pixel art counts as designed by the team.
 - **Alternative we considered:** keep a map. We did not choose it because a map showing only the student's position carries little information and looks like every other map app. If the team does not want the pet, the fallback idea is five cards where a shuffle redeals a card.
 - **Questions for the team and the client:** does the pet carry over between games or start as an egg each time, one theme per language or a student setting, and are feed and clean taps while walking too frequent. These need playtests.
-- **Proposed frontend issues:** ten issues (F0-F10) for Milestone 2: the spec change, the design system and app shell, the pet sprite engine, the game shell, the Stage 1 and Stage 2 screens, the pet mechanics, the result and summary, Home, the audio problem dialog and permissions onboarding. They have not been opened yet.
+- **Proposed frontend issues:** Eleven issues (F0-F10) for Milestone 2: the spec change, the design system and app shell, the pet sprite engine, the game shell, the Stage 1 and Stage 2 screens, the pet mechanics, the result and summary, Home, the audio problem dialog and permissions onboarding. They have not been opened yet.
 
 ## DFD
 
@@ -108,4 +108,4 @@ Flow 12 (5.3 Upload clue audio → Staff) now includes "VALIDATION_ERROR under 5
 
 ![5.0 Content Management](img/dfd_level1_content_management.png)
 
-The main unfinished work at the end of the week is reviewing and merging the open PRs (A20, the account routes and the GPS replay script), connecting scoring to the live photo verification path, and deciding the frontend direction. Next week, we will divide up the work for the client demo and continue with the later part of the project.
+Next week, we will get the open PRs reviewed and merged (A20, #323–#325, #328, #326 and #327), connect scoring to photo verification (A10), and decide with the team whether to go with the pet or the card design before opening F0.
