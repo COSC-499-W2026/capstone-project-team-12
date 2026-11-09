@@ -8,13 +8,10 @@ from app.services.limiter import global_rate_limit, limiter
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(
-        title="Japanese Scavenger Hunt Game API",
-        version="0.1.0",
-        dependencies=[Depends(global_rate_limit)],  # every route, including included routers
-    )
+    app = FastAPI(title="Japanese Scavenger Hunt Game API", version="0.1.0")
     app.state.limiter = limiter
-    app.include_router(api_router)
+    # every /api/v1 route; /health stays unlimited so health checks are never rejected
+    app.include_router(api_router, dependencies=[Depends(global_rate_limit)])
     add_error_handlers(app)
 
     @app.get("/health", tags=["health"], operation_id="getHealth")
