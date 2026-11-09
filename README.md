@@ -127,6 +127,27 @@ The graph is generated from the imports and published on GitHub Pages after each
 
 The API reference is generated from the FastAPI routes in the same way and published at [https://cosc-499-w2026.github.io/capstone-project-team-12/api.html](https://cosc-499-w2026.github.io/capstone-project-team-12/api.html).
 
+### GPS replay
+
+`utils/gps_replay.py` plays a recorded walking route against a student's game through the API, as the app would, and prints the feedback code returned for each ping. The route is a CSV:
+
+```csv
+t_s,lat,lng,accuracy_m
+0,49.94120,-119.39480,8
+5,49.94114,-119.39480,8
+```
+
+`t_s` is the time in seconds since the start (at least 2 s between rows, the ping rate limit) and `accuracy_m` the GPS accuracy in metres. The positions must lead to the game's current location, since the API never returns its coordinates. The server compares distances about 25 s apart, so the route plays in real time.
+
+Run it from the repository root (not `src/backend`), with the backend running:
+
+```bash
+GPS_REPLAY_PASSWORD=... python utils/gps_replay.py route.csv --email student@example.com
+python utils/gps_replay.py route.csv --email student@example.com --game <game id> --confirm
+```
+
+Without `--game` it uses the student's open game. `--confirm` confirms arrival on the first ping that allows it. `--base-url` defaults to http://localhost:8000. The password comes from `GPS_REPLAY_PASSWORD`, or the script asks for it. It stops when the game changes (paused, ended, another location), the login stops working or the server can't be reached; a refused ping such as 429 is shown and skipped. Exit codes: 0 played (or arrived), 1 stopped, 2 bad route file.
+
 ## Team Contract
 
 Our team contract can be found [here](docs/contract/team-contract.docx).
