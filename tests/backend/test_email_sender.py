@@ -1,17 +1,22 @@
 """The send-emails job against a fake mailer. The job commits, so tests commit their setup first."""
 
 import logging
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta
-from uuid import UUID
+from typing import Any
+from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import Engine, delete, func, select, text
 from sqlalchemy.orm import Session
 
-from app.models.accounts import User
+from app.accounts.email_links import request_password_reset, reset_password
+from app.errors import AppError
+from app.models.accounts import RefreshToken, User
 from app.models.email import MAX_EMAIL_ATTEMPTS, EmailOutbox, EmailToken
-from app.models.enums import EmailKind, EmailStatus
+from app.models.enums import EmailKind, EmailStatus, UserRole
+from app.services import email_sender
 from app.services.email import EmailService
 from app.services.email_sender import (
     QUOTA_PAUSE,
@@ -21,6 +26,9 @@ from app.services.email_sender import (
     retry_delay,
     send_due_emails,
 )
+
+NEW_PASSWORD = "NewPassword1"
+WAIT_S = 10  # every wait between threads gives up after this
 
 
 class FakeMailer:
@@ -263,3 +271,193 @@ def test_tokens_and_addresses_stay_out_of_repr_and_logs(
     with caplog.at_level(logging.ERROR):
         send_due_emails(FakeMailer(RuntimeError(f"refused {row.to_email}")), db)
     assert str(row.id) in caplog.text and row.to_email not in caplog.text
+
+
+# A reset mail queued before a password reset must never go out after it (#199): its link
+# would work for 60 minutes after the password changed.
+
+
+def reset_user(make_user: Callable[..., User]) -> User:
+    return make_user(email_verified_at=func.now())
+
+
+def test_a_reset_marks_a_waiting_reset_mail_so_it_is_not_sent(
+    db: Session, make_user: Callable[..., User]
+) -> None:
+    user = reset_user(make_user)
+    link = EmailService.create_token(user, EmailKind.RESET_PASSWORD, db)
+    row = queue(db, user, EmailKind.RESET_PASSWORD)
+    reset_password(link, NEW_PASSWORD, db)
+    db.commit()
+    mailer = FakeMailer()
+    assert send_due_emails(mailer, db) == SendReport()
+    assert (mailer.sent, row.status, tokens(db, user.id)) == ([], EmailStatus.FAILED, 1)
+
+
+def test_a_reset_mail_sent_first_replaces_the_older_link(
+    db: Session, make_user: Callable[..., User]
+) -> None:
+    user = reset_user(make_user)
+    older = EmailService.create_token(user, EmailKind.RESET_PASSWORD, db)
+    queue(db, user, EmailKind.RESET_PASSWORD)
+    mailer = FakeMailer()
+    assert send_due_emails(mailer, db) == SendReport(sent=1)
+    with pytest.raises(AppError):  # the mail's new link replaced it
+        reset_password(older, NEW_PASSWORD, db)
+    reset_password(mailer.sent[0].token or "", NEW_PASSWORD, db)
+
+
+def test_a_reset_mail_queued_after_a_reset_is_sent(
+    db: Session, make_user: Callable[..., User]
+) -> None:
+    user = reset_user(make_user)
+    reset_password(EmailService.create_token(user, EmailKind.RESET_PASSWORD, db), NEW_PASSWORD, db)
+    queue(db, user, EmailKind.RESET_PASSWORD)  # e.g. forgot the new password too
+    mailer = FakeMailer()
+    assert send_due_emails(mailer, db) == SendReport(sent=1)
+
+
+class Step:
+    """One thread's job, with its error kept and a timeout on every wait, so a broken order
+    fails the test instead of hanging the suite."""
+
+    def __init__(self, job: Callable[[], object]) -> None:
+        self.error: BaseException | None = None
+
+        def run() -> None:
+            try:
+                job()
+            except BaseException as error:  # reported by finish()
+                self.error = error
+
+        self.thread = threading.Thread(target=run, daemon=True)
+        self.thread.start()
+
+    def finish(self) -> None:
+        self.thread.join(timeout=WAIT_S)
+        assert not self.thread.is_alive(), "a thread is stuck"
+        if self.error is not None:
+            raise self.error
+
+
+def wait(event: threading.Event) -> None:
+    assert event.wait(timeout=WAIT_S), "the other thread never got there"
+
+
+@pytest.fixture
+def committed_user(test_engine: Engine) -> Iterator[User]:
+    """A verified user committed for real, so other connections see it; removed afterwards."""
+    with Session(test_engine, expire_on_commit=False) as setup:
+        user = User(
+            email=f"{uuid4().hex[:12]}@example.com",
+            username=f"user_{uuid4().hex[:8]}",
+            role=UserRole.STUDENT,
+            email_verified_at=func.now(),
+        )
+        setup.add(user)
+        setup.commit()
+    yield user
+    with Session(test_engine) as cleanup:
+        cleanup.execute(text("SET lock_timeout = '10s'"))
+        for table in (EmailOutbox, EmailToken, RefreshToken):
+            cleanup.execute(delete(table).where(table.user_id == user.id))
+        cleanup.execute(delete(User).where(User.id == user.id))
+        cleanup.commit()
+
+
+@pytest.fixture
+def send_job_holding_the_mail(
+    test_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[], tuple[Step, threading.Event, threading.Event, FakeMailer]]:
+    """Starts the send job in a thread; it locks the due mail, signals `holding`, then waits
+    for `go_on` before it locks the user and makes the link."""
+
+    def start() -> tuple[Step, threading.Event, threading.Event, FakeMailer]:
+        holding, go_on, mailer = threading.Event(), threading.Event(), FakeMailer()
+        make_link = email_sender._token_for
+
+        def held(row: EmailOutbox, db: Session) -> str | None:
+            holding.set()
+            wait(go_on)
+            return make_link(row, db)
+
+        monkeypatch.setattr(email_sender, "_token_for", held)
+
+        def job() -> None:
+            with Session(test_engine) as session:
+                session.execute(text("SET lock_timeout = '10s'"))
+                send_due_emails(mailer, session, limit=1)
+
+        return Step(job), holding, go_on, mailer
+
+    return start
+
+
+def outcome(test_engine: Engine, user: User) -> tuple[list[str], int]:
+    with Session(test_engine) as check:
+        statuses = check.scalars(select(EmailOutbox.status).where(EmailOutbox.user_id == user.id))
+        return list(statuses), tokens(check, user.id)
+
+
+def test_a_reset_while_the_job_holds_the_mail_stops_it(
+    test_engine: Engine,
+    committed_user: User,
+    send_job_holding_the_mail: Callable[..., tuple[Step, threading.Event, threading.Event, Any]],
+) -> None:
+    with Session(test_engine) as setup:
+        link = EmailService.create_token(committed_user, EmailKind.RESET_PASSWORD, setup)
+        EmailService.queue_email(committed_user, EmailKind.RESET_PASSWORD, setup)
+        setup.commit()
+    sending, holding, go_on, mailer = send_job_holding_the_mail()
+    wait(holding)
+
+    with Session(test_engine) as reset:  # skips the mail the job holds (SKIP LOCKED)
+        reset_password(link, NEW_PASSWORD, reset)
+        reset.commit()
+    go_on.set()
+    sending.finish()
+
+    assert mailer.sent == []
+    assert outcome(test_engine, committed_user) == ([EmailStatus.FAILED], 1)
+
+
+def test_a_reset_that_began_before_the_mail_was_queued_still_stops_it(
+    test_engine: Engine,
+    committed_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+    send_job_holding_the_mail: Callable[..., tuple[Step, threading.Event, threading.Event, Any]],
+) -> None:
+    """The reset's transaction starts first (its now() is earlier than the mail's), but it uses
+    the link only after the mail was queued, while the send job holds that mail."""
+    with Session(test_engine) as setup:
+        link = EmailService.create_token(committed_user, EmailKind.RESET_PASSWORD, setup)
+        setup.commit()
+    hashing, hash_now = threading.Event(), threading.Event()
+
+    def slow_hash(password: str) -> str:
+        hashing.set()
+        wait(hash_now)
+        return "$2b$12$" + "x" * 53
+
+    monkeypatch.setattr("app.accounts.email_links.hash_password", slow_hash)
+
+    def reset() -> None:
+        with Session(test_engine) as session:
+            session.execute(text("SET lock_timeout = '10s'"))
+            reset_password(link, NEW_PASSWORD, session)
+            session.commit()
+
+    resetting = Step(reset)
+    wait(hashing)  # the reset's transaction has begun
+    with Session(test_engine) as request:
+        request_password_reset(committed_user.email, request)
+        request.commit()
+    sending, holding, go_on, mailer = send_job_holding_the_mail()
+    wait(holding)
+    hash_now.set()
+    resetting.finish()
+    go_on.set()
+    sending.finish()
+
+    assert mailer.sent == []
+    assert outcome(test_engine, committed_user) == ([EmailStatus.FAILED], 1)
