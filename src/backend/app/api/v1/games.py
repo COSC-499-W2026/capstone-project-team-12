@@ -13,12 +13,15 @@ from app.accounts.interface import get_current_user
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.control import pause_game, quit_game, reset_game, resume_game
+from app.game.current_location import Stage, get_current_location
+from app.game.navigation import Ping, Trend, process_ping
 from app.game.shuffle import shuffle_game
 from app.game.start import start_game
-from app.game.status import find_current_game, get_game
+from app.game.status import GameStatus, find_current_game, get_game
 from app.models.accounts import User
 from app.models.enums import (
     Difficulty,
+    FeedbackCode,
     Language,
     LocationStatus,
     SessionEndReason,
@@ -166,6 +169,129 @@ def game_status(
     status = get_game(user.id, game_id, db)
     db.commit()
     return GameStatusResponse.model_validate(status, from_attributes=True)
+
+
+class CurrentLocationResponse(BaseModel):
+    """The current location of a game. Never its name, room number, coordinates or answers."""
+
+    session_id: UUID
+    state: SessionState
+    position: int
+    stage: Stage
+    # the clue of this location, for both stages
+    clue_audio_url: str
+    attempts_used: int
+    attempts_left: int
+    # Stage 1 only: when "Continue without GPS" is allowed. Compare it with the current time;
+    # don't count down from it, since it can move (see the route description)
+    gps_override_available_at: datetime | None
+
+
+@games_router.get(
+    "/{game_id}/current-location",
+    operation_id="getCurrentLocation",
+    response_model=CurrentLocationResponse | GameStatusResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def current_location(
+    game_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> CurrentLocationResponse | GameStatusResponse:
+    """The current location of the student's game: position, stage (`navigation` or
+    `verification`), clue audio link and attempts. A paused game can be read too.
+
+    `gps_override_available_at` (Stage 1 only) is when the student may confirm arrival without
+    GPS: 3 minutes after the location became current (paused time counts), or straight away once
+    the last 3 pings all had poor accuracy, when it is the latest ping's time. It moves with each
+    further weak ping and goes back to the 3-minute time after a good one, so only compare it
+    with the current time; don't use it as the start of a countdown.
+
+    If a content manager deactivated the location before the student reached it, it is skipped
+    (0 points) and the next location comes back. If that was the last one, the game is completed
+    and the response is the game status (the same body as GET /games/{id}) instead.
+    409 SESSION_NOT_ACTIVE for a game that has ended, or one that has been idle for the expiry
+    limit (24 hours by default), which is expired. 409 INVALID_STAGE if the game has no location
+    to play at its position (out of step). 404 NOT_FOUND for another student's game, or if the
+    clue has no recording. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
+    account.
+    """
+    result = _play(lambda: get_current_location(user.id, game_id, db), user, db)
+    if isinstance(result, GameStatus):
+        return GameStatusResponse.model_validate(result, from_attributes=True)
+    return CurrentLocationResponse.model_validate(result, from_attributes=True)
+
+
+class PingRequest(BaseModel):
+    lat: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    lng: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    # the browser's accuracy radius in metres
+    accuracy_m: float = Field(ge=0, allow_inf_nan=False)
+
+
+class FeedbackResponse(BaseModel):
+    code: FeedbackCode
+    audio_url: str
+
+
+class PingResponse(BaseModel):
+    # closer / farther / steady, or null when no trend was evaluated on this ping
+    trend: Trend | None
+    can_confirm: bool
+    # play the feedback only when true
+    speak: bool
+    feedback: FeedbackResponse
+    # when "Continue without GPS" is allowed; compare with the current time, don't count down
+    gps_override_available_at: datetime
+
+
+@games_router.post(
+    "/{game_id}/navigation/ping",
+    operation_id="sendNavigationPing",
+    response_model=PingResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.CONFLICT,
+        HTTPStatus.TOO_MANY_REQUESTS,
+    ),
+)
+def navigation_ping(
+    game_id: UUID,
+    request: PingRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> PingResponse:
+    """Send the student's position in Stage 1, about every 5 seconds.
+
+    Returns one feedback code with its audio link. Play it only when `speak` is true: a phrase is
+    spoken when a trend is evaluated (about every 25 s), NAV_START on the first good fix,
+    NAV_ARRIVED once on entering the radius, and NAV_GPS_WEAK on the first weak fix (accuracy over
+    50 m), then at most every 25 s. Other pings return the last spoken code with `speak` false
+    and `trend` null. `can_confirm` is true within the radius only when this fix is not weak
+    (accuracy ≤ 50 m); a weak fix is never confirmable. A good ping after a weak signal, before
+    the next trend, shows NAV_KEEP_GOING (NAV_VERY_CLOSE when near) with `speak` false. No
+    direction or target position is ever returned. `gps_override_available_at` is as in GET
+    .../current-location: 3 weak pings in a row make it the latest ping's time (already passed),
+    and a good ping moves it back to 3 minutes after the location became current.
+    409 SESSION_NOT_ACTIVE for a paused game (resume first), a game that has ended, or one idle
+    for the expiry limit (24 hours by default), which is expired. 409 INVALID_STAGE unless the
+    current location is in Stage 1. 429 RATE_LIMITED for a ping less than 2 s after the last one.
+    404 NOT_FOUND for another student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED
+    for a disabled account.
+    """
+    ping = Ping(request.lat, request.lng, request.accuracy_m)
+    outcome = _play(lambda: process_ping(user.id, game_id, ping, db), user, db)
+    return PingResponse(
+        trend=outcome.trend,
+        can_confirm=outcome.can_confirm,
+        speak=outcome.speak,
+        feedback=FeedbackResponse(code=outcome.feedback, audio_url=outcome.feedback_audio_url),
+        gps_override_available_at=outcome.gps_override_available_at,
+    )
 
 
 class PausedGameResponse(GameStatusResponse):

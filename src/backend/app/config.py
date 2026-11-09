@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://hunt:hunt@localhost:5432/hunt"
     secret_key: str = "change-me"
     access_token_secret_key: str = "change-me"
+    # unset: the refresh cookie is secure everywhere but development. Set false only for a
+    # staging or test server served over plain http, where a secure cookie is never sent back
+    cookie_secure: bool | None = None
     smtp_host: str = "localhost"
     smtp_port: int = 1025
     # Mailpit needs neither; a real provider needs STARTTLS and a login
@@ -61,12 +64,19 @@ class Settings(BaseSettings):
     gps_weak_pings_for_override: PositiveInt = 3  # weak pings in a row that allow the override
     gps_override_after_minutes: PositiveInt = 3  # or this long in Stage 1
     speed_anomaly_mps: PositiveInt = 10  # faster than this between pings is flagged
+    ping_min_interval_seconds: PositiveInt = 2  # pings closer together get 429 RATE_LIMITED
     # "today" for day-based rules, e.g. carry-over
     app_timezone: str = "America/Vancouver"
     # rate limits per minute (tech spec, Rate Limits)
     global_rate_limit: PositiveInt = 100  # per IP, shared by all routes
     login_attempts_per_email: PositiveInt = 5  # per (email, IP)
     login_attempts_per_ip: PositiveInt = 100
+
+    @property
+    def refresh_cookie_secure(self) -> bool:
+        if self.cookie_secure is not None:
+            return self.cookie_secure
+        return self.app_env != "development"
 
     @field_validator("app_timezone")
     @classmethod
