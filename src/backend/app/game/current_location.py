@@ -73,7 +73,7 @@ def describe(game: GameSession, row: SessionLocation, db: Session) -> CurrentLoc
     if stage == Stage.NAVIGATION:
         override_at = override_available_at(
             row.started_at or datetime.now(UTC),
-            0,  # weak pings in a row: counted from the ping PR on
+            row.weak_pings_in_row,
             row.last_ping_at,
             NavigationRules.from_settings(),
         )
