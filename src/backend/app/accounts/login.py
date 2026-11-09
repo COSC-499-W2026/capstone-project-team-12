@@ -34,12 +34,6 @@ def login_account(form_data: OAuth2PasswordRequestForm, db: Session) -> TokenPai
     refresh_token, _ = create_refresh_token(user.id, db)
     return TokenPair(access_token=access_token, refresh_token=refresh_token)
 
-    return {"access_token": access_token, "refresh_token": refresh_token}
-
-    raise AppError(
-        ErrorCode.INVALID_CREDENTIALS, "The username or email you provided is not correct."
-    )
-
 
 def get_login_key(request: Request) -> str:
     ip = get_remote_address(request)
