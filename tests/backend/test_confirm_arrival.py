@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.content import interface as content
@@ -16,6 +17,7 @@ from app.errors import AppError, ErrorCode
 from app.game.arrival import Arrival, confirm_arrival
 from app.game.current_location import Stage
 from app.game.navigation import Ping, process_ping
+from app.game.shuffle import shuffle_game
 from app.models.accounts import User
 from app.models.enums import (
     ArrivalOverride,
@@ -26,7 +28,7 @@ from app.models.enums import (
     SessionState,
     SkipReason,
 )
-from app.models.game import GameSession
+from app.models.game import GameSession, SessionLocation
 
 NOW = datetime(2026, 10, 29, 20, 0, tzinfo=UTC)
 CLOCK = ("app.game.arrival", "app.game.navigation", "app.game.control", "app.game.status")
@@ -251,6 +253,31 @@ def test_a_verifying_deactivated_row_repeats_without_writes(
     second = confirm(game, db)
     _same_arrival(first, second, split_media_url)
     assert _stored(game, row) == before
+
+
+def test_a_confirm_after_a_shuffle_needs_a_ping_on_the_new_location(
+    db: Session, playing: Callable[..., Any], freeze_clock: Callable[..., None]
+) -> None:
+    # the old row has a recent ping in the radius, but a shuffle replaced it at the same position
+    game, old = playing()
+    freeze_clock(NOW, *CLOCK, "app.game.shuffle")
+    shuffle_game(game.student_id, game.id, game.shuffles_used, db)
+    new = db.scalars(
+        select(SessionLocation).where(
+            SessionLocation.session_id == game.id,
+            SessionLocation.position == 1,
+            SessionLocation.status == LocationStatus.NAVIGATING,
+        )
+    ).one()
+    before = _stored(game, new)
+
+    assert refused(game, db) == ErrorCode.STALE_POSITION
+    assert _stored(game, new) == before
+    assert (old.status, old.skip_reason, old.arrived_at) == (
+        LocationStatus.SKIPPED,
+        SkipReason.SHUFFLED,
+        None,
+    )
 
 
 def test_a_pending_row_is_invalid_stage(db: Session, playing: Callable[..., Any]) -> None:
