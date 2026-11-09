@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     arrival_ping_max_age_seconds: PositiveInt = 30  # confirm-arrival needs a ping this recent
     # "today" for day-based rules, e.g. carry-over
     app_timezone: str = "America/Vancouver"
+    # rate limits per minute (tech spec, Rate Limits)
+    global_rate_limit: PositiveInt = 100  # per IP, shared by all routes
+    login_attempts_per_email: PositiveInt = 5  # per (email, IP)
+    login_attempts_per_ip: PositiveInt = 100
 
     @property
     def refresh_cookie_secure(self) -> bool:

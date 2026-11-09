@@ -40,6 +40,7 @@ from app.models.enums import (
 )
 from app.models.game import GameSession, SessionLocation
 from app.services.audio import UploadedAudioService
+from app.services.limiter import limiter
 from app.services.storage import MEDIA_URL_PREFIX, get_storage_service
 
 
@@ -144,6 +145,12 @@ def split_media_url() -> Callable[[str], tuple[str, int, str]]:
         return key, int(query["expires"][0]), query["sig"][0]
 
     return split
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits() -> None:
+    """Every test client sends from the same IP, so counts from one test must not reach the next."""
+    limiter.reset()
 
 
 @pytest.fixture
