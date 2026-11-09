@@ -15,12 +15,14 @@ from uuid import uuid4
 import av
 import pytest
 from fastapi.testclient import TestClient
+from gps_replay import Api, Step, replay
 from httpx2 import Response
 from jwt import encode
 from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.content import interface as content
 from app.content.clue_audio import UPLOAD_PROVIDER
 from app.db import DB_CONNECT_ARGS, get_db
 from app.errors import AppError, ErrorCode
@@ -461,6 +463,56 @@ def navigating_game(
         return played, row
 
     return make
+
+
+# the modules whose clock the GPS replay moves, besides the two navigating_game freezes
+_REPLAY_CLOCKS = ("app.game.navigation", "app.game.arrival", "app.game.current_location")
+_REPLAY_CLOCKS += ("app.game.sessions",)
+
+
+@pytest.fixture
+def replay_route(
+    db: Session,
+    client: TestClient,
+    auth_headers: Callable[[User], dict[str, str]],
+    navigating_game: Callable[..., tuple[GameSession, SessionLocation]],
+    freeze_clock: Callable[..., None],
+) -> Callable[..., tuple[int, list[str], SessionLocation]]:
+    """Plays a route with utils/gps_replay.py against a new game through the API: the game is at
+    an active ja/basic location (entrance and radius of make_session_location), in Stage 1 since
+    a minute before `now`. Each wait of the replay moves the frozen clock instead of sleeping, so
+    a route of minutes runs at once. Returns the exit code, the printed lines and the location row.
+    """
+
+    def run(
+        steps: list[Step], *, now: datetime, **kwargs: Any
+    ) -> tuple[int, list[str], SessionLocation]:
+        active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
+        assert active, "needs an active ja/basic location"
+        game, row = navigating_game(now, *_REPLAY_CLOCKS, location_id=active[0])
+        db.commit()  # so an error the route rolls back keeps the game
+        student = db.get(User, game.student_id)
+        assert student is not None
+        token = auth_headers(student)["Authorization"].removeprefix("Bearer ")
+        clock = [now]
+
+        def send(method: str, path: str, *, token: str | None = None, **body: Any) -> Any:
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            json_body, form = body.get("json_body"), body.get("form")
+            response = client.request(method, path, json=json_body, data=form, headers=headers)
+            return response.status_code, response.json()
+
+        def sleep(seconds: float) -> None:
+            clock[0] += timedelta(seconds=seconds)
+            freeze_clock(clock[0], "app.game.control", "app.game.status", *_REPLAY_CLOCKS)
+
+        lines: list[str] = []
+        api = Api(send, token)
+        code = replay(steps, api, str(game.id), sleep=sleep, out=lines.append, **kwargs)
+        db.refresh(row)
+        return code, lines, row
+
+    return run
 
 
 @pytest.fixture
