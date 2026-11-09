@@ -112,6 +112,7 @@ def test_a_dead_link_is_refused_before_the_password_is_hashed(
 
     monkeypatch.setattr("app.accounts.email_links.hash_password", no_hash)
     user = make_user(email_verified_at=datetime.now(UTC))
+    create_refresh_token(user.id, db)
     kind = EmailKind.VERIFY_EMAIL if case == "wrong_kind" else EmailKind.RESET_PASSWORD
     token = EmailService.create_token(user, kind, db)
     link = db.scalars(select(EmailToken).where(EmailToken.user_id == user.id)).one()
@@ -124,6 +125,7 @@ def test_a_dead_link_is_refused_before_the_password_is_hashed(
     response = client.post(URL, json={"token": sent, "new_password": NEW})
     assert response.status_code == HTTPStatus.BAD_REQUEST
     assert response.json()["error"]["code"] == "INVALID_TOKEN"
+    assert revoked(db, user) == [False]  # still signed in
 
 
 @pytest.mark.parametrize("case", ["unverified", "inactive", "verify_link", "expired", "missing"])
