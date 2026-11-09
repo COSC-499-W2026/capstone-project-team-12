@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game.control import lock_open_game, session_not_active
 from app.game.current_location import CurrentLocation, Stage, describe
@@ -35,7 +36,7 @@ def confirm_arrival(
     student_id: UUID,
     game_id: UUID,
     override: ArrivalOverride | None,
-    position: int | None,
+    position: int,
     db: Session,
 ) -> Arrival:
     """Move the current location from Stage 1 to Stage 2.
@@ -46,11 +47,19 @@ def confirm_arrival(
     even paused. Sets last_activity_at except on a repeat. Doesn't commit.
     """
     game = lock_open_game(student_id, game_id, db)
-    if position is not None and position != game.current_position:
+    if position != game.current_position:
         raise _moved_on(game)
     row = current_row(game, db)
     if row.status == LocationStatus.VERIFYING:
         return _arrival(game, describe(game, row, db), db)
+    if row.status != LocationStatus.NAVIGATING:
+        raise AppError(
+            ErrorCode.INVALID_STAGE,
+            "The current location isn't in Stage 1",
+            details=[{"session_id": str(game.id), "position": row.position, "status": row.status}],
+        )
+    if not content.is_location_active(row.location_id, db):
+        raise _inactive(game)
     if game.state != SessionState.ACTIVE:
         raise session_not_active(game, "Resume the game before confirming arrival")
     now = datetime.now(UTC)
@@ -107,6 +116,21 @@ def _arrival(game: GameSession, location: CurrentLocation, db: Session) -> Arriv
     code = FeedbackCode.VERIFY_START
     language = Language(game.target_language)
     return Arrival(location, code, get_audio_service().feedback_audio_url(code, language, db))
+
+
+def _inactive(game: GameSession) -> AppError:
+    """409 STATE_CHANGED: the location was deactivated, and nothing is written."""
+    return AppError(
+        ErrorCode.STATE_CHANGED,
+        "This location is no longer active",
+        details=[
+            {
+                "session_id": str(game.id),
+                "state": game.state,
+                "current_position": game.current_position,
+            }
+        ],
+    )
 
 
 def _moved_on(game: GameSession) -> AppError:

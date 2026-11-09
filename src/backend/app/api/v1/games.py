@@ -281,7 +281,9 @@ def navigation_ping(
     and a good ping moves it back to 3 minutes after the location became current.
     409 SESSION_NOT_ACTIVE for a paused game (resume first), a game that has ended, or one idle
     for the expiry limit (24 hours by default), which is expired. 409 INVALID_STAGE unless the
-    current location is in Stage 1. 429 RATE_LIMITED for a ping less than 2 s after the last one.
+    current location is in Stage 1. 409 STATE_CHANGED if that location was deactivated; nothing
+    is written, and the next GET /games/{id}/current-location skips it. 429 RATE_LIMITED for a
+    ping less than 2 s after the last one.
     404 NOT_FOUND for another student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED
     for a disabled account.
     """
@@ -299,8 +301,9 @@ def navigation_ping(
 class ArrivalRequest(BaseModel):
     # "gps_unavailable": "Continue without GPS", allowed from gps_override_available_at on
     override_reason: ArrivalOverride | None = None
-    # the position the app is confirming; a different current position gives 409 STATE_CHANGED
-    position: PositiveInt | None = None
+    # required: the position the app is confirming. A different current position is 409
+    # STATE_CHANGED
+    position: PositiveInt
 
 
 class ArrivalResponse(CurrentLocationResponse):
@@ -327,8 +330,9 @@ def navigation_confirm_arrival(
     No override: ping under 30 s and in the radius, else 409 STALE_POSITION or NOT_WITHIN_RADIUS
     (`details` reason `gps_weak` if accuracy is over 50 m). `gps_unavailable` works from
     `gps_override_available_at` (3 min, or 3 weak pings), else 409 GPS_OVERRIDE_NOT_ALLOWED.
-    Stage 2 repeats with no writes, even paused. 409 SESSION_NOT_ACTIVE if paused in Stage 1,
-    ended or expired; STATE_CHANGED for a stale `position`; INVALID_STAGE otherwise. A shuffle
+    `position` is required. Stage 2 repeats with no writes, even paused. 409
+    SESSION_NOT_ACTIVE if paused in Stage 1, ended or expired; STATE_CHANGED for a stale
+    `position` or a deactivated location; INVALID_STAGE if the row is not navigating. A shuffle
     keeps the position; the new row has no ping (409 STALE_POSITION). 404 for another student's
     game or no recording. 403 FORBIDDEN_ROLE or ACCOUNT_DISABLED.
     """

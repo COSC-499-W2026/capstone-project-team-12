@@ -5,15 +5,17 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game.navigation import Ping, PingOutcome, Trend, process_ping
 from app.models.accounts import User
-from app.models.enums import FeedbackCode, Language, LocationStatus, SessionState
+from app.models.enums import Difficulty, FeedbackCode, Language, LocationStatus, SessionState
 from app.models.game import GameSession
 from app.services.audio import UploadedAudioService
 
@@ -27,9 +29,14 @@ def north(metres: float, accuracy: float = 5) -> Ping:
 
 
 @pytest.fixture
-def playing(navigating_game: Callable[..., Any]) -> Callable[..., Any]:
-    """An active game navigating to its first location, which started a minute ago."""
-    return partial(navigating_game, NOW, "app.game.navigation")
+def playing(db: Session, navigating_game: Callable[..., Any]) -> Callable[..., Any]:
+    """An active game navigating to its first location, which started a minute ago.
+
+    The location is eligible, so it counts as active. Pass location_id for a deactivated one.
+    """
+    active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
+    assert active, "needs an active ja/basic location"
+    return partial(navigating_game, NOW, "app.game.navigation", location_id=active[0])
 
 
 def ping(game: GameSession, at: Ping, db: Session) -> PingOutcome:
@@ -146,6 +153,35 @@ def test_pings_are_rate_limited(
         ping(game, north(500), db)
     assert error.value.code == ErrorCode.RATE_LIMITED
     assert game.last_activity_at == NOW - timedelta(hours=1)
+
+
+def test_a_deactivated_location_is_409_and_changes_nothing(
+    db: Session, playing: Callable[..., Any]
+) -> None:
+    game, row = playing(location_id=uuid4())
+    before = (
+        row.status,
+        row.last_ping_at,
+        row.last_lat,
+        row.last_feedback_code,
+        list(row.flags),
+        game.last_activity_at,
+        game.state,
+    )
+
+    with pytest.raises(AppError) as error:
+        ping(game, north(10), db)
+
+    assert error.value.code == ErrorCode.STATE_CHANGED
+    assert (
+        row.status,
+        row.last_ping_at,
+        row.last_lat,
+        row.last_feedback_code,
+        list(row.flags),
+        game.last_activity_at,
+        game.state,
+    ) == before
 
 
 @pytest.mark.parametrize(

@@ -5,18 +5,30 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game.arrival import Arrival, confirm_arrival
 from app.game.current_location import Stage
 from app.game.navigation import Ping, process_ping
+from app.game.shuffle import shuffle_game
 from app.models.accounts import User
-from app.models.enums import ArrivalOverride, FeedbackCode, LocationStatus, SessionState
-from app.models.game import GameSession
+from app.models.enums import (
+    ArrivalOverride,
+    Difficulty,
+    FeedbackCode,
+    Language,
+    LocationStatus,
+    SessionState,
+    SkipReason,
+)
+from app.models.game import GameSession, SessionLocation
 
 NOW = datetime(2026, 10, 29, 20, 0, tzinfo=UTC)
 CLOCK = ("app.game.arrival", "app.game.navigation", "app.game.control", "app.game.status")
@@ -27,16 +39,25 @@ _Split = Callable[[str], tuple[str, int, str]]
 
 
 @pytest.fixture
-def playing(navigating_game: Callable[..., Any]) -> Callable[..., Any]:
-    """An active game at its first location, started a minute ago, pinged 5 s ago from 10 m."""
-    recent = {"last_ping_at": NOW - timedelta(seconds=5), "last_distance_m": 10}
+def playing(db: Session, navigating_game: Callable[..., Any]) -> Callable[..., Any]:
+    """An active game at its first location, started a minute ago, pinged 5 s ago from 10 m.
+
+    The location is eligible, so it counts as active. Pass location_id for a deactivated one.
+    """
+    active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
+    assert active, "needs an active ja/basic location"
+    recent = {
+        "last_ping_at": NOW - timedelta(seconds=5),
+        "last_distance_m": 10,
+        "location_id": active[0],
+    }
     return partial(navigating_game, NOW, "app.game.arrival", "app.game.navigation", **recent)
 
 
 def confirm(
-    game: GameSession, db: Session, override: ArrivalOverride | None = None, **kw: Any
+    game: GameSession, db: Session, override: ArrivalOverride | None = None, *, position: int = 1
 ) -> Arrival:
-    return confirm_arrival(game.student_id, game.id, override, kw.get("position"), db)
+    return confirm_arrival(game.student_id, game.id, override, position, db)
 
 
 def _part(split: _Split, url: str) -> str:
@@ -164,6 +185,108 @@ def test_weak_pings_allow_the_override_until_a_good_one(
     assert row.arrival_override == GPS
 
 
+def test_a_deactivated_location_is_409_and_changes_nothing(
+    db: Session, playing: Callable[..., Any]
+) -> None:
+    game, row = playing(location_id=uuid4())
+
+    assert refused(game, db) == ErrorCode.STATE_CHANGED
+    assert (row.status, row.arrived_at, game.last_activity_at) == (
+        LocationStatus.NAVIGATING,
+        None,
+        NOW - timedelta(hours=1),
+    )
+
+
+def _stored(game: GameSession, row: Any) -> tuple[object, ...]:
+    return (
+        game.state,
+        game.current_position,
+        game.last_activity_at,
+        game.end_reason,
+        game.paused_at,
+        game.completed_at,
+        game.shuffles_used,
+        game.total_score,
+        row.status,
+        row.position,
+        row.skip_reason,
+        row.arrived_at,
+        row.arrival_override,
+        row.points_awarded,
+        row.completed_at,
+        row.attempts_used,
+        row.last_ping_at,
+        row.weak_pings_in_row,
+        tuple(row.flags),
+    )
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"status": LocationStatus.COMPLETED, "completed_at": NOW, "points_awarded": 100},
+        {"status": LocationStatus.SKIPPED, "skip_reason": SkipReason.DEACTIVATED},
+    ],
+)
+def test_a_finished_deactivated_row_is_invalid_stage(
+    db: Session, playing: Callable[..., Any], fields: dict[str, Any]
+) -> None:
+    game, row = playing(location_id=uuid4(), **fields)
+    before = _stored(game, row)
+
+    assert refused(game, db) == ErrorCode.INVALID_STAGE
+    assert _stored(game, row) == before
+
+
+def test_a_verifying_deactivated_row_repeats_without_writes(
+    db: Session, playing: Callable[..., Any], split_media_url: _Split
+) -> None:
+    arrived = NOW - timedelta(minutes=1)
+    game, row = playing(location_id=uuid4(), status=LocationStatus.VERIFYING, arrived_at=arrived)
+    before = _stored(game, row)
+
+    first = confirm(game, db)
+    assert first.location.stage == Stage.VERIFICATION
+    assert _stored(game, row) == before
+
+    second = confirm(game, db)
+    _same_arrival(first, second, split_media_url)
+    assert _stored(game, row) == before
+
+
+def test_a_confirm_after_a_shuffle_needs_a_ping_on_the_new_location(
+    db: Session, playing: Callable[..., Any], freeze_clock: Callable[..., None]
+) -> None:
+    # the old row has a recent ping in the radius, but a shuffle replaced it at the same position
+    game, old = playing()
+    freeze_clock(NOW, *CLOCK, "app.game.shuffle")
+    shuffle_game(game.student_id, game.id, game.shuffles_used, db)
+    new = db.scalars(
+        select(SessionLocation).where(
+            SessionLocation.session_id == game.id,
+            SessionLocation.position == 1,
+            SessionLocation.status == LocationStatus.NAVIGATING,
+        )
+    ).one()
+    before = _stored(game, new)
+
+    assert refused(game, db) == ErrorCode.STALE_POSITION
+    assert _stored(game, new) == before
+    assert (old.status, old.skip_reason, old.arrived_at) == (
+        LocationStatus.SKIPPED,
+        SkipReason.SHUFFLED,
+        None,
+    )
+
+
+def test_a_pending_row_is_invalid_stage(db: Session, playing: Callable[..., Any]) -> None:
+    game, row = playing(status=LocationStatus.PENDING)
+
+    assert refused(game, db) == ErrorCode.INVALID_STAGE
+    assert (row.status, row.arrived_at) == (LocationStatus.PENDING, None)
+
+
 def test_a_repeat_gives_the_same_answer_and_changes_nothing(
     db: Session,
     playing: Callable[..., Any],
@@ -187,12 +310,12 @@ def test_a_repeat_gives_the_same_answer_and_changes_nothing(
         ({}, 2, ErrorCode.STATE_CHANGED),
         (
             {"game": {"state": SessionState.PAUSED, "paused_at": NOW}},
-            None,
+            1,
             ErrorCode.SESSION_NOT_ACTIVE,
         ),
         (
             {"status": LocationStatus.COMPLETED, "completed_at": NOW, "points_awarded": 100},
-            None,
+            1,
             ErrorCode.INVALID_STAGE,
         ),
     ],
@@ -201,7 +324,7 @@ def test_refused_without_changes(
     db: Session,
     playing: Callable[..., Any],
     fields: dict[str, Any],
-    position: int | None,
+    position: int,
     code: ErrorCode,
 ) -> None:
     game, row = playing(**fields)
@@ -284,12 +407,16 @@ def test_the_route(
     url = f"/api/v1/games/{game.id}/navigation/confirm-arrival"
     headers = auth_headers(student)
     assert_error(
-        client.post(url, json={"override_reason": "gps_unavailable"}, headers=headers),
+        client.post(
+            url, json={"override_reason": "gps_unavailable", "position": 1}, headers=headers
+        ),
         409,
         ErrorCode.GPS_OVERRIDE_NOT_ALLOWED,
     )
-    bad = client.post(url, json={"override_reason": "lost"}, headers=headers)
+    bad = client.post(url, json={"override_reason": "lost", "position": 1}, headers=headers)
     assert bad.status_code == 422
+    missing = client.post(url, json={}, headers=headers)
+    assert_error(missing, 422, ErrorCode.VALIDATION_ERROR)
     transaction_calls.clear()
 
     response = client.post(url, json={"position": 1}, headers=headers)
@@ -303,9 +430,13 @@ def test_the_route(
     )
     assert [item["code"] for item in body["feedback"]] == ["VERIFY_START"]
     assert transaction_calls.count("commit") == 1
-    _same_route(client.post(url, json={}, headers=headers).json(), body, split_media_url)
+    _same_route(
+        client.post(url, json={"position": 1}, headers=headers).json(), body, split_media_url
+    )
     other = auth_headers(make_user())
-    assert_error(client.post(url, json={}, headers=other), 404, ErrorCode.NOT_FOUND)
+    assert_error(client.post(url, json={"position": 1}, headers=other), 404, ErrorCode.NOT_FOUND)
     admin = auth_headers(make_user(role="admin"))
-    assert_error(client.post(url, json={}, headers=admin), 403, ErrorCode.FORBIDDEN_ROLE)
-    assert_error(client.post(url, json={}), 401, ErrorCode.NOT_AUTHENTICATED)
+    assert_error(
+        client.post(url, json={"position": 1}, headers=admin), 403, ErrorCode.FORBIDDEN_ROLE
+    )
+    assert_error(client.post(url, json={"position": 1}), 401, ErrorCode.NOT_AUTHENTICATED)
