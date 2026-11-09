@@ -26,7 +26,7 @@ __all__ = [
     "require_staff",
 ]
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 KEY = get_settings().access_token_secret_key
 
 

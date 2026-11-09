@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://hunt:hunt@localhost:5432/hunt"
     secret_key: str = "change-me"
     access_token_secret_key: str = "change-me"
+    # unset: the refresh cookie is secure everywhere but development. Set false only for a
+    # staging or test server served over plain http, where a secure cookie is never sent back
+    cookie_secure: bool | None = None
     smtp_host: str = "localhost"
     smtp_port: int = 1025
     # Mailpit needs neither; a real provider needs STARTTLS and a login
@@ -63,6 +66,12 @@ class Settings(BaseSettings):
     speed_anomaly_mps: PositiveInt = 10  # faster than this between pings is flagged
     # "today" for day-based rules, e.g. carry-over
     app_timezone: str = "America/Vancouver"
+
+    @property
+    def refresh_cookie_secure(self) -> bool:
+        if self.cookie_secure is not None:
+            return self.cookie_secure
+        return self.app_env != "development"
 
     @field_validator("app_timezone")
     @classmethod
