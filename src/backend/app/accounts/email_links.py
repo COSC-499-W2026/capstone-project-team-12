@@ -60,9 +60,8 @@ def reset_password(token: str, new_password: str, db: Session) -> None:
             raise AppError(ErrorCode.INVALID_TOKEN, INVALID_LINK)
     user.password_hash = password_hash
     # a reset mail still waiting would send another link and keep the one-pending slot taken.
-    # SKIP LOCKED: the send job locks the row before the user, so waiting here could deadlock;
-    # a row it is sending right now just goes out. That is a security gap: it carries a link
-    # that works for 60 minutes after this reset (#199, fixed in the send job).
+    # SKIP LOCKED: the send job locks the row before the user, so waiting here could deadlock.
+    # The job checks a row it holds itself and doesn't send it (email_sender, #199).
     waiting = select(EmailOutbox.id).where(
         EmailOutbox.user_id == user.id,
         EmailOutbox.template == EmailKind.RESET_PASSWORD,
