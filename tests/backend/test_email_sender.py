@@ -367,10 +367,27 @@ def committed_user(test_engine: Engine) -> Iterator[User]:
 
 @pytest.fixture
 def send_job_holding_the_mail(
-    test_engine: Engine, monkeypatch: pytest.MonkeyPatch
-) -> Callable[[], tuple[Step, threading.Event, threading.Event, FakeMailer]]:
-    """Starts the send job in a thread; it locks the due mail, signals `holding`, then waits
-    for `go_on` before it locks the user and makes the link."""
+    test_engine: Engine, committed_user: User, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Callable[[], tuple[Step, threading.Event, threading.Event, FakeMailer]]]:
+    """Starts the send job in a thread; it locks the user's due mail, signals `holding`, then
+    waits for `go_on` before it locks the user and makes the link. The job only sees this
+    user's mail, so it can't pick up (and commit as sent) another due row in the database.
+    Teardown releases the job and waits for it, even when the test failed half way."""
+    started: list[tuple[Step, threading.Event]] = []
+
+    def lock_this_users_mail(db: Session) -> EmailOutbox | None:
+        return db.scalars(
+            select(EmailOutbox)
+            .where(
+                EmailOutbox.user_id == committed_user.id,
+                EmailOutbox.status == EmailStatus.PENDING,
+            )
+            .limit(1)
+            .with_for_update(skip_locked=True),
+            execution_options={"populate_existing": True},
+        ).one_or_none()
+
+    monkeypatch.setattr(email_sender, "_lock_next_due", lock_this_users_mail)
 
     def start() -> tuple[Step, threading.Event, threading.Event, FakeMailer]:
         holding, go_on, mailer = threading.Event(), threading.Event(), FakeMailer()
@@ -388,9 +405,14 @@ def send_job_holding_the_mail(
                 session.execute(text("SET lock_timeout = '10s'"))
                 send_due_emails(mailer, session, limit=1)
 
-        return Step(job), holding, go_on, mailer
+        step = Step(job)
+        started.append((step, go_on))
+        return step, holding, go_on, mailer
 
-    return start
+    yield start
+    for step, go_on in started:
+        go_on.set()
+        step.thread.join(timeout=WAIT_S)
 
 
 def outcome(test_engine: Engine, user: User) -> tuple[list[str], int]:
@@ -448,13 +470,15 @@ def test_a_reset_that_began_before_the_mail_was_queued_still_stops_it(
             session.commit()
 
     resetting = Step(reset)
-    wait(hashing)  # the reset's transaction has begun
-    with Session(test_engine) as request:
-        request_password_reset(committed_user.email, request)
-        request.commit()
-    sending, holding, go_on, mailer = send_job_holding_the_mail()
-    wait(holding)
-    hash_now.set()
+    try:
+        wait(hashing)  # the reset's transaction has begun
+        with Session(test_engine) as request:
+            request_password_reset(committed_user.email, request)
+            request.commit()
+        sending, holding, go_on, mailer = send_job_holding_the_mail()
+        wait(holding)
+    finally:
+        hash_now.set()  # never leave the reset waiting
     resetting.finish()
     go_on.set()
     sending.finish()
