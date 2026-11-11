@@ -91,29 +91,6 @@ def test_each_ping_is_printed_after_waiting_its_time() -> None:
     assert {kwargs["token"] for _, _, kwargs in send.calls} == {"token"}
 
 
-def test_a_slow_answer_comes_out_of_the_next_wait() -> None:
-    send = playing((200, ping_answer("NAV_START")), (200, ping_answer("NAV_START", speak=False)))
-    clock = {"t": 0.0}
-
-    def slow(method: str, path: str, **kwargs: Any) -> tuple[int, Any]:
-        if path.endswith("/ping"):
-            clock["t"] += 1  # this answer took a second of the recorded gap
-        return FakeSend.__call__(send, method, path, **kwargs)
-
-    waits: list[float] = []
-
-    def sleep(seconds: float) -> None:
-        waits.append(seconds)
-        clock["t"] += seconds
-
-    steps = [Step(0, 49.94, -119.39, 5), Step(5, 49.9399, -119.39, 5)]
-    code = replay(
-        steps, Api(slow, "token"), GAME, sleep=sleep, now=lambda: clock["t"], out=lambda _: None
-    )
-
-    assert (code, waits) == (0, [0, 4])
-
-
 def test_a_bad_ping_body_stops_the_replay() -> None:
     send = playing((200, {"speak": True}), (200, ping_answer("NAV_START")))
 
@@ -430,22 +407,6 @@ def test_a_server_that_doesnt_answer(server: str, url: str | None, path: str) ->
     assert (failure.value.status, failure.value.code) == (0, "CONNECTION_FAILED")
 
 
-def test_main_reads_a_route_saved_with_an_excel_bom(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = tmp_path / "route.csv"
-    path.write_bytes(b"\xef\xbb\xbf" + b"t_s,lat,lng,accuracy_m\n0,49.94,-119.39,5\n")
-    monkeypatch.setenv("GPS_REPLAY_PASSWORD", "secret")
-    monkeypatch.setattr(gps_replay.time, "sleep", lambda _seconds: None)
-    send = playing((200, ping_answer("NAV_START")))
-    send.answers["POST /api/v1/auth/login"] = [(200, {"access_token": "abc"})]
-
-    code = gps_replay.main([str(path), "--email", "s@x.com", "--game", GAME], send=send)
-
-    assert code == 0
-    assert send.paths()[-1].endswith("/navigation/ping")
-
-
 def test_a_cut_off_error_page_is_returned(server: str) -> None:
     send = gps_replay.http_sender(server, timeout_s=2)
 
@@ -453,6 +414,85 @@ def test_a_cut_off_error_page_is_returned(server: str) -> None:
 
     assert status == 502
     assert isinstance(body, str)
+
+
+def test_a_slow_answer_comes_out_of_the_next_wait() -> None:
+    send = playing((200, ping_answer("NAV_START")), (200, ping_answer("NAV_START", speak=False)))
+    clock = {"t": 0.0}
+
+    def slow(method: str, path: str, **kwargs: Any) -> tuple[int, Any]:
+        if path.endswith("/ping"):
+            clock["t"] += 1  # this answer took a second of the recorded gap
+        return FakeSend.__call__(send, method, path, **kwargs)
+
+    waits: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        clock["t"] += seconds
+
+    steps = [Step(0, 49.94, -119.39, 5), Step(5, 49.9399, -119.39, 5)]
+    code = replay(
+        steps,
+        Api(slow, "token"),
+        GAME,
+        sleep=sleep,
+        now=lambda: clock["t"],
+        out=lambda _: None,
+    )
+    assert (code, waits) == (0, [0, 4])
+
+
+def test_main_confirms_arrival_when_asked(
+    route_file: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GPS_REPLAY_PASSWORD", "secret")
+    monkeypatch.setattr(gps_replay.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(gps_replay.time, "monotonic", lambda: 0.0)
+    send = playing((200, ping_answer("NAV_ARRIVED", can_confirm=True)))
+    send.answers["POST /api/v1/auth/login"] = [(200, {"access_token": "abc"})]
+
+    code = gps_replay.main(
+        [str(route_file), "--email", "s@x.com", "--game", GAME, "--confirm"], send=send
+    )
+
+    assert code == 0
+    assert send.paths()[-1].endswith("/navigation/confirm-arrival")
+    assert "arrival confirmed" in capsys.readouterr().out
+
+
+def test_main_asks_for_the_password_when_it_is_unset(
+    route_file: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GPS_REPLAY_PASSWORD", raising=False)
+    monkeypatch.setattr(gps_replay.getpass, "getpass", lambda _prompt: "typed")
+    monkeypatch.setattr(gps_replay.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(gps_replay.time, "monotonic", lambda: 0.0)
+    send = playing((200, ping_answer("NAV_START")), (200, ping_answer("NAV_START", speak=False)))
+    send.answers["POST /api/v1/auth/login"] = [(200, {"access_token": "abc"})]
+    send.answers["GET /api/v1/games/current"] = [(200, {"session_id": GAME})]
+
+    code = gps_replay.main([str(route_file), "--email", "s@x.com"], send=send)
+
+    assert code == 0
+    assert send.calls[0][2]["form"]["password"] == "typed"
+
+
+def test_main_reads_a_route_saved_with_an_excel_bom(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "route.csv"
+    path.write_bytes(b"\xef\xbb\xbf" + b"t_s,lat,lng,accuracy_m\n0,49.94,-119.39,5\n")
+    monkeypatch.setenv("GPS_REPLAY_PASSWORD", "secret")
+    monkeypatch.setattr(gps_replay.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(gps_replay.time, "monotonic", lambda: 0.0)
+    send = playing((200, ping_answer("NAV_START")))
+    send.answers["POST /api/v1/auth/login"] = [(200, {"access_token": "abc"})]
+
+    code = gps_replay.main([str(path), "--email", "s@x.com", "--game", GAME], send=send)
+
+    assert code == 0
+    assert send.paths()[-1].endswith("/navigation/ping")
 
 
 def test_main_exits_when_the_login_body_is_not_the_token(

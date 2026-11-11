@@ -466,8 +466,12 @@ def navigating_game(
 
 
 # the modules whose clock the GPS replay moves, besides the two navigating_game freezes
-_REPLAY_CLOCKS = ("app.game.navigation", "app.game.arrival", "app.game.current_location")
-_REPLAY_CLOCKS += ("app.game.sessions",)
+_REPLAY_CLOCKS = (
+    "app.game.navigation",
+    "app.game.arrival",
+    "app.game.current_location",
+    "app.game.sessions",
+)
 
 
 @pytest.fixture
@@ -485,7 +489,11 @@ def replay_route(
     """
 
     def run(
-        steps: list[Step], *, now: datetime, **kwargs: Any
+        steps: list[Step],
+        *,
+        now: datetime,
+        after_ping: Callable[[TestClient, str, str], None] | None = None,
+        **kwargs: Any,
     ) -> tuple[int, list[str], SessionLocation]:
         active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
         assert active, "needs an active ja/basic location"
@@ -501,6 +509,9 @@ def replay_route(
             headers = {"Authorization": f"Bearer {token}"} if token else {}
             json_body, form = body.get("json_body"), body.get("form")
             response = client.request(method, path, json=json_body, data=form, headers=headers)
+            if after_ping is not None and path.endswith("/navigation/ping"):
+                game_id = path.split("/")[4]
+                after_ping(client, token or "", game_id)
             return response.status_code, response.json()
 
         def sleep(seconds: float) -> None:

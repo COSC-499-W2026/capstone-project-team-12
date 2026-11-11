@@ -1,13 +1,16 @@
 """utils/gps_replay.py (#46) against the real routes, with the clock moved by the replay."""
 
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import pytest
-from gps_replay import Api, Step, read_route
+from fastapi.testclient import TestClient
+from gps_replay import Step, read_route
 
 from app.models.enums import LocationStatus
+
+_CODE = re.compile(r"\b(?:NAV|VERIFY)_[A-Z_]+")
 
 NOW = datetime(2026, 10, 29, 20, 0, tzinfo=UTC)
 LAT, LNG = 49.9394, -119.3948  # the entrance make_session_location uses, radius 30 m
@@ -24,8 +27,14 @@ def walk(*metres_north: float, every_s: float = 5, accuracy_m: float = 5) -> lis
 
 
 def spoken(lines: list[str]) -> list[str]:
-    """The codes spoken, from the ping lines ("t=  25s  acc    5 m  NAV_... spoken ...")."""
-    return [line.split()[5] for line in lines if line.startswith("t=") and " spoken " in line]
+    """The codes spoken on ping lines, matched so a change in spacing does not move the index."""
+    found: list[str] = []
+    for line in lines:
+        if line.startswith("t=") and " spoken " in line:
+            match = _CODE.search(line)
+            assert match is not None
+            found.append(match.group(0))
+    return found
 
 
 def test_walking_in_at_1_4_m_s_and_confirming(replay_route: Callable[..., Any]) -> None:
@@ -73,23 +82,20 @@ def test_a_weak_signal_is_spoken_every_25_s(replay_route: Callable[..., Any]) ->
     assert row.weak_pings_in_row == 3
 
 
-def test_the_replay_stops_when_the_game_is_paused(
-    replay_route: Callable[..., Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_the_replay_stops_when_the_game_is_paused(replay_route: Callable[..., Any]) -> None:
     route = walk(200, 193)
-    paused = {"done": False}
-    original = Api.ping
+    done = {"paused": False}
 
-    def ping_then_pause(api: Api, game_id: str, step: Step) -> Any:
-        answer = original(api, game_id, step)
-        if not paused["done"]:
-            paused["done"] = True
-            api._call("POST", f"/games/{game_id}/pause")
-        return answer
+    def pause_after_ping(http: TestClient, token: str, game_id: str) -> None:
+        if done["paused"]:
+            return
+        done["paused"] = True
+        response = http.post(
+            f"/api/v1/games/{game_id}/pause", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 200
 
-    monkeypatch.setattr(Api, "ping", ping_then_pause)
-
-    code, lines, row = replay_route(route, now=NOW)
+    code, lines, row = replay_route(route, now=NOW, after_ping=pause_after_ping)
 
     assert code == 1
     assert lines[-1].startswith("t=    5s  409 SESSION_NOT_ACTIVE")
