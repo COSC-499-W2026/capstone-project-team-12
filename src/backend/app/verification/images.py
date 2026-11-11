@@ -13,14 +13,20 @@ Rules from the spec (Game Flow > Stage 2: Verification, steps 2 to 5, and File H
 Choices the spec leaves open (proposed, to be confirmed by the team): "camera EXIF" is a `Make`,
 `Model` or `DateTimeOriginal` tag, which phone cameras write and in-app camera frames never carry;
 a file that starts like a JPEG or PNG but does not decode, and a photo of more than
-`MAX_PHOTO_PIXELS`, are 415 UNSUPPORTED_MEDIA_TYPE like any other file that is not a photo. The
-pixel limit is checked from the file's header, before anything is decoded, so a small file that
-declares a huge image cannot fill the server's memory. Every photo is stored as a JPEG, PNG
-uploads included, and keeps nothing from the upload but its pixels: no EXIF, colour profile or
-comment (Pillow would otherwise copy a JPEG comment into the new file).
+`max_photo_megapixels`, are 415 UNSUPPORTED_MEDIA_TYPE like any other file that is not a photo.
+The pixel limit is checked from the file's header, before anything is decoded. EXIF that cannot
+be read counts as no EXIF: it is only used for the orientation and a teacher's flag, so it never
+stops a photo. Every photo is stored as a JPEG, PNG uploads included, and keeps nothing from the
+upload but its pixels: no EXIF, colour profile or comment (Pillow would otherwise copy a JPEG
+comment into the new file). Transparent parts are put on white, and a 16-bit PNG is scaled to 8
+bits, so neither turns into a blank image that costs the student an attempt.
+
+Memory: a JPEG is decoded at the smallest scale that still leaves the long edge to shrink, and
+the photo is shrunk before any full-size copy is made. A PNG cannot be decoded at a smaller scale.
 """
 
 import io
+import math
 from dataclasses import dataclass
 from typing import IO
 
@@ -31,14 +37,21 @@ from app.errors import AppError, ErrorCode
 from app.services.uploads import BYTES_PER_MB, read_upload
 
 MAX_LONG_EDGE_PX = 1600  # spec, Stage 2 step 3; the client sends photos this size already
-# a 50-megapixel phone photo (8160 x 6120) fits; Pillow itself only refuses images from 89 MP
-MAX_PHOTO_PIXELS = 50_000_000
 JPEG_QUALITY = 90  # the stored photo is kept 90 days for the OCR evaluation, so keep detail
+PIXELS_PER_MEGAPIXEL = 1_000_000
 
-_TOO_MANY_PIXELS = f"Photos can have at most {MAX_PHOTO_PIXELS // 1_000_000} megapixels"
 _FORMATS = ("JPEG", "PNG")  # Pillow's readers, so no other format is ever decoded
 _SIGNATURES = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n")
+# What Pillow raises for a file it cannot decode: OSError for one it cannot read or that ends
+# early, SyntaxError for some broken PNG chunks, ValueError for a PNG text chunk or colour profile
+# that unpacks past its limit, DecompressionBombError from 179 MP (before our own limit is read)
+_DECODE_ERRORS = (OSError, SyntaxError, ValueError, Image.DecompressionBombError)
+# and for EXIF it cannot read: SyntaxError for a damaged header, ValueError for some damaged values
+# (an offset before the start, a PNG's hex EXIF profile that is not hex)
+_EXIF_ERRORS = (SyntaxError, ValueError)
 _CAMERA_TAGS = (ExifTags.Base.Make, ExifTags.Base.Model)
+# Modes Pillow shrinks by nearest pixel only, which blurs text badly; they are converted first
+_NEAREST_ONLY = ("P", "1")
 # The turn or flip that makes a photo upright, by its EXIF orientation. ImageOps.exif_transpose
 # does the same but also rewrites the rest of the EXIF, which fails on a damaged tag; the EXIF is
 # dropped here anyway.
@@ -75,12 +88,12 @@ def read_photo(upload: IO[bytes]) -> bytes:
 
 def prepare_photo(data: bytes) -> PreparedPhoto:
     """The photo in `data` (from read_photo) re-encoded and enhanced, or AppError 415
-    UNSUPPORTED_MEDIA_TYPE if it does not decode or has more than MAX_PHOTO_PIXELS."""
+    UNSUPPORTED_MEDIA_TYPE if it does not decode or has more than `max_photo_megapixels`."""
     image = _decode(data)
-    exif = image.getexif()
-    photo = image.convert("RGB")
+    exif = _read_exif(image)
+    photo = _resizable(image)
     photo.thumbnail((MAX_LONG_EDGE_PX, MAX_LONG_EDGE_PX))  # a square box: before turning is fine
-    photo = _upright(photo, exif.get(ExifTags.Base.Orientation, 1))
+    photo = _upright(_on_white(photo), exif.get(ExifTags.Base.Orientation, 1))
     photo.info.clear()  # what the upload's metadata left; saving would write a JPEG comment
     output = io.BytesIO()
     photo.save(output, "JPEG", quality=JPEG_QUALITY)
@@ -93,18 +106,52 @@ def _unsupported(message: str = "Upload a JPEG or PNG photo") -> AppError:
 
 
 def _decode(data: bytes) -> Image.Image:
-    # Pillow raises OSError for a file it cannot read or that ends early, SyntaxError for some
-    # broken PNG chunks, and DecompressionBombError from 179 MP, before MAX_PHOTO_PIXELS is checked
     try:
         image = Image.open(io.BytesIO(data), formats=_FORMATS)
-        if image.width * image.height > MAX_PHOTO_PIXELS:
-            raise _unsupported(_TOO_MANY_PIXELS)
-        # a JPEG is decoded at a smaller scale when that still leaves the long edge to shrink to
-        image.draft("RGB", (MAX_LONG_EDGE_PX, MAX_LONG_EDGE_PX))
+        _check_pixels(image)
+        image.draft("RGB", _fitted_size(image.width, image.height))  # JPEG only
         image.load()
-    except (OSError, SyntaxError, Image.DecompressionBombError) as error:
+    except _DECODE_ERRORS as error:
         raise _unsupported() from error
     return image
+
+
+def _check_pixels(image: Image.Image) -> None:
+    limit = get_settings().max_photo_megapixels
+    if image.width * image.height > limit * PIXELS_PER_MEGAPIXEL:
+        raise _unsupported(f"Photos can have at most {limit} megapixels")
+
+
+def _fitted_size(width: int, height: int) -> tuple[int, int]:
+    """`width` x `height` shrunk to fit MAX_LONG_EDGE_PX, never enlarged; rounded up, so a JPEG
+    decoded at a smaller scale is never smaller than the photo it is shrunk to."""
+    scale = min(1, MAX_LONG_EDGE_PX / max(width, height))
+    return math.ceil(width * scale), math.ceil(height * scale)
+
+
+def _read_exif(image: Image.Image) -> Image.Exif:
+    try:
+        return image.getexif()  # after decoding: a PNG may keep its EXIF after the image data
+    except _EXIF_ERRORS:
+        return Image.Exif()
+
+
+def _resizable(image: Image.Image) -> Image.Image:
+    """`image` with 8 bits per channel, in a mode Pillow shrinks smoothly."""
+    if image.mode.startswith("I"):  # a 16-bit grayscale PNG: converting would clip it to white
+        return image.point(lambda value: value / 256, "L")
+    if image.mode in _NEAREST_ONLY:
+        return image.convert("RGBA" if image.has_transparency_data else "RGB")
+    return image
+
+
+def _on_white(photo: Image.Image) -> Image.Image:
+    """`photo` in RGB, with transparent parts on white (converting alone would show the colour
+    stored under them, often black)."""
+    if not photo.has_transparency_data:
+        return photo.convert("RGB")
+    white = Image.new("RGBA", photo.size, "white")
+    return Image.alpha_composite(white, photo.convert("RGBA")).convert("RGB")
 
 
 def _upright(photo: Image.Image, orientation: int) -> Image.Image:
@@ -113,5 +160,9 @@ def _upright(photo: Image.Image, orientation: int) -> Image.Image:
 
 
 def _has_camera_exif(exif: Image.Exif) -> bool:
-    taken_at = ExifTags.Base.DateTimeOriginal in exif.get_ifd(ExifTags.IFD.Exif)
-    return taken_at or any(tag in exif for tag in _CAMERA_TAGS)
+    if any(tag in exif for tag in _CAMERA_TAGS):
+        return True
+    try:
+        return ExifTags.Base.DateTimeOriginal in exif.get_ifd(ExifTags.IFD.Exif)
+    except _EXIF_ERRORS:
+        return False
