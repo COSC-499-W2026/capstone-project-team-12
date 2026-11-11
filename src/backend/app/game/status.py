@@ -73,11 +73,17 @@ def get_game(student_id: UUID, game_id: UUID, db: Session) -> GameStatus:
     Raises 404 NOT_FOUND for another student's game too, so ids can't be tried out, and that
     game is left as it is. The expiry is written with an UPDATE; doesn't commit.
     """
-    game = db.get(GameSession, game_id)
+    return status_of(load_game(student_id, game_id, db), db)
+
+
+def load_game(student_id: UUID, game_id: UUID, db: Session) -> GameSession:
+    """The student's game read fresh, after expiring it if it has been idle (see get_game)."""
+    # populate_existing: an action earlier in this transaction (a quit) may have just changed it
+    game = db.get(GameSession, game_id, populate_existing=True)
     if game is None or game.student_id != student_id:
         raise AppError(ErrorCode.NOT_FOUND, "Game not found")
     expire_if_idle(game, db)
-    return status_of(game, db)
+    return game
 
 
 def expire_if_idle(game: GameSession, db: Session) -> None:
