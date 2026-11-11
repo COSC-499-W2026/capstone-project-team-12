@@ -56,6 +56,8 @@ def test_a_route_is_read_in_order() -> None:
         (route("0,49.94,-119.39,-1"), "out of range"),
         (route("-1,49.94,-119.39,5"), "t_s"),
         (route("0,49.94,-119.39,5", "1.9,49.94,-119.39,5"), "line 3: t_s"),
+        (route("0,49.94,-119.39,5,1"), "line 2: unexpected extra columns"),
+        ([HEADER, "", "0,49.94,-119.39,5", "1,49.94,-119.39,5"], "line 4: t_s"),
     ],
 )
 def test_a_route_that_cant_be_replayed(lines: list[str], problem: str) -> None:
@@ -298,3 +300,19 @@ def test_a_server_that_doesnt_answer(server: str, url: str | None, path: str) ->
     with pytest.raises(ApiError) as failure:
         send("POST", path, json_body={})
     assert (failure.value.status, failure.value.code) == (0, "CONNECTION_FAILED")
+
+
+def test_main_reads_a_route_saved_with_an_excel_bom(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "route.csv"
+    path.write_bytes(b"\xef\xbb\xbf" + b"t_s,lat,lng,accuracy_m\n0,49.94,-119.39,5\n")
+    monkeypatch.setenv("GPS_REPLAY_PASSWORD", "secret")
+    monkeypatch.setattr(gps_replay.time, "sleep", lambda _seconds: None)
+    send = playing((200, ping_answer("NAV_START")))
+    send.answers["POST /api/v1/auth/login"] = [(200, {"access_token": "abc"})]
+
+    code = gps_replay.main([str(path), "--email", "s@x.com", "--game", GAME], send=send)
+
+    assert code == 0
+    assert send.paths()[-1].endswith("/navigation/ping")
