@@ -146,7 +146,7 @@ GPS_REPLAY_PASSWORD=... python utils/gps_replay.py route.csv --email student@exa
 python utils/gps_replay.py route.csv --email student@example.com --game <game id> --confirm
 ```
 
-Without `--game` it uses the student's open game. `--confirm` confirms arrival on the first ping that allows it. `--base-url` defaults to http://localhost:8000. The password comes from `GPS_REPLAY_PASSWORD`, or the script asks for it. It stops when the game changes (paused, ended, another location), the login stops working or the server can't be reached; a refused ping such as 429 is shown and skipped. Exit codes: 0 played (or arrived), 1 stopped, 2 bad route file.
+Without `--game` it uses the student's open game. `--confirm` confirms arrival on the first ping that allows it. `--base-url` defaults to http://localhost:8000. The password comes from `GPS_REPLAY_PASSWORD`, or the script asks for it. It stops when the game changes (paused, ended, another location), the login stops working, the server can't be reached, or an answer is unusable; a refused ping such as 429 is shown and skipped. Exit codes: 0 played (or arrived), 1 stopped, 2 bad route file.
 
 ## Team Contract
 
