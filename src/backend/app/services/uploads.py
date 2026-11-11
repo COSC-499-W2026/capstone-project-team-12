@@ -1,4 +1,8 @@
-"""Reading uploaded files (A20) with a size limit each caller sets."""
+"""Reading uploaded files with a size limit each caller sets.
+
+Shared because more than one component takes uploads: content (clue and feedback audio, the
+locations CSV) and verification (photos). A component may not import another's modules, so the
+helper cannot live in either of them."""
 
 from typing import IO
 
