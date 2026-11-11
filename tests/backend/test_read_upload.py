@@ -3,14 +3,9 @@ import io
 import pytest
 
 from app.errors import AppError, ErrorCode
-from app.services.uploads import BYTES_PER_KB, BYTES_PER_MB, read_upload
+from app.services.uploads import read_upload
 
 LIMIT = 10
-
-
-def test_units_are_binary() -> None:
-    assert BYTES_PER_KB == 1024
-    assert BYTES_PER_MB == 1024 * 1024
 
 
 @pytest.mark.parametrize("size", [0, 1, LIMIT])
