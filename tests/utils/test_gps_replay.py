@@ -72,8 +72,15 @@ def test_each_ping_is_printed_after_waiting_its_time() -> None:
         (200, ping_answer("NAV_GPS_WEAK")),
     )
     waits: list[float] = []
+    clock = {"t": 0.0}
 
-    code = replay(STEPS, Api(send, "token"), GAME, sleep=waits.append, out=lambda _: None)
+    def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        clock["t"] += seconds
+
+    code = replay(
+        STEPS, Api(send, "token"), GAME, sleep=sleep, now=lambda: clock["t"], out=lambda _: None
+    )
 
     assert (code, waits) == (0, [0, 5, 25])
     assert [kwargs["json_body"] for _, _, kwargs in send.calls[1:]] == [
@@ -82,6 +89,76 @@ def test_each_ping_is_printed_after_waiting_its_time() -> None:
         {"lat": 49.9395, "lng": -119.39, "accuracy_m": 60},
     ]
     assert {kwargs["token"] for _, _, kwargs in send.calls} == {"token"}
+
+
+def test_a_slow_answer_comes_out_of_the_next_wait() -> None:
+    send = playing((200, ping_answer("NAV_START")), (200, ping_answer("NAV_START", speak=False)))
+    clock = {"t": 0.0}
+
+    def slow(method: str, path: str, **kwargs: Any) -> tuple[int, Any]:
+        if path.endswith("/ping"):
+            clock["t"] += 1  # this answer took a second of the recorded gap
+        return FakeSend.__call__(send, method, path, **kwargs)
+
+    waits: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        clock["t"] += seconds
+
+    steps = [Step(0, 49.94, -119.39, 5), Step(5, 49.9399, -119.39, 5)]
+    code = replay(
+        steps, Api(slow, "token"), GAME, sleep=sleep, now=lambda: clock["t"], out=lambda _: None
+    )
+
+    assert (code, waits) == (0, [0, 4])
+
+
+def test_catching_up_after_a_slow_answer_keeps_the_rate_limit() -> None:
+    send = playing((200, ping_answer("NAV_START")), (200, ping_answer("NAV_START", speak=False)))
+    clock = {"t": 0.0}
+
+    def slow(method: str, path: str, **kwargs: Any) -> tuple[int, Any]:
+        if path.endswith("/ping"):
+            clock["t"] += 4  # four of the five seconds were spent waiting for this answer
+        return FakeSend.__call__(send, method, path, **kwargs)
+
+    waits: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        clock["t"] += seconds
+
+    steps = [Step(0, 49.94, -119.39, 5), Step(5, 49.9399, -119.39, 5)]
+    code = replay(
+        steps, Api(slow, "token"), GAME, sleep=sleep, now=lambda: clock["t"], out=lambda _: None
+    )
+
+    assert (code, waits) == (0, [0, 1])  # the next ping still goes out at the recorded 5 s
+
+
+def test_a_one_second_answer_keeps_a_two_second_route_on_time() -> None:
+    """Send times stay on 0, 2, 4, 6 when each answer takes a second."""
+    send = playing(*[(200, ping_answer("NAV_START", speak=False)) for _ in range(4)])
+    clock = {"t": 0.0}
+    sent: list[float] = []
+
+    def slow(method: str, path: str, **kwargs: Any) -> tuple[int, Any]:
+        if path.endswith("/ping"):
+            sent.append(clock["t"])
+            clock["t"] += 1
+        return FakeSend.__call__(send, method, path, **kwargs)
+
+    def sleep(seconds: float) -> None:
+        clock["t"] += seconds
+
+    steps = [Step(t, 49.94, -119.39, 5) for t in (0, 2, 4, 6)]
+    code = replay(
+        steps, Api(slow, "token"), GAME, sleep=sleep, now=lambda: clock["t"], out=lambda _: None
+    )
+
+    assert code == 0
+    assert sent == [0, 2, 4, 6]
 
 
 def test_the_output_shows_each_code_and_the_spoken_ones_at_the_end() -> None:
@@ -228,7 +305,14 @@ def test_main_logs_in_and_replays_the_open_game_in_real_time(
 ) -> None:
     monkeypatch.setenv("GPS_REPLAY_PASSWORD", "secret")
     waits: list[float] = []
-    monkeypatch.setattr(gps_replay.time, "sleep", waits.append)
+    clock = {"t": 0.0}
+
+    def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        clock["t"] += seconds
+
+    monkeypatch.setattr(gps_replay.time, "sleep", sleep)
+    monkeypatch.setattr(gps_replay.time, "monotonic", lambda: clock["t"])
     send = playing((200, ping_answer("NAV_START")), (200, ping_answer("NAV_START", speak=False)))
     send.answers["POST /api/v1/auth/login"] = [(200, {"access_token": "abc"})]
     send.answers["GET /api/v1/games/current"] = [(200, {"session_id": GAME})]
