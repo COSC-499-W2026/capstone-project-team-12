@@ -23,14 +23,14 @@ result than reading less; and a number read with other building letters ("LIB" a
 SCI333) is that other building, so NO_MATCH, since the same number can exist in more than one
 building.
 
-Candidates hold OCR text: they are stored for statistics, never sent to the student.
+Candidates hold OCR text: they are stored for statistics, never sent to the student. The text of
+boxes and candidates is left out of `repr`, so logs and tracebacks never show a room number.
 """
 
 import re
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import pairwise
-from typing import NamedTuple
 
 from app.config import get_settings
 from app.models.content import ANSWER_PATTERN
@@ -49,17 +49,19 @@ FEEDBACK = {
 RANK = {PhotoResult.NO_MATCH: 0, PhotoResult.UNCLEAR: 1, PhotoResult.MATCH: 2}
 
 
-class TextBox(NamedTuple):
+@dataclass(frozen=True)
+class TextBox:
     """One piece of text OCR found in the photo, in the reader's order."""
 
-    text: str
+    text: str = field(repr=False)
     confidence: float
 
 
-class Candidate(NamedTuple):
+@dataclass(frozen=True)
+class Candidate:
     """Normalised text that may be the room number: "SCI333", or only "333" without a building."""
 
-    text: str
+    text: str = field(repr=False)
     confidence: float
 
 

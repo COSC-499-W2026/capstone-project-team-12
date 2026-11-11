@@ -158,6 +158,17 @@ def test_each_result_has_its_feedback_code(item: tuple[str, float], code: Feedba
     assert decide(boxes(item), ANSWERS, SPEC_THRESHOLDS).feedback_code == code
 
 
+def test_repr_never_shows_the_ocr_text() -> None:
+    # Rule 1: a log line or traceback that formats one of these must not show the room number.
+    read = boxes(("SCI", 0.91), ("333", 0.8))
+    decision = decide(read, ANSWERS, SPEC_THRESHOLDS)
+    for value in [*read, decision.candidate, decision]:
+        assert "SCI" not in repr(value) and "333" not in repr(value)
+    assert repr(decision) == (
+        "Decision(result=<PhotoResult.MATCH: 'match'>, candidate=Candidate(confidence=0.8))"
+    )
+
+
 def test_thresholds_come_from_the_settings(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
