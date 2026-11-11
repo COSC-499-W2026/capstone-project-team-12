@@ -64,6 +64,17 @@ class _EchoHandler(BaseHTTPRequestHandler):
         if self.path == "/html":
             self._reply(502, b"<html>Bad gateway</html>")
             return
+        if self.path in {"/cut", "/cut502"}:
+            # length claims more bytes than we send. /cut502 is an error page, so the
+            # client reads the body from the error, not from a normal response.
+            status = 502 if self.path == "/cut502" else 200
+            self.send_response(status)
+            self.send_header("Content-Length", "20")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(b"short")
+            self.close_connection = True
+            return
         if self.path == "/slow":
             time.sleep(1)
         self._reply(409 if self.path.endswith("/ping") else 200, json.dumps(received).encode())

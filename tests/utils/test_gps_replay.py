@@ -114,6 +114,27 @@ def test_a_slow_answer_comes_out_of_the_next_wait() -> None:
     assert (code, waits) == (0, [0, 4])
 
 
+def test_a_bad_ping_body_stops_the_replay() -> None:
+    send = playing((200, {"speak": True}), (200, ping_answer("NAV_START")))
+
+    code, lines = run(send, steps=STEPS[:2])
+
+    assert code == 1
+    assert "UNEXPECTED_BODY" in lines[-1]
+    assert send.paths().count(PING) == 1
+
+
+def test_a_ping_without_a_feedback_code_stops() -> None:
+    bad = {"speak": True, "feedback": {}, "trend": None, "can_confirm": False}
+    send = playing((200, bad), (200, ping_answer("NAV_START")))
+
+    code, lines = run(send, steps=STEPS[:2])
+
+    assert code == 1
+    assert "UNEXPECTED_BODY" in lines[-1]
+    assert send.paths().count(PING) == 1
+
+
 def test_catching_up_after_a_slow_answer_keeps_the_rate_limit() -> None:
     send = playing((200, ping_answer("NAV_START")), (200, ping_answer("NAV_START", speak=False)))
     clock = {"t": 0.0}
@@ -239,6 +260,17 @@ def test_confirm_on_the_first_ping_that_allows_it() -> None:
     assert len(send.calls) == 4  # the third step is never sent
 
 
+def test_a_confirm_without_feedback_codes_stops() -> None:
+    send = playing((200, ping_answer("NAV_ARRIVED", can_confirm=True)))
+    confirm = f"POST /api/v1/games/{GAME}/navigation/confirm-arrival"
+    send.answers[confirm] = [(200, {"stage": "verification", "feedback": "x"})]
+
+    code, lines = run(send, confirm=True)
+
+    assert code == 1
+    assert lines[-1].startswith("confirm-arrival: 200 UNEXPECTED_BODY")
+
+
 def test_without_confirm_the_route_plays_to_the_end() -> None:
     allowed = ping_answer("NAV_ARRIVED", can_confirm=True)
     send = playing((200, allowed), (200, allowed), (200, allowed))
@@ -274,6 +306,17 @@ def test_only_a_location_in_stage_1(location: dict[str, Any]) -> None:
 
     assert (code, len(send.calls)) == (1, 1)
     assert "not in Stage 1" in lines[0]
+
+
+def test_a_navigation_location_without_a_position_stops() -> None:
+    send = playing()
+    send.answers[f"GET /api/v1/games/{GAME}/current-location"] = [(200, {"stage": "navigation"})]
+
+    code, lines = run(send)
+
+    assert (code, len(send.calls)) == (1, 1)
+    assert "UNEXPECTED_BODY" in lines[0]
+    assert "position" in lines[0]
 
 
 def test_a_game_that_cant_be_read() -> None:
@@ -376,6 +419,7 @@ def test_http_sender_sends_json_forms_and_the_token(server: str) -> None:
     [
         ("http://127.0.0.1:9", "/api/v1/games/current"),  # nothing listens on port 9
         (None, "/slow"),  # the server accepts the request but answers too late
+        (None, "/cut"),  # the body ends before Content-Length
     ],
 )
 def test_a_server_that_doesnt_answer(server: str, url: str | None, path: str) -> None:
@@ -400,3 +444,25 @@ def test_main_reads_a_route_saved_with_an_excel_bom(
 
     assert code == 0
     assert send.paths()[-1].endswith("/navigation/ping")
+
+
+def test_a_cut_off_error_page_is_returned(server: str) -> None:
+    send = gps_replay.http_sender(server, timeout_s=2)
+
+    status, body = send("POST", "/cut502", json_body={})
+
+    assert status == 502
+    assert isinstance(body, str)
+
+
+def test_main_exits_when_the_login_body_is_not_the_token(
+    route_file: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GPS_REPLAY_PASSWORD", "secret")
+    send = FakeSend({"POST /api/v1/auth/login": [(200, "<html>no token</html>"), (200, {})]})
+
+    html = gps_replay.main([str(route_file), "--email", "s@x.com"], send=send)
+    missing = gps_replay.main([str(route_file), "--email", "s@x.com"], send=send)
+
+    assert html == 1 and missing == 1
+    assert "UNEXPECTED_BODY" in capsys.readouterr().err

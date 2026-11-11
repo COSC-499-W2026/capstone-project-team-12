@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import csv
 import getpass
+import http.client
 import json
 import math
 import os
@@ -40,6 +41,7 @@ API = "/api/v1"
 # no longer works, or the server can't be reached. Others, such as 429, skip one step.
 STOP_CODES = {"SESSION_NOT_ACTIVE", "INVALID_STAGE", "STATE_CHANGED", "NOT_FOUND"}
 STOP_CODES |= {"NOT_AUTHENTICATED", "ACCOUNT_DISABLED", "FORBIDDEN_ROLE", "CONNECTION_FAILED"}
+STOP_CODES |= {"UNEXPECTED_BODY"}  # a 200 that is not the JSON we need ends the replay
 
 
 @dataclass(frozen=True)
@@ -125,9 +127,13 @@ def http_sender(base_url: str, timeout_s: float = 30) -> Send:
             with urlopen(request, timeout=timeout_s) as response:
                 return response.status, _decode(response.read())
         except HTTPError as error:
-            with error:
-                return error.code, _decode(error.read())
-        except OSError as error:  # URLError, or a timeout or reset while reading the answer
+            try:
+                raw = error.read()
+            except (OSError, http.client.HTTPException):
+                raw = b""
+            error.close()
+            return error.code, _decode(raw)
+        except (OSError, http.client.HTTPException) as error:  # timeout, reset, or a cut body
             reason = error.reason if isinstance(error, URLError) else error
             raise ApiError(0, "CONNECTION_FAILED", str(reason) or type(error).__name__) from None
 
@@ -150,28 +156,39 @@ class Api:
     @classmethod
     def login(cls, send: Send, email: str, password: str) -> Api:
         form = {"username": email, "password": password}
-        body = _check(*send("POST", f"{API}/auth/login", form=form))
+        body = _fields(_check(*send("POST", f"{API}/auth/login", form=form)), "access_token")
         return cls(send, body["access_token"])
 
     def current_game(self) -> str:
-        return str(self._call("GET", "/games/current")["session_id"])
+        return str(_fields(self._call("GET", "/games/current"), "session_id")["session_id"])
 
     def current_location(self, game_id: str) -> dict[str, Any]:
-        return self._call("GET", f"/games/{game_id}/current-location")
+        return _fields(self._call("GET", f"/games/{game_id}/current-location"))
 
     def ping(self, game_id: str, step: Step) -> dict[str, Any]:
         body = {"lat": step.lat, "lng": step.lng, "accuracy_m": step.accuracy_m}
-        return self._call("POST", f"/games/{game_id}/navigation/ping", body)
+        answer = self._call("POST", f"/games/{game_id}/navigation/ping", body)
+        answer = _fields(answer, "speak", "feedback", "trend", "can_confirm")
+        _fields(answer["feedback"], "code")
+        return answer
 
     def confirm(self, game_id: str, position: int) -> dict[str, Any]:
-        body = {"position": position}
-        return self._call("POST", f"/games/{game_id}/navigation/confirm-arrival", body)
+        return _fields(
+            self._call(
+                "POST", f"/games/{game_id}/navigation/confirm-arrival", {"position": position}
+            ),
+            "stage",
+            "feedback",
+        )
 
-    def _call(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        answer = _check(*self._send(method, API + path, token=self._token, json_body=body))
-        if not isinstance(answer, dict):
-            raise ApiError(200, "UNEXPECTED_BODY", f"expected a JSON object: {answer!r:.200}")
-        return answer
+    def _call(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+        return _check(*self._send(method, API + path, token=self._token, json_body=body))
+
+
+def _fields(body: Any, *keys: str) -> dict[str, Any]:
+    if isinstance(body, dict) and set(keys) <= body.keys():
+        return body
+    raise ApiError(200, "UNEXPECTED_BODY", repr(body)[:120])
 
 
 def _check(status: int, body: Any) -> Any:
@@ -212,6 +229,9 @@ def replay(
     if location.get("stage") != "navigation":
         out("can't replay: the game's current location is not in Stage 1 (navigation)")
         return 1
+    if "position" not in location:
+        out("can't replay: 200 UNEXPECTED_BODY: position")
+        return 1
     out(f"game {game_id}, location {location['position']}: {len(steps)} pings")
 
     spoken: list[str] = []
@@ -236,10 +256,12 @@ def replay(
         if confirm and answer["can_confirm"]:
             try:
                 arrival = api.confirm(game_id, location["position"])
-            except ApiError as error:
+                codes = ", ".join(item["code"] for item in arrival["feedback"])
+            except (ApiError, KeyError, TypeError) as error:
+                if not isinstance(error, ApiError):
+                    error = ApiError(200, "UNEXPECTED_BODY", "feedback")
                 out(f"confirm-arrival: {error}")
                 return 1
-            codes = ", ".join(item["code"] for item in arrival["feedback"])
             out(f"arrival confirmed: {codes}, now in Stage 2 ({arrival['stage']})")
             return 0
     out(f"done: {len(steps)} pings, spoken {', '.join(spoken) or 'nothing'}")
