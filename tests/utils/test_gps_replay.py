@@ -113,26 +113,29 @@ def test_a_ping_without_a_feedback_code_stops() -> None:
 
 
 def test_catching_up_after_a_slow_answer_keeps_the_rate_limit() -> None:
-    send = playing((200, ping_answer("NAV_START")), (200, ping_answer("NAV_START", speak=False)))
+    """The first answer takes 3 s, so the second ping goes out late, at 3 s. Its answer is
+    instant, so the third is due at its recorded 4 s, but that is under 2 s after the second:
+    it waits until 5 s instead of getting a 429."""
+    send = playing(*[(200, ping_answer("NAV_START", speak=False)) for _ in range(3)])
     clock = {"t": 0.0}
+    answer_s = [3.0, 0.0, 0.0]  # how long each ping's answer takes
+    sent: list[float] = []
 
     def slow(method: str, path: str, **kwargs: Any) -> tuple[int, Any]:
         if path.endswith("/ping"):
-            clock["t"] += 4  # four of the five seconds were spent waiting for this answer
+            sent.append(clock["t"])
+            clock["t"] += answer_s[len(sent) - 1]
         return FakeSend.__call__(send, method, path, **kwargs)
 
-    waits: list[float] = []
-
     def sleep(seconds: float) -> None:
-        waits.append(seconds)
         clock["t"] += seconds
 
-    steps = [Step(0, 49.94, -119.39, 5), Step(5, 49.9399, -119.39, 5)]
+    steps = [Step(t, 49.94, -119.39, 5) for t in (0, 2, 4)]
     code = replay(
         steps, Api(slow, "token"), GAME, sleep=sleep, now=lambda: clock["t"], out=lambda _: None
     )
 
-    assert (code, waits) == (0, [0, 1])  # the next ping still goes out at the recorded 5 s
+    assert (code, sent) == (0, [0, 3, 5])
 
 
 def test_a_one_second_answer_keeps_a_two_second_route_on_time() -> None:
