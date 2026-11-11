@@ -98,7 +98,8 @@ def post_reset_password(
 ) -> StatusResponse:
     """Set a new password with the token from the reset email (400 INVALID_TOKEN, 422).
 
-    Signs the account out on every device: all its refresh tokens are revoked.
+    Revokes every refresh token of the account, so no device can refresh its session. An access
+    token already issued still works until it expires (60 minutes).
     """
     reset_password(request.token, request.new_password, db)
     db.commit()
