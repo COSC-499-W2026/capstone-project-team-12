@@ -20,11 +20,15 @@ from app.accounts.email_links import reset_password
 from app.accounts.interface import revoke_all_refresh_tokens
 from app.accounts.login import login_account
 from app.accounts.password import hash_password
-from app.accounts.tokens import REPLAY_GRACE, create_refresh_token, encode_jwt, rotate_tokens
+from app.accounts.tokens import (
+    REPLAY_GRACE,
+    TokenPair,
+    create_refresh_token,
+    encode_jwt,
+    rotate_tokens,
+)
 from app.config import get_settings
-from app.db import get_db
 from app.errors import AppError, ErrorCode
-from app.main import create_app
 from app.models.accounts import RefreshToken, User
 from app.models.email import EmailToken
 from app.models.engagement import AccessCode, Class
@@ -297,134 +301,6 @@ def _backend_is_waiting_on_a_lock(engine: Engine, pid: int) -> bool:
     return kind == "Lock"
 
 
-def test_reset_during_refresh_revokes_the_new_token_too(
-    test_engine: Engine, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A reset that starts after refresh has inserted the next token, but before that
-    insert commits, still revokes the new token. The reset locks the user first and so
-    waits; without that wait its UPDATE would not see the uncommitted row. The lock order
-    (user before token) is checked by test_a_refresh_waits_for_a_reset_without_deadlocking."""
-    user_id: UUID | None = None
-    old_token = ""
-    link_token = ""
-    holding = threading.Event()
-    release = threading.Event()
-    errors: list[BaseException] = []
-    new_refresh: list[str] = []
-    backend_pid: list[int] = []
-    threads: list[threading.Thread] = []
-
-    def pause_after_insert(
-        owner: UUID, db: Session, family_id: UUID | None = None
-    ) -> tuple[str, UUID]:
-        created = create_refresh_token(owner, db, family_id)
-        holding.set()  # the new row is flushed, and this transaction has not committed
-        if not release.wait(10):
-            raise TimeoutError("the refresh was not released")
-        return created
-
-    try:
-        with Session(test_engine, expire_on_commit=False) as setup:
-            user = User(
-                email=f"{uuid4().hex[:12]}@example.com",
-                username=f"user_{uuid4().hex[:8]}",
-                role=UserRole.STUDENT,
-                email_verified_at=datetime.now(UTC),
-                password_hash=hash_password("OldPassword1"),
-            )
-            setup.add(user)
-            setup.flush()
-            old_token, _token_id = create_refresh_token(user.id, setup)
-            link_token = EmailService.create_token(user, EmailKind.RESET_PASSWORD, setup)
-            user_id = user.id
-            setup.commit()
-        monkeypatch.setattr("app.accounts.tokens.create_refresh_token", pause_after_insert)
-
-        def refresh_side() -> None:
-            try:
-                with Session(test_engine) as session:
-                    session.execute(text("SET lock_timeout = '10s'"))
-                    try:
-                        pair = rotate_tokens(old_token, session)
-                    except AppError as error:
-                        session.commit()  # as the route does when it refuses
-                        errors.append(error)
-                        return
-                    session.commit()
-                    new_refresh.append(pair.refresh_token)
-            except BaseException as error:
-                errors.append(error)
-
-        def reset_side() -> None:
-            try:
-                with Session(test_engine) as session:
-                    session.execute(text("SET lock_timeout = '10s'"))
-                    pid = session.scalar(text("SELECT pg_backend_pid()"))
-                    if not isinstance(pid, int):
-                        raise RuntimeError("postgres did not give a backend pid")
-                    backend_pid.append(pid)
-                    if not holding.wait(10):
-                        raise TimeoutError("refresh did not insert the new token")
-                    reset_password(link_token, "NewPassword1", session)
-                    session.commit()
-            except BaseException as error:
-                errors.append(error)
-
-        refresh_thread = threading.Thread(target=refresh_side)
-        threads.append(refresh_thread)
-        refresh_thread.start()
-        if not holding.wait(10):
-            raise TimeoutError("refresh did not insert the new token")
-        reset_thread = threading.Thread(target=reset_side)
-        threads.append(reset_thread)
-        reset_thread.start()
-        deadline = time.monotonic() + 8
-        while time.monotonic() < deadline:
-            if backend_pid and _backend_is_waiting_on_a_lock(test_engine, backend_pid[0]):
-                break
-            time.sleep(0.05)
-        else:
-            raise TimeoutError("reset did not wait on the refresh lock")
-        release.set()
-        for thread in threads:
-            thread.join(timeout=10)
-        assert not any(thread.is_alive() for thread in threads), "a refresh or reset is stuck"
-        if errors:
-            raise errors[0]
-        assert len(new_refresh) == 1
-        app = create_app()
-
-        def sessions():
-            session = Session(test_engine)
-            try:
-                yield session
-            finally:
-                session.close()
-
-        app.dependency_overrides[get_db] = sessions
-        client = TestClient(app)
-        for raw in (old_token, new_refresh[0]):
-            client.cookies.clear()
-            refused = client.post(
-                "/api/v1/auth/refresh", headers={"Cookie": f"refresh_token={raw}"}
-            )
-            assert refused.status_code == 401
-            assert refused.json()["error"]["code"] == ErrorCode.NOT_AUTHENTICATED
-    finally:
-        release.set()  # a failed assert must not leave the refresh thread waiting
-        for thread in threads:
-            thread.join(timeout=10)
-        if user_id is not None:
-            with Session(test_engine) as cleanup:
-                cleanup.execute(text("SET lock_timeout = '10s'"))
-                owned = RefreshToken.user_id == user_id
-                cleanup.execute(update(RefreshToken).where(owned).values(replaced_by=None))
-                cleanup.execute(delete(RefreshToken).where(owned))
-                cleanup.execute(delete(EmailToken).where(EmailToken.user_id == user_id))
-                cleanup.execute(delete(User).where(User.id == user_id))
-                cleanup.commit()
-
-
 OLD_PASSWORD, NEW_PASSWORD = "OldPassword1", "NewPassword1"
 WAIT_S = 10  # every wait between threads gives up after this
 
@@ -504,6 +380,65 @@ def _tokens(engine: Engine, user: User) -> list[bool]:
         return [at is not None for at in revoked]
 
 
+def _blocked(engine: Engine, job: _InThread) -> bool:
+    """Waits until the job's session waits on a lock (True) or the job ends (False)."""
+    deadline = time.monotonic() + WAIT_S
+    while job.thread.is_alive():
+        if job.pid is not None and _backend_is_waiting_on_a_lock(engine, job.pid):
+            return True
+        assert time.monotonic() < deadline, "the job neither waited nor finished"
+        time.sleep(0.05)
+    return False
+
+
+@pytest.mark.parametrize("via", ["refresh", "login"])
+def test_a_reset_revokes_the_token_a_refresh_or_login_is_creating(
+    test_engine: Engine, monkeypatch: pytest.MonkeyPatch, via: str
+) -> None:
+    """A refresh or login has inserted its new refresh token but not committed when a reset
+    starts. The reset waits on the user lock the refresh or login holds, then revokes the new
+    token too. Without that lock the reset's revoke can't see the uncommitted row, and the
+    token stays usable after the reset. The lock order is checked by
+    test_a_refresh_waits_for_a_reset_without_deadlocking."""
+    inserted, go_on = threading.Event(), threading.Event()
+
+    def insert_then_wait(
+        owner: UUID, db: Session, family_id: UUID | None = None
+    ) -> tuple[str, UUID]:
+        created = create_refresh_token(owner, db, family_id)
+        inserted.set()  # flushed, not committed
+        _wait(go_on)
+        return created
+
+    module = "app.accounts.tokens" if via == "refresh" else "app.accounts.login"
+    monkeypatch.setattr(f"{module}.create_refresh_token", insert_then_wait)
+    with _committed_student(test_engine) as (user, refresh_token, link):
+        form = OAuth2PasswordRequestForm(username=user.email, password=OLD_PASSWORD)
+
+        def sign_in(session: Session) -> TokenPair:
+            if via == "refresh":
+                return rotate_tokens(refresh_token, session)
+            return login_account(form, session)
+
+        signing_in = _InThread(test_engine, sign_in)
+        resetting: _InThread | None = None
+        try:
+            _wait(inserted)
+            resetting = _InThread(
+                test_engine, lambda session: reset_password(link, NEW_PASSWORD, session)
+            )
+            waited = _blocked(test_engine, resetting)
+        finally:
+            go_on.set()
+            outcome = signing_in.finish()
+            if resetting is not None:
+                resetting.finish()
+
+        assert isinstance(outcome, TokenPair)
+        assert _tokens(test_engine, user) == [True, True]  # the new token is revoked too
+        assert waited, "the reset did not wait for the user lock"
+
+
 def test_a_login_checked_before_a_reset_is_refused_after_it(
     test_engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -561,13 +496,7 @@ def test_a_refresh_waits_for_a_reset_without_deadlocking(
             refreshing = _InThread(
                 test_engine, lambda session: rotate_tokens(refresh_token, session)
             )
-            deadline = time.monotonic() + WAIT_S
-            while not (
-                refreshing.pid is not None
-                and _backend_is_waiting_on_a_lock(test_engine, refreshing.pid)
-            ):
-                assert time.monotonic() < deadline, "the refresh never waited on the reset"
-                time.sleep(0.05)
+            assert _blocked(test_engine, refreshing), "the refresh never waited on the reset"
         finally:
             go_on.set()
             resetting.finish()
