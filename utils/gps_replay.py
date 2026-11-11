@@ -1,7 +1,7 @@
 """Replay a recorded walking route against a game (#46, spec: Simulation Scripts).
 
-Logs in as the student, sends each position of the route to POST /games/{id}/navigation/ping,
-waiting the recorded time between rows, and prints the feedback code the server returns at
+Logs in as the student, sends each position of the route to POST /games/{id}/navigation/ping
+on the recorded timeline, and prints the feedback code the server returns at
 each step. It only uses the public API, the same as the app.
 
 The route is a CSV with the header t_s,lat,lng,accuracy_m: seconds since the start of the
@@ -199,6 +199,7 @@ def replay(
     *,
     confirm: bool = False,
     sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], float] | None = None,
     out: Callable[[str], None] = print,
 ) -> int:
     """Play the route against the game; 0 when it was played to the end (or arrival was
@@ -214,10 +215,14 @@ def replay(
     out(f"game {game_id}, location {location['position']}: {len(steps)} pings")
 
     spoken: list[str] = []
-    elapsed = 0.0
+    clock = time.monotonic if now is None else now
+    start = clock()
+    # catching up after a slow answer must not send the next ping inside the 2 s rate limit
+    sent_at = start - MIN_GAP_S
     for step in steps:
-        sleep(step.t_s - elapsed)
-        elapsed = step.t_s
+        earliest = max(start + step.t_s, sent_at + MIN_GAP_S)
+        sleep(max(0.0, earliest - clock()))
+        sent_at = clock()  # when the ping is sent, not when its answer comes back
         try:
             answer = api.ping(game_id, step)
         except ApiError as error:

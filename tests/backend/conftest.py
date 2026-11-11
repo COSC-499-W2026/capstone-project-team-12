@@ -495,6 +495,7 @@ def replay_route(
         assert student is not None
         token = auth_headers(student)["Authorization"].removeprefix("Bearer ")
         clock = [now]
+        elapsed = {"s": 0.0}
 
         def send(method: str, path: str, *, token: str | None = None, **body: Any) -> Any:
             headers = {"Authorization": f"Bearer {token}"} if token else {}
@@ -503,12 +504,22 @@ def replay_route(
             return response.status_code, response.json()
 
         def sleep(seconds: float) -> None:
+            elapsed["s"] += seconds
             clock[0] += timedelta(seconds=seconds)
             freeze_clock(clock[0], "app.game.control", "app.game.status", *_REPLAY_CLOCKS)
 
         lines: list[str] = []
         api = Api(send, token)
-        code = replay(steps, api, str(game.id), sleep=sleep, out=lines.append, **kwargs)
+        # the replay clock only moves in sleep, so a request's wall time does not shrink the gap
+        code = replay(
+            steps,
+            api,
+            str(game.id),
+            sleep=sleep,
+            now=lambda: elapsed["s"],
+            out=lines.append,
+            **kwargs,
+        )
         db.refresh(row)
         return code, lines, row
 
