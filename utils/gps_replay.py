@@ -66,7 +66,10 @@ def read_route(lines: Iterable[str]) -> list[Step]:
     if tuple(reader.fieldnames or ()) != COLUMNS:
         raise RouteError(f"the header must be {','.join(COLUMNS)}")
     steps: list[Step] = []
-    for line, row in enumerate(reader, start=2):
+    for row in reader:
+        line = reader.line_num  # blank lines are not rows, so enumerate would number them wrong
+        if row.get(None):
+            raise RouteError(f"line {line}: unexpected extra columns")
         try:
             step = Step(*(float(row[name]) for name in COLUMNS))
         except (TypeError, ValueError):
@@ -248,7 +251,7 @@ def main(argv: list[str] | None = None, send: Send | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        with args.route.open(newline="", encoding="utf-8") as file:
+        with args.route.open(newline="", encoding="utf-8-sig") as file:
             steps = read_route(file)
     except (OSError, RouteError) as error:
         print(f"{args.route}: {error}", file=sys.stderr)
