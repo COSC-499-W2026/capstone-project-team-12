@@ -381,7 +381,10 @@ def _tokens(engine: Engine, user: User) -> list[bool]:
 
 
 def _blocked(engine: Engine, job: _InThread) -> bool:
-    """Waits until the job's session waits on a lock (True) or the job ends (False)."""
+    """Waits until the job's session waits on a lock (True) or the job ends (False).
+
+    It doesn't say which lock: each test fails without its fix, which is what shows the lock is
+    the user's."""
     deadline = time.monotonic() + WAIT_S
     while job.thread.is_alive():
         if job.pid is not None and _backend_is_waiting_on_a_lock(engine, job.pid):
@@ -430,13 +433,15 @@ def test_a_reset_revokes_the_token_a_refresh_or_login_is_creating(
             waited = _blocked(test_engine, resetting)
         finally:
             go_on.set()
-            outcome = signing_in.finish()
-            if resetting is not None:
-                resetting.finish()
+            try:
+                outcome = signing_in.finish()
+            finally:  # even if the sign-in failed, so cleanup never waits on its locks
+                if resetting is not None:
+                    resetting.finish()
 
         assert isinstance(outcome, TokenPair)
         assert _tokens(test_engine, user) == [True, True]  # the new token is revoked too
-        assert waited, "the reset did not wait for the user lock"
+        assert waited, "the reset did not wait on a lock"
 
 
 def test_a_login_checked_before_a_reset_is_refused_after_it(
@@ -496,11 +501,13 @@ def test_a_refresh_waits_for_a_reset_without_deadlocking(
             refreshing = _InThread(
                 test_engine, lambda session: rotate_tokens(refresh_token, session)
             )
-            assert _blocked(test_engine, refreshing), "the refresh never waited on the reset"
+            assert _blocked(test_engine, refreshing), "the refresh never waited on a lock"
         finally:
             go_on.set()
-            resetting.finish()
-            outcome = refreshing.finish() if refreshing is not None else None
+            try:
+                resetting.finish()
+            finally:  # even if the reset failed, so cleanup never waits on its locks
+                outcome = refreshing.finish() if refreshing is not None else None
 
         assert isinstance(outcome, AppError)
         assert outcome.code == ErrorCode.NOT_AUTHENTICATED
