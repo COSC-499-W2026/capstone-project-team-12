@@ -71,8 +71,8 @@ def reset_password(token: str, new_password: str, db: Session) -> None:
     db.execute(update(EmailOutbox).where(stale).values(status=EmailStatus.FAILED))
     # an unused set-password link (3 days) could overwrite the new password
     EmailService.invalidate_user_tokens(user.id, EmailKind.SET_PASSWORD, db)
-    # spec: resetting signs the account out everywhere. Access tokens still work until they
-    # expire (60 minutes); only refresh tokens can be revoked.
+    # spec: resetting revokes every refresh token, so no device can get a new access token.
+    # An access token already issued still works until it expires (60 minutes).
     revoke_refresh_tokens(user.id, db)
     db.flush()
 
