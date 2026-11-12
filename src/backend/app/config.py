@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # clue and feedback recordings at most 60 s
     max_media_file_mb: PositiveInt = 5
     max_audio_seconds: PositiveInt = 60
+    # proposed, not in the spec: pixels in one photo, in millions (checked before decoding). A
+    # 24-megapixel phone photo (5712 x 4284) fits; a PNG cannot be decoded at a smaller scale, so
+    # a few hundred KB of flat PNG this size still takes about 100 MB while it is read
+    max_photo_megapixels: PositiveInt = 25
     # proposed, not in the spec (team and client to confirm): rows in one locations CSV, far
     # above the campus's few dozen locations, so one import cannot hold its transaction (and its
     # room number locks) for long; 1000 rows take about 1.5 s

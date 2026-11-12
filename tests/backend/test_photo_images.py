@@ -6,7 +6,7 @@ import zlib
 from http import HTTPStatus
 
 import pytest
-from PIL import ExifTags, Image, ImageDraw, ImageOps
+from PIL import ExifTags, Image, ImageDraw, ImageOps, PngImagePlugin
 
 from app.config import get_settings
 from app.errors import AppError, ErrorCode
@@ -60,6 +60,48 @@ def png_with_a_broken_chunk() -> bytes:
     data = encode(Image.effect_noise((400, 400), 60), "PNG")  # noise: three IDAT chunks
     second = data.index(b"IDAT", data.index(b"IDAT") + 1)
     return data[:second] + b"\x9b\x9b\x0c\x0c" + data[second + 4 :]
+
+
+def png_with_a_huge_text_chunk() -> bytes:
+    """A 3 KB PNG whose compressed comment unpacks to 3 MB, past Pillow's limit (ValueError)."""
+    text = PngImagePlugin.PngInfo()
+    text.add_text("Comment", "A" * 3_000_000, zip=True)
+    return photo(image_format="PNG", pnginfo=text)
+
+
+def jpeg_with_an_exif_pointer_before_its_start() -> bytes:
+    """A JPEG turned by EXIF whose pointer to the Exif sub-IFD (DateTimeOriginal) is -16."""
+    exif = exif_with(ExifTags.Base.DateTimeOriginal)
+    exif[ExifTags.Base.Orientation] = 6
+    data = exif.tobytes()
+    pointer = data.index(struct.pack(">HHI", ExifTags.IFD.Exif, 4, 1))  # the tag, LONG, 1 value
+    signed = struct.pack(">HHIi", ExifTags.IFD.Exif, 9, 1, -16)  # SLONG
+    damaged = data[:pointer] + signed + data[pointer + 12 :]
+    return encode(Image.new("RGB", (400, 200), "white"), exif=damaged)
+
+
+def png_with_exif_hex_that_is_not_hex() -> bytes:
+    """A PNG with its EXIF as a hex text profile, the way older software writes it."""
+    text = PngImagePlugin.PngInfo()
+    text.add_text("Raw profile type exif", "\nexif\n 10\n4578696600zz\n")
+    return photo((400, 200), "PNG", pnginfo=text)
+
+
+def png_with_a_damaged_exif_header() -> bytes:
+    """A PNG with camera EXIF whose byte order mark ("MM") is broken (Pillow reads a JPEG's
+    without complaint, but raises SyntaxError for a PNG's)."""
+    data = exif_with(ExifTags.Base.Make).tobytes()
+    assert data[6:8] == b"MM"
+    return photo((400, 200), "PNG", exif=data[:6] + b"MX" + data[8:])
+
+
+def transparent_palette_image() -> Image.Image:
+    """Left half palette entry 0, transparent; right half entry 1, the same dark colour, opaque."""
+    image = Image.new("P", (80, 60), 0)
+    image.putpalette([10, 10, 10] * 256)
+    image.info["transparency"] = 0
+    ImageDraw.Draw(image).rectangle((40, 0, 79, 59), fill=1)
+    return image
 
 
 def png_declaring(width: int, height: int) -> bytes:
@@ -169,6 +211,72 @@ def test_a_damaged_exif_tag_does_not_stop_the_photo() -> None:
     assert prepared.has_camera_exif
 
 
+@pytest.mark.parametrize(
+    ("data", "size"),
+    [
+        # the orientation is still read; only the sub-IFD with the time taken is lost
+        pytest.param(jpeg_with_an_exif_pointer_before_its_start(), (200, 400), id="bad pointer"),
+        pytest.param(png_with_exif_hex_that_is_not_hex(), (400, 200), id="bad hex profile"),
+        pytest.param(png_with_a_damaged_exif_header(), (400, 200), id="bad header"),
+    ],
+)
+def test_exif_that_cannot_be_read_counts_as_none(data: bytes, size: tuple[int, int]) -> None:
+    with pytest.raises((SyntaxError, ValueError)):  # Pillow cannot read all of it
+        Image.open(io.BytesIO(data)).getexif().get_ifd(ExifTags.IFD.Exif)
+
+    prepared = prepare(data)
+
+    assert stored(prepared).size == size
+    assert not prepared.has_camera_exif
+
+
+@pytest.mark.parametrize(
+    ("image", "gray"),
+    [
+        pytest.param(Image.new("I;16", (40, 30), 1000), 3, id="16-bit dark"),
+        pytest.param(Image.new("I;16", (40, 30), 60000), 234, id="16-bit light"),
+        pytest.param(Image.new("RGBA", (40, 30), (0, 0, 0, 0)), 255, id="transparent RGBA"),
+        pytest.param(Image.new("LA", (40, 30), (0, 0)), 255, id="transparent LA"),
+        pytest.param(Image.new("RGBA", (40, 30), (20, 20, 20, 255)), 20, id="opaque RGBA"),
+    ],
+)
+def test_a_png_keeps_its_tones_and_transparency_is_white(image: Image.Image, gray: int) -> None:
+    # converting alone would clip 16 bits to white and show black under transparent parts
+    assert stored(prepare(encode(image, "PNG"))).convert("L").getextrema() == (gray, gray)
+
+
+def test_only_the_transparent_palette_entry_is_white() -> None:
+    # converting the palette to RGB first would make every pixel of that colour transparent
+    result = stored(prepare(encode(transparent_palette_image(), "PNG"))).convert("L")
+    assert (result.getpixel((10, 30)), result.getpixel((70, 30))) == (255, 10)
+
+
+@pytest.mark.parametrize("mode", ["P", "1"])
+def test_a_palette_or_1_bit_png_is_shrunk_smoothly(mode: str) -> None:
+    # Pillow shrinks these modes by nearest pixel only, which turns 1 px stripes all black
+    stripes = Image.new(mode, (3200, 100), 0)
+    if mode == "P":
+        stripes.putpalette([0, 0, 0, 255, 255, 255])
+    draw = ImageDraw.Draw(stripes)
+    for x in range(0, 3200, 2):
+        draw.line((x, 0, x, 99), fill=1)
+
+    low, high = stored(prepare(encode(stripes, "PNG"))).convert("L").getextrema()
+
+    assert low > 64 and high < 192  # gray
+
+
+@pytest.mark.parametrize(
+    ("size", "decoded"),
+    [((4032, 3024), (2016, 1512)), ((3200, 2400), (1600, 1200)), ((3000, 2000), (3000, 2000))],
+)
+def test_a_large_jpeg_is_decoded_at_a_smaller_scale(
+    size: tuple[int, int], decoded: tuple[int, int]
+) -> None:
+    # memory only: the result is never smaller than the photo it is shrunk to (1600 px long)
+    assert images._decode(photo(size)).size == decoded
+
+
 def test_ocr_reads_a_grayscale_copy_with_full_contrast() -> None:
     gradient = Image.linear_gradient("L").resize((400, 300)).point(lambda value: 100 + value // 5)
     assert gradient.getextrema() == (100, 151)
@@ -224,26 +332,33 @@ def test_a_photo_at_the_size_limit_is_read_and_one_byte_more_is_not() -> None:
         pytest.param(photo(image_format="PNG")[:100], id="png cut short"),
         pytest.param(b"\x89PNG\r\n\x1a\n" + bytes(200), id="png start, no image"),
         pytest.param(png_with_a_broken_chunk(), id="png with a broken chunk"),
+        pytest.param(png_with_a_huge_text_chunk(), id="png text chunk too large"),
     ],
 )
 def test_a_file_that_starts_like_a_photo_but_does_not_decode_is_rejected(data: bytes) -> None:
     assert rejection(data) == UNSUPPORTED
 
 
-def test_too_many_pixels_are_rejected_before_decoding(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(images, "MAX_PHOTO_PIXELS", 400 * 300)
-    assert stored(prepare(photo((400, 300)))).size == (400, 300)
+def test_the_pixel_limit_comes_from_the_settings(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    monkeypatch.setenv("MAX_PHOTO_MEGAPIXELS", "2")
+    get_settings.cache_clear()
+    request.addfinalizer(get_settings.cache_clear)  # the next caller reads the restored env
+    assert stored(prepare(photo((2000, 1000)))).size == (1600, 800)  # exactly 2 megapixels
 
     with pytest.raises(AppError) as error:
-        prepare(photo((401, 300)))
-    assert (error.value.code, error.value.status) == UNSUPPORTED
-    assert "megapixels" in error.value.message
+        prepare(photo((2000, 1001)))
+    assert (error.value.code, error.value.status, error.value.message) == (
+        *UNSUPPORTED,
+        "Photos can have at most 2 megapixels",
+    )
 
 
 @pytest.mark.parametrize(
     ("width", "height", "message"),
     [
-        pytest.param(8000, 6251, "Photos can have at most 50 megapixels", id="just over the limit"),
+        pytest.param(5000, 5001, "Photos can have at most 25 megapixels", id="just over the limit"),
         # over Pillow's own limit, which it refuses as a decompression bomb when opening
         pytest.param(20000, 20000, "Upload a JPEG or PNG photo", id="decompression bomb"),
     ],
