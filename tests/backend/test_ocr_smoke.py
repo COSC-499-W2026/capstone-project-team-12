@@ -102,6 +102,31 @@ def test_app_reader_matches_the_sign_with_its_answer() -> None:
     assert decide(boxes, ["SCI333"], MatchThresholds.from_settings()).result is PhotoResult.MATCH
 
 
+def dim_sign_photo(text: str) -> Image.Image:
+    """Gray text only 5 levels darker than its sign, below a bright window and above a dark floor.
+
+    The window and the floor already span 0-255, so auto-contrast cannot help; the first read
+    finds no room number here, and the CLAHE copy reads it at about 0.98.
+    """
+    photo = Image.new("L", (1200, 720), 105)
+    draw = ImageDraw.Draw(photo)
+    draw.rectangle((0, 0, 1200, 160), fill=255)
+    draw.rectangle((0, 680, 1200, 720), fill=0)
+    draw.text((360, 340), text, fill=100, font=ImageFont.load_default(size=96))
+    return photo
+
+
+def test_second_pass_copy_reads_a_dim_sign_the_first_read_misses() -> None:
+    photo = dim_sign_photo("SCI 333")
+    thresholds = MatchThresholds.from_settings()
+
+    first = decide(ocr.read_text(photo), ["SCI333"], thresholds)
+    second = decide(ocr.read_text(ocr.local_contrast(photo)), ["SCI333"], thresholds)
+
+    assert first.result is not PhotoResult.MATCH
+    assert second.result is PhotoResult.MATCH
+
+
 def test_two_reads_at_once_on_the_shared_reader_match_reads_one_at_a_time() -> None:
     signs = [sign_photo(text) for text in ["SCI 333", "LIB 312", "EME 105", "ASC 140"]]
     one_at_a_time = [box for sign in signs for box in ocr.read_text(sign)]

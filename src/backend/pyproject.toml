@@ -21,6 +21,7 @@ dependencies = [
     "torch>=2.8,<2.10",  # CPU-only build, see requirements.txt; EasyOCR 1.7.2 needs torch.quantization
     "torchvision>=0.23,<0.25",
     "numpy>=2.4",  # hands the photo to EasyOCR as an array (also an EasyOCR dependency)
+    "opencv-python-headless>=5.0",  # CLAHE for the second OCR pass (also an EasyOCR dependency)
 ]
 
 [project.optional-dependencies]
