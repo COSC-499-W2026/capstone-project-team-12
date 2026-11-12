@@ -11,14 +11,23 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.accounts.password import hash_password
+from app.accounts.tokens import create_refresh_token
 from app.errors import AppError
-from app.models.accounts import User
+from app.models.accounts import RefreshToken, User
 from app.models.email import EmailToken
 from app.models.enums import EmailKind, EmailStatus
 from app.services.email import EmailService
 
 URL = "/api/v1/auth/reset-password"
 NEW = "NewPassword1"
+
+
+def revoked(db: Session, user: User) -> list[bool]:
+    """Whether each of the user's refresh tokens is revoked, as stored now."""
+    query = select(RefreshToken.revoked_at).where(RefreshToken.user_id == user.id)
+    return [
+        at is not None for at in db.scalars(query, execution_options={"populate_existing": True})
+    ]
 
 
 def test_a_reset_link_sets_the_new_password_once(
@@ -51,18 +60,42 @@ def test_a_reset_link_sets_the_new_password_once(
     assert again.json()["error"]["code"] == "INVALID_TOKEN"
 
 
+def test_a_reset_signs_out_every_device(
+    client: TestClient, db: Session, make_user: Callable[..., User]
+) -> None:
+    user = make_user(email_verified_at=datetime.now(UTC))
+    devices = [create_refresh_token(user.id, db)[0] for _ in range(2)]
+    someone_else = make_user()
+    create_refresh_token(someone_else.id, db)
+    token = EmailService.create_token(user, EmailKind.RESET_PASSWORD, db)
+
+    response = client.post(URL, json={"token": token, "new_password": NEW})
+
+    assert response.status_code == HTTPStatus.OK
+    assert revoked(db, user) == [True, True]
+    assert revoked(db, someone_else) == [False]
+    for refresh_token in devices:
+        client.cookies.clear()
+        again = client.post(
+            "/api/v1/auth/refresh", headers={"Cookie": f"refresh_token={refresh_token}"}
+        )
+        assert again.status_code == HTTPStatus.UNAUTHORIZED
+
+
 # too short, over bcrypt's 70 bytes, over the request's 200 characters
 @pytest.mark.parametrize("bad", ["short", "Aa1" + "x" * 68, "Aa1" + "x" * 200])
 def test_a_rejected_password_doesnt_use_the_link_up(
     client: TestClient, db: Session, make_user: Callable[..., User], bad: str
 ) -> None:
     user = make_user(email_verified_at=datetime.now(UTC))
+    create_refresh_token(user.id, db)
     token = EmailService.create_token(user, EmailKind.RESET_PASSWORD, db)
     weak = client.post(URL, json={"token": token, "new_password": bad})
     assert (weak.status_code, weak.json()["error"]["code"]) == (
         HTTPStatus.UNPROCESSABLE_ENTITY,
         "VALIDATION_ERROR",
     )
+    assert revoked(db, user) == [False]  # still signed in
     assert client.post(URL, json={"token": token, "new_password": NEW}).status_code == HTTPStatus.OK
 
 
@@ -79,6 +112,7 @@ def test_a_dead_link_is_refused_before_the_password_is_hashed(
 
     monkeypatch.setattr("app.accounts.email_links.hash_password", no_hash)
     user = make_user(email_verified_at=datetime.now(UTC))
+    create_refresh_token(user.id, db)
     kind = EmailKind.VERIFY_EMAIL if case == "wrong_kind" else EmailKind.RESET_PASSWORD
     token = EmailService.create_token(user, kind, db)
     link = db.scalars(select(EmailToken).where(EmailToken.user_id == user.id)).one()
@@ -91,6 +125,7 @@ def test_a_dead_link_is_refused_before_the_password_is_hashed(
     response = client.post(URL, json={"token": sent, "new_password": NEW})
     assert response.status_code == HTTPStatus.BAD_REQUEST
     assert response.json()["error"]["code"] == "INVALID_TOKEN"
+    assert revoked(db, user) == [False]  # still signed in
 
 
 @pytest.mark.parametrize("case", ["unverified", "inactive", "verify_link", "expired", "missing"])
@@ -99,6 +134,7 @@ def test_a_link_that_cant_reset_is_invalid_and_stays_unused(
 ) -> None:
     verified = None if case == "unverified" else datetime.now(UTC)
     user = make_user(email_verified_at=verified, is_active=case != "inactive")
+    create_refresh_token(user.id, db)
     kind = EmailKind.VERIFY_EMAIL if case == "verify_link" else EmailKind.RESET_PASSWORD
     token = EmailService.create_token(user, kind, db)
     link = db.scalars(select(EmailToken).where(EmailToken.user_id == user.id)).one()
@@ -112,3 +148,4 @@ def test_a_link_that_cant_reset_is_invalid_and_stays_unused(
     db.refresh(user)
     db.refresh(link)
     assert (user.password_hash, link.used_at) == (None, None)
+    assert revoked(db, user) == [False]

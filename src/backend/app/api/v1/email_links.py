@@ -96,7 +96,11 @@ def post_forgot_password(
 def post_reset_password(
     request: ResetPasswordRequest, db: Annotated[Session, Depends(get_db)]
 ) -> StatusResponse:
-    """Set a new password with the token from the reset email (400 INVALID_TOKEN, 422)."""
+    """Set a new password with the token from the reset email (400 INVALID_TOKEN, 422).
+
+    Revokes every refresh token of the account, so no device can refresh its session. An access
+    token already issued still works until it expires (60 minutes).
+    """
     reset_password(request.token, request.new_password, db)
     db.commit()
     return StatusResponse()
