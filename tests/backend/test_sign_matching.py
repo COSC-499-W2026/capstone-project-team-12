@@ -65,6 +65,8 @@ def test_decision_table_for_a_room_number(
         [("ROOM 333", 0.9)],  # a word before the number is not a building
         [("ROOM", 0.9), ("333", 0.9)],
         [("SCI", 0.9), ("EXIT", 0.9), ("333", 0.9)],  # only neighbouring boxes are joined
+        [("333 SCI", 0.9)],  # words inside one box are joined in reading order only
+        [("333A", 0.9)],  # one letter after the number is left out
         [("333", 0.45)],
     ],
 )
@@ -94,6 +96,7 @@ def test_number_next_to_other_building_letters_is_no_match() -> None:
         [("333", 0.4499)],  # a number alone needs the unclear confidence too
         [("SCI 33345", 0.9)],  # the digits run on: no room number
         [("SCI 33", 0.9)],
+        [("SCI 333AB", 0.9)],  # only one letter after the number is left out
     ],
 )
 def test_nothing_readable_is_no_match_without_a_candidate(items: list[tuple[str, float]]) -> None:
@@ -107,6 +110,63 @@ def test_building_letters_and_number_in_neighbouring_boxes_are_joined() -> None:
 
 def test_joined_boxes_take_the_lower_confidence() -> None:
     assert decide_spec(("SCI", 0.9), ("333", 0.5))[0] == PhotoResult.UNCLEAR
+
+
+# OCR sometimes lists the number's box before the building letters' box (campus test photos).
+@pytest.mark.parametrize(
+    ("items", "answer"),
+    [
+        ([("333", 0.8), ("SCI", 0.9)], "SCI333"),
+        ([("1121-1", 0.8), ("EME", 0.9)], "EME1121"),  # the sub-room splits its box in two words
+        ([("1121-1", 0.8), ("TO EME", 0.9)], "EME1121"),  # the later box's last word goes first
+    ],
+)
+def test_number_box_read_before_the_building_box_is_joined(
+    items: list[tuple[str, float]], answer: str
+) -> None:
+    assert decide_spec(*items, answers=[answer]) == (PhotoResult.MATCH, Candidate(answer, 0.8))
+
+
+def test_a_three_letter_word_after_the_number_box_is_another_building() -> None:
+    # The cost of joining boxes in both orders: THE333 is read like LIB333 (team to decide).
+    assert decide_spec(("333", 0.9), ("THE", 0.9)) == (
+        PhotoResult.NO_MATCH,
+        Candidate("THE333", 0.9),
+    )
+
+
+@pytest.mark.parametrize(
+    ("items", "confidence"),
+    [
+        ([("LIB 314W", 0.97)], 0.97),
+        ([("lib314w", 0.97)], 0.97),
+        ([("LIB 314W-B", 0.97)], 0.97),
+        ([("LIB", 0.9), ("314W", 0.8)], 0.8),
+    ],
+)
+def test_one_letter_after_the_number_is_left_out(
+    items: list[tuple[str, float]], confidence: float
+) -> None:
+    result = decide_spec(*items, answers=["LIB314"])
+    assert result == (PhotoResult.MATCH, Candidate("LIB314", confidence))
+
+
+@pytest.mark.parametrize(("text", "answer"), [("ADM 119-1", "ADM119"), ("EME 1121-1", "EME1121")])
+def test_a_sub_room_after_a_hyphen_is_left_out(text: str, answer: str) -> None:
+    assert decide_spec((text, 0.9), answers=[answer]) == (PhotoResult.MATCH, Candidate(answer, 0.9))
+
+
+@pytest.mark.parametrize(
+    ("items", "answer", "candidate"),
+    [
+        ([("ADM 0267", 0.9)], "ADM026", "ADM0267"),  # a digit is never cut off
+        ([("SCI", 1.0), ("1251", 0.9)], "SCI125", "SCI1251"),  # the letter of 125V read as 1
+    ],
+)
+def test_an_extra_digit_is_one_character_away(
+    items: list[tuple[str, float]], answer: str, candidate: str
+) -> None:
+    assert decide_spec(*items, answers=[answer]) == (PhotoResult.UNCLEAR, Candidate(candidate, 0.9))
 
 
 def test_four_digit_room_number_matches() -> None:

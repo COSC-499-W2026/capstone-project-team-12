@@ -5,7 +5,7 @@ OCR output (spec, Testing & Acceptance). Rules from the spec, Game Flow > Stage 
 
 - Normalise: uppercase, remove spaces and hyphens, keep tokens of 3 letters and 3 or 4 digits.
   The building letters and the number may be read as separate boxes, so neighbouring boxes are
-  also joined.
+  also joined, in both orders: OCR sometimes lists the number's box before the letters' box.
 - Decide on the best candidate: an accepted answer read with at least the match confidence is
   MATCH; an accepted answer from the unclear confidence up, a token one character away from an
   answer from the unclear confidence up, or an answer's number read without its building letters
@@ -14,6 +14,11 @@ OCR output (spec, Testing & Acceptance). Rules from the spec, Game Flow > Stage 
 Spaces and hyphens separate words, and a token is a whole word or two neighbouring words joined
 ("ROOM SCI 333" gives SCI333). Searching the text with the separators already removed would take
 the last three letters of any word, so "ROOM 333" would read as another building, OOM333.
+
+Real signs may carry a letter after the number ("LIB 314W", "SCI 126A"), which accepted answers
+cannot hold (3 letters and 3 or 4 digits), so one letter after the digits is left out: LIB314W is
+the candidate LIB314. Rooms that differ only by that letter are then one location (a known limit,
+for the team to decide). Digits are never cut off: ADM0267 is not ADM026.
 
 Choices the spec leaves open (proposed, to be confirmed by the team): "one character away" is one
 substitution, insertion or deletion (Levenshtein distance 1); a number read without building
@@ -38,8 +43,10 @@ from app.models.enums import FeedbackCode, PhotoResult
 
 BUILDING_LETTERS = 3  # every answer starts with its building code, e.g. "SCI" (spec, Locations)
 SEPARATORS = re.compile(r"[ -]")
-ROOM_NUMBER = re.compile(ANSWER_PATTERN)  # the format of an accepted answer, e.g. "SCI333"
-NUMBER = re.compile(r"(?<![0-9])[0-9]{3,4}$")  # 3 or 4 digits ending a word, e.g. "CI333"
+# An accepted answer's format and at most one letter after it: "SCI333", or LIB314 in "LIB314W".
+ROOM_NUMBER = re.compile(rf"({ANSWER_PATTERN.strip('^$')})[A-Z]?")
+# 3 or 4 digits ending a word, before at most one letter: "333" in "CI333", "314" in "314W".
+NUMBER = re.compile(r"(?<![0-9])([0-9]{3,4})[A-Z]?$")
 
 FEEDBACK = {
     PhotoResult.MATCH: FeedbackCode.VERIFY_SUCCESS,
@@ -96,8 +103,9 @@ def decide(
     `accepted_answers` are the session location's snapshot, already normalised ("SCI333").
     The best candidate decides: a better result wins, then a higher confidence.
     """
-    words = _words(boxes)
-    rooms = _room_numbers(words)
+    by_box = _words(boxes)
+    words = [word for box in by_box for word in box]
+    rooms = _room_numbers(words, by_box)
     answers = frozenset(accepted_answers)
     numbers = {answer[BUILDING_LETTERS:] for answer in answers}
     judged = [(_judge(room, answers, thresholds), room) for room in rooms]
@@ -112,23 +120,35 @@ def decide(
     return Decision(result, best)
 
 
-def _words(boxes: Sequence[TextBox]) -> list[Candidate]:
-    """Every word of every box in reading order, uppercase, with its box's confidence."""
-    return [
-        Candidate(word, box.confidence)
+def _words(boxes: Sequence[TextBox]) -> list[list[Candidate]]:
+    """The words of each box in reading order, uppercase, with their box's confidence.
+
+    Boxes without a word are left out, so neighbouring boxes are the ones that hold words.
+    """
+    by_box = [
+        [Candidate(word, box.confidence) for word in SEPARATORS.split(box.text.upper()) if word]
         for box in boxes
-        for word in SEPARATORS.split(box.text.upper())
-        if word
     ]
+    return [words for words in by_box if words]
 
 
-def _room_numbers(words: Sequence[Candidate]) -> list[Candidate]:
-    """Room numbers read as one word, or as two neighbouring words joined (lower confidence)."""
-    pairs = [
-        Candidate(first.text + second.text, min(first.confidence, second.confidence))
-        for first, second in pairwise(words)
+def _room_numbers(
+    words: Sequence[Candidate], by_box: Sequence[Sequence[Candidate]]
+) -> list[Candidate]:
+    """Room numbers read as one word, or as two neighbouring words joined (lower confidence).
+
+    Words are joined in reading order, and neighbouring boxes also the other way round: the last
+    word of the later box before the first word of the earlier one, for a number read before its
+    building letters ("1121-1", then "EME"). Only boxes are reversed, because a hyphen splits
+    "1121-1" into two words, so the building letters are never the number's neighbouring word.
+    """
+    pairs = [*pairwise(words), *((later[-1], earlier[0]) for earlier, later in pairwise(by_box))]
+    joined = [Candidate(a.text + b.text, min(a.confidence, b.confidence)) for a, b in pairs]
+    return [
+        Candidate(found.group(1), text.confidence)
+        for text in [*words, *joined]
+        if (found := ROOM_NUMBER.fullmatch(text.text))
     ]
-    return [text for text in [*words, *pairs] if ROOM_NUMBER.fullmatch(text.text)]
 
 
 def _numbers_without_building(
@@ -139,9 +159,9 @@ def _numbers_without_building(
         room.text[BUILDING_LETTERS:] for room in rooms if room.confidence >= thresholds.unclear
     }
     return [
-        Candidate(match.group(), word.confidence)
+        Candidate(match.group(1), word.confidence)
         for word in words
-        if (match := NUMBER.search(word.text)) and match.group() not in with_building
+        if (match := NUMBER.search(word.text)) and match.group(1) not in with_building
     ]
 
 
