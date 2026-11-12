@@ -76,7 +76,21 @@ def create_refresh_token(
 
 def rotate_tokens(token: str, db: Session) -> TokenPair:
     """Rotates the provided token represented by token_id, then creates and returns a new
-    JWT access code and refresh token in the same family."""
+    JWT access code and refresh token in the same family.
+
+    The user row is locked before the token row, same as a password reset. Otherwise a
+    reset can revoke the tokens it can see while this insert is still uncommitted, and
+    the new token stays usable after the reset.
+    """
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    # no lock yet: only which user, so that row can be taken before the token row
+    user_id = db.scalar(select(RefreshToken.user_id).where(RefreshToken.token_hash == token_hash))
+    if user_id is None:
+        raise AppError(ErrorCode.NOT_AUTHENTICATED)
+    # reset takes FOR NO KEY UPDATE on the user (consume_token). FOR SHARE waits for it,
+    # and the reset waits for this. FOR KEY SHARE would not, so it would not close the race.
+    db.execute(select(User.id).where(User.id == user_id).with_for_update(read=True))
+    # locks the token and reads it again, so a reset that committed while we waited is seen
     valid_token_id = validate_refresh_token(token, db)
     if valid_token_id is None:
         raise AppError(ErrorCode.NOT_AUTHENTICATED)
@@ -128,7 +142,12 @@ def validate_refresh_token(token: str, db: Session) -> UUID | None:
 def revoke_refresh_tokens(user_id: UUID, db: Session) -> None:
     """Revokes all refresh tokens for the given user_id.
     This function does not commit: the caller owns the transaction"""
-    stmt = update(RefreshToken).where(RefreshToken.user_id == user_id).values(revoked_at=now())
+    # tokens revoked earlier keep the time they were revoked
+    stmt = (
+        update(RefreshToken)
+        .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=now())
+    )
     db.execute(stmt)
     db.flush()
 
@@ -136,7 +155,11 @@ def revoke_refresh_tokens(user_id: UUID, db: Session) -> None:
 def revoke_token_family(family_id: UUID, db: Session) -> None:
     """Revokes every refresh token in one family, which is one sign-in on one device.
     This function does not commit: the caller owns the transaction"""
-    stmt = update(RefreshToken).where(RefreshToken.family_id == family_id).values(revoked_at=now())
+    stmt = (
+        update(RefreshToken)
+        .where(RefreshToken.family_id == family_id, RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=now())
+    )
     db.execute(stmt)
     db.flush()
 
