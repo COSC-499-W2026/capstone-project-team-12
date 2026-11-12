@@ -29,6 +29,11 @@ jobs:
             src/backend/requirements.txt
             src/backend/requirements-dev.txt
 
+      - name: Create a fresh venv
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
         working-directory: src/backend
