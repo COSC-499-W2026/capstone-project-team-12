@@ -6,6 +6,7 @@ OCR output (spec, Testing & Acceptance). Rules from the spec, Game Flow > Stage 
 - Normalise: uppercase, remove spaces and hyphens, keep tokens of 3 letters and 3 or 4 digits.
   The building letters and the number may be read as separate boxes, so neighbouring boxes are
   also joined, in both orders: OCR sometimes lists the number's box before the letters' box.
+  That other order is a guess, so it may find the answer but never another building.
 - Decide on the best candidate: an accepted answer read with at least the match confidence is
   MATCH; an accepted answer from the unclear confidence up, a token one character away from an
   answer from the unclear confidence up, or an answer's number read without its building letters
@@ -33,7 +34,7 @@ boxes and candidates is left out of `repr`, so logs and tracebacks never show a 
 """
 
 import re
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 from itertools import pairwise
 
@@ -101,14 +102,23 @@ def decide(
     """Apply the decision table to the OCR boxes of one photo.
 
     `accepted_answers` are the session location's snapshot, already normalised ("SCI333").
-    The best candidate decides: a better result wins, then a higher confidence.
+    The best candidate decides: a better result wins, then the earlier row of the table (the
+    answer, then one character away, then a number alone), then a higher confidence.
     """
     by_box = _words(boxes)
     words = [word for box in by_box for word in box]
-    rooms = _room_numbers(words, by_box)
+    rooms = _room_numbers([*words, *_joined(pairwise(words))])
+    # The number's box read before the letters' box ("1121-1", then "EME"). The order is a guess,
+    # so these count only as the answer or one character away from it: never another building.
+    guessed = _room_numbers(_joined((later[-1], first[0]) for first, later in pairwise(by_box)))
     answers = frozenset(accepted_answers)
     numbers = {answer[BUILDING_LETTERS:] for answer in answers}
     judged = [(_judge(room, answers, thresholds), room) for room in rooms]
+    judged += [
+        (result, room)
+        for room in guessed
+        if (result := _judge(room, answers, thresholds)) != PhotoResult.NO_MATCH
+    ]
     judged += [
         (PhotoResult.UNCLEAR, number)
         for number in _numbers_without_building(words, rooms, thresholds)
@@ -116,7 +126,15 @@ def decide(
     ]
     if not judged:
         return Decision(PhotoResult.NO_MATCH, None)
-    result, best = max(judged, key=lambda item: (RANK[item[0]], item[1].confidence))
+    result, best = max(
+        judged,
+        key=lambda item: (
+            RANK[item[0]],
+            item[1].text in answers,
+            not item[1].text.isdigit(),  # a room number before a number alone
+            item[1].confidence,
+        ),
+    )
     return Decision(result, best)
 
 
@@ -132,21 +150,20 @@ def _words(boxes: Sequence[TextBox]) -> list[list[Candidate]]:
     return [words for words in by_box if words]
 
 
-def _room_numbers(
-    words: Sequence[Candidate], by_box: Sequence[Sequence[Candidate]]
-) -> list[Candidate]:
-    """Room numbers read as one word, or as two neighbouring words joined (lower confidence).
+def _joined(pairs: Iterable[tuple[Candidate, Candidate]]) -> list[Candidate]:
+    """Each pair of words joined into one, with the lower confidence.
 
-    Words are joined in reading order, and neighbouring boxes also the other way round: the last
-    word of the later box before the first word of the earlier one, for a number read before its
-    building letters ("1121-1", then "EME"). Only boxes are reversed, because a hyphen splits
-    "1121-1" into two words, so the building letters are never the number's neighbouring word.
+    Reversed pairs join whole boxes, not words: a hyphen splits "1121-1" into two words, so the
+    building letters in the next box are never the number's neighbouring word.
     """
-    pairs = [*pairwise(words), *((later[-1], earlier[0]) for earlier, later in pairwise(by_box))]
-    joined = [Candidate(a.text + b.text, min(a.confidence, b.confidence)) for a, b in pairs]
+    return [Candidate(a.text + b.text, min(a.confidence, b.confidence)) for a, b in pairs]
+
+
+def _room_numbers(texts: Iterable[Candidate]) -> list[Candidate]:
+    """The texts that are room numbers, without one letter after the number."""
     return [
         Candidate(found.group(1), text.confidence)
-        for text in [*words, *joined]
+        for text in texts
         if (found := ROOM_NUMBER.fullmatch(text.text))
     ]
 
