@@ -12,9 +12,10 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 import pytest
-from PIL import Image
+from PIL import Image, ImageOps
 
 from app.verification import ocr
 from app.verification.matching import TextBox
@@ -135,6 +136,38 @@ def test_reads_that_arrive_together_build_one_reader(fake_easyocr: FakeEasyOcr) 
 
     assert not second_started_building
     assert len(fake_easyocr.readers) == 1
+
+
+def dark_photo() -> Image.Image:
+    """Grays 40-79 from left to right, with one black and one white pixel in a corner."""
+    pixels = np.tile(np.arange(40, 80, dtype=np.uint8).repeat(4), (160, 1))
+    pixels[0, :2] = (255, 0)
+    return Image.fromarray(pixels)
+
+
+def test_the_second_pass_copy_spreads_a_dim_area_that_auto_contrast_cannot() -> None:
+    photo = dark_photo()
+    assert ImageOps.autocontrast(photo) == photo  # the corner pixels already span 0-255
+
+    second = ocr.local_contrast(photo)
+
+    middle = (20, 20, 140, 140)
+    assert (second.mode, second.size) == ("L", photo.size)
+    assert np.ptp(np.asarray(second.crop(middle))) > np.ptp(np.asarray(photo.crop(middle))) + 10
+
+
+def test_the_second_pass_uses_the_measured_clahe_settings() -> None:
+    measured = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+    second = ocr.local_contrast(dark_photo())
+
+    assert np.array_equal(np.asarray(second), measured.apply(np.asarray(dark_photo())))
+
+
+@pytest.mark.parametrize("mode", ["RGB", "1", "LA"])
+def test_the_second_pass_copy_needs_a_grayscale_image(mode: str) -> None:
+    with pytest.raises(ValueError, match=f"not {mode}"):
+        ocr.local_contrast(gray_image().convert(mode))
 
 
 def test_importing_the_module_loads_neither_easyocr_nor_torch() -> None:
