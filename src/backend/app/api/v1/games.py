@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, PositiveInt, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
+from app.api.v1.me import RecentBadgeResponse
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.arrival import confirm_arrival
@@ -174,13 +175,6 @@ def game_status(
     return GameStatusResponse.model_validate(status, from_attributes=True)
 
 
-class BadgeResponse(BaseModel):
-    achievement_key: str
-    icon_key: str
-    language: Language | None = Field(description="Null for a global badge.")
-    unlocked_at: datetime
-
-
 class GameEngagementResponse(BaseModel):
     """What the game added to the student's engagement. A streak field comes with A13 (#87)."""
 
@@ -188,7 +182,7 @@ class GameEngagementResponse(BaseModel):
         ge=1, le=5, description="The level in the game's language as of the game's last points."
     )
     level_up: bool = Field(description="Whether the game's points raised the level.")
-    new_badges: list[BadgeResponse] = Field(
+    new_badges: list[RecentBadgeResponse] = Field(
         description="Badges the game's locations unlocked, global ones included, oldest first."
     )
 
