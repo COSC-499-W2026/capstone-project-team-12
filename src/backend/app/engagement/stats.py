@@ -155,9 +155,10 @@ def get_game_engagement(
         )
         for unlock, achievement in db.execute(statement).all()
     )
+    level = level_for_points(after)
     return GameEngagement(
-        level=level_for_points(after),
-        level_up=level_for_points(after) > level_for_points(before),
+        level=level,
+        level_up=level > level_for_points(before),
         new_badges=badges,
     )
 
