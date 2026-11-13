@@ -16,13 +16,7 @@ from app.engagement.interface import get_language_engagement_stats, list_unlocke
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.history import list_history
 from app.models.accounts import User
-from app.models.enums import (
-    Difficulty,
-    Language,
-    SessionEndReason,
-    SessionState,
-    UserRole,
-)
+from app.models.enums import Difficulty, Language, SessionEndReason, SessionState, UserRole
 
 me_router = APIRouter(prefix="/me", tags=["me"])
 
@@ -264,10 +258,6 @@ def get_my_achievements(
     )
 
 
-# a bigger page would overflow the database OFFSET (500); nobody has 10,000 pages of games
-MAX_PAGE = 10_000
-
-
 class GameHistoryItemResponse(BaseModel):
     """One finished game. Never a location's name, room or coordinates."""
 
@@ -307,8 +297,8 @@ class GameHistoryResponse(BaseModel):
         "The signed-in user's finished games (completed, or abandoned for any reason: quit, "
         "reset, expired or class closed), newest first, optionally in one language. Open games "
         "are not listed; an open game that has been idle for the expiry limit is expired first, "
-        "so it is listed. Paged with page (1 to 10,000) and page_size (default 20, at most "
-        "100); a page past the end has no items. The details of a game come from its summary. "
+        "so it is listed. Paged with page and page_size (default 20, at most 100); a page past "
+        "the end has no items. The details of a game come from its summary. "
         "Admins don't play, so for them it is 403 FORBIDDEN_ROLE."
     ),
     responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
@@ -317,7 +307,7 @@ def list_my_games(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     language: Language | None = None,
-    page: Annotated[int, Query(ge=1, le=MAX_PAGE)] = 1,
+    page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> GameHistoryResponse:
     """Read one page of the history; an expiry done while reading is committed."""

@@ -165,7 +165,7 @@ def test_a_class_game_has_its_class_and_difficulty(
     assert (item["class_id"], item["language"], item["difficulty"]) == expected
 
 
-def test_games_that_ended_at_the_same_time_come_newest_id_first(
+def test_games_that_ended_at_the_same_time_keep_a_stable_order(
     get: Callable[..., Response],
     make_user: Callable[..., User],
     finished: Callable[..., GameSession],
@@ -280,10 +280,25 @@ def test_refused(
     assert_error(client.get(URL), 401, ErrorCode.NOT_AUTHENTICATED)
     for params in (
         {"page": 0},
-        {"page": 10_001},
-        {"page": 10**18},  # would overflow the OFFSET
         {"page_size": 0},
         {"page_size": 101},
         {"language": "xx"},
     ):
         assert_error(get(student, **params), 422, ErrorCode.VALIDATION_ERROR)
+
+
+@pytest.mark.parametrize("page", [10_001, 10**18])
+def test_a_page_past_the_last_one_is_empty(
+    get: Callable[..., Response],
+    make_user: Callable[..., User],
+    finished: Callable[..., GameSession],
+    page: int,
+) -> None:
+    student = make_user()
+    finished(student, NOON)
+
+    response = get(student, page=page)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["items"], body["total"], body["has_next_page"]) == ([], 1, False)

@@ -71,6 +71,8 @@ def list_history(
         finished.append(GameSession.target_language == language)
 
     total = db.scalar(select(func.count()).select_from(GameSession).where(*finished)) or 0
+    if (page - 1) * page_size >= total:
+        return HistoryPage(items=(), total=total)
     # a shuffled-away row is skipped, never completed, so it isn't counted
     completed = (
         select(func.count())
