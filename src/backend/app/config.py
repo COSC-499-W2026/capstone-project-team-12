@@ -2,14 +2,16 @@
 
 from email.utils import parseaddr
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import NonNegativeInt, PositiveInt, field_validator, model_validator
+from pydantic import Field, NonNegativeInt, PositiveInt, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # AudioService implementations (spec, AudioService); "hybrid" and "ai_generated" are Future Work.
 AudioServiceType = Literal["uploaded"]
+# an OCR confidence, as EasyOCR reports it
+Confidence = Annotated[float, Field(ge=0, le=1)]
 
 
 class Settings(BaseSettings):
@@ -55,6 +57,11 @@ class Settings(BaseSettings):
     max_shuffles_per_session: NonNegativeInt = 2
     max_resets_per_day: NonNegativeInt = 3
     max_photo_attempts: PositiveInt = 6
+    # Stage 2 decision table: an accepted answer read with at least the match confidence is a
+    # MATCH, from the unclear confidence up it is UNCLEAR. Starting values, to be calibrated with
+    # the OCR evaluation photos (spec, Testing & Acceptance)
+    ocr_match_confidence: Confidence = 0.60
+    ocr_unclear_confidence: Confidence = 0.45
     session_idle_expiry_hours: PositiveInt = 24
     # Stage 1 navigation (spec, Stage 1: Navigation)
     gps_trend_interval_seconds: PositiveInt = 25  # compare with a reference about this old
@@ -119,6 +126,12 @@ class Settings(BaseSettings):
     def _trend_reset_after_interval(self) -> "Settings":
         if self.gps_trend_reset_seconds <= self.gps_trend_interval_seconds:
             raise ValueError("gps_trend_reset_seconds must exceed gps_trend_interval_seconds")
+        return self
+
+    @model_validator(mode="after")
+    def _unclear_not_above_match(self) -> "Settings":
+        if self.ocr_unclear_confidence > self.ocr_match_confidence:
+            raise ValueError("ocr_unclear_confidence must not exceed ocr_match_confidence")
         return self
 
 

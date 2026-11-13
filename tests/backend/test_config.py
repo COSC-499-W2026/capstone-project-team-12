@@ -98,6 +98,33 @@ def test_trend_reset_must_exceed_the_interval(
         Settings(_env_file=None)
 
 
+def test_ocr_confidences_default_to_the_spec_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(_env_file=None)
+    assert (settings.ocr_match_confidence, settings.ocr_unclear_confidence) == (0.60, 0.45)
+    monkeypatch.setenv("OCR_MATCH_CONFIDENCE", "0.7")
+    monkeypatch.setenv("OCR_UNCLEAR_CONFIDENCE", "0.7")  # equal is allowed: no UNCLEAR band
+    settings = Settings(_env_file=None)
+    assert (settings.ocr_match_confidence, settings.ocr_unclear_confidence) == (0.7, 0.7)
+
+
+@pytest.mark.parametrize("name", ["OCR_MATCH_CONFIDENCE", "OCR_UNCLEAR_CONFIDENCE"])
+@pytest.mark.parametrize("value", ["-0.1", "1.1"])
+def test_ocr_confidences_must_be_between_0_and_1(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError, match=name.lower()):
+        Settings(_env_file=None)
+
+
+def test_ocr_unclear_confidence_must_not_exceed_the_match_confidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OCR_UNCLEAR_CONFIDENCE", "0.65")
+    with pytest.raises(ValidationError, match="ocr_unclear_confidence"):
+        Settings(_env_file=None)
+
+
 def test_get_settings_is_cached() -> None:
     assert get_settings() is get_settings()
 
