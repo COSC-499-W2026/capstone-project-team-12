@@ -93,6 +93,8 @@ def echo_server() -> Iterator[str]:
     """The base URL of a local HTTP server that echoes each request (see _EchoHandler)."""
     server = HTTPServer(("127.0.0.1", 0), _EchoHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    yield f"http://127.0.0.1:{server.server_port}/"
-    server.shutdown()
-    server.server_close()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/"
+    finally:
+        server.shutdown()
+        server.server_close()

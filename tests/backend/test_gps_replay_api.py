@@ -66,7 +66,7 @@ def test_walking_away_then_back_plays_to_the_end(replay_route: Callable[..., Any
     assert code == 0
     assert spoken(lines) == ["NAV_START", "NAV_GETTING_FARTHER", "NAV_GETTING_CLOSER"]
     assert lines[-1] == (
-        "done: 12 pings, spoken NAV_START, NAV_GETTING_FARTHER, NAV_GETTING_CLOSER"
+        "done: 12 pings, 0 refused, spoken NAV_START, NAV_GETTING_FARTHER, NAV_GETTING_CLOSER"
     )
     assert (row.status, row.last_ping_at) == (
         LocationStatus.NAVIGATING,

@@ -91,6 +91,40 @@ def test_each_ping_is_printed_after_waiting_its_time() -> None:
     assert {kwargs["token"] for _, _, kwargs in send.calls} == {"token"}
 
 
+def test_a_route_that_is_not_utf8_is_refused(tmp_path: Any) -> None:
+    path = tmp_path / "route.csv"
+    path.write_text("t_s,lat,lng,accuracy_m\n0,49.94,-119.39,5\n", encoding="utf-16")
+
+    code = gps_replay.main([str(path), "--email", "s@x.com"], send=playing())
+
+    assert code == 2
+
+
+def test_every_refused_ping_stops_the_replay() -> None:
+    send = playing(*(api_error(422, "VALIDATION_ERROR") for _ in range(3)))
+
+    code, lines = run(send)
+
+    assert code == 1
+    assert lines[-1] == "done: 3 pings, 3 refused, spoken nothing"
+
+
+def test_a_string_error_is_an_http_error() -> None:
+    send = playing((422, {"error": "upstream timeout"}))
+
+    code, lines = run(send, steps=STEPS[:1])
+
+    assert code == 1
+    assert "HTTP_ERROR" in lines[1]
+
+
+def test_a_login_token_must_be_text() -> None:
+    for body in ({"access_token": ""}, {"access_token": None}, {"access_token": 5}):
+        send = FakeSend({"POST /api/v1/auth/login": [(200, body)]})
+        with pytest.raises(ApiError, match="access_token"):
+            Api.login(send, "a@b.c", "pw")
+
+
 def test_a_bad_ping_body_stops_the_replay() -> None:
     send = playing((200, {"speak": True}), (200, ping_answer("NAV_START")))
 
@@ -177,7 +211,7 @@ def test_the_output_shows_each_code_and_the_spoken_ones_at_the_end() -> None:
         "t=    0s  acc    5 m  NAV_START            spoken  trend -        can_confirm=no",
         "t=    5s  acc    5 m  NAV_START            silent  trend -        can_confirm=no",
         "t=   30s  acc   60 m  NAV_GETTING_CLOSER   spoken  trend closer   can_confirm=no",
-        "done: 3 pings, spoken NAV_START, NAV_GETTING_CLOSER",
+        "done: 3 pings, 0 refused, spoken NAV_START, NAV_GETTING_CLOSER",
     ]
 
 
