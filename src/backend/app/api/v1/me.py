@@ -108,7 +108,7 @@ class RecentBadgeResponse(BaseModel):
 
     achievement_key: str
     icon_key: str
-    language: Language | None
+    language: Language | None = Field(description="Null for a global badge.")
     unlocked_at: datetime
 
 

@@ -33,7 +33,7 @@ def get_summary(student_id: UUID, game_id: UUID, db: Session) -> GameSummary:
 
 def summary_of(game: GameSession, db: Session) -> GameSummary:
     """The summary of a loaded game, read fresh from the database. Doesn't write."""
-    # every row, the ones a shuffle replaced too: an award always belongs to one of them
+    # every row, shuffled ones too: only finished rows have awards, and a shuffle never replaces one
     location_ids = db.scalars(
         select(SessionLocation.id).where(SessionLocation.session_id == game.id)
     ).all()
