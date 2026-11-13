@@ -157,7 +157,10 @@ class Api:
     def login(cls, send: Send, email: str, password: str) -> Api:
         form = {"username": email, "password": password}
         body = _fields(_check(*send("POST", f"{API}/auth/login", form=form)), "access_token")
-        return cls(send, body["access_token"])
+        token = body["access_token"]
+        if not isinstance(token, str) or not token:
+            raise ApiError(200, "UNEXPECTED_BODY", "access_token")
+        return cls(send, token)
 
     def current_game(self) -> str:
         return str(_fields(self._call("GET", "/games/current"), "session_id")["session_id"])
@@ -193,7 +196,9 @@ def _fields(body: Any, *keys: str) -> dict[str, Any]:
 
 def _check(status: int, body: Any) -> Any:
     if status >= 400:
-        error = body.get("error", {}) if isinstance(body, dict) else {}
+        error = body.get("error") if isinstance(body, dict) else None
+        if not isinstance(error, dict):
+            raise ApiError(status, "HTTP_ERROR", str(body))
         raise ApiError(status, error.get("code", "HTTP_ERROR"), error.get("message", str(body)))
     return body
 
@@ -235,6 +240,8 @@ def replay(
     out(f"game {game_id}, location {location['position']}: {len(steps)} pings")
 
     spoken: list[str] = []
+    accepted = 0
+    refused = 0
     clock = time.monotonic if now is None else now
     start = clock()
     # catching up after a slow answer must not send the next ping inside the 2 s rate limit
@@ -246,10 +253,12 @@ def replay(
         try:
             answer = api.ping(game_id, step)
         except ApiError as error:
+            refused += 1
             out(f"t={step.t_s:>5.0f}s  {error}")
             if error.code in STOP_CODES:
                 return 1
             continue
+        accepted += 1
         out(describe(step, answer))
         if answer["speak"]:
             spoken.append(answer["feedback"]["code"])
@@ -264,8 +273,8 @@ def replay(
                 return 1
             out(f"arrival confirmed: {codes}, now in Stage 2 ({arrival['stage']})")
             return 0
-    out(f"done: {len(steps)} pings, spoken {', '.join(spoken) or 'nothing'}")
-    return 0
+    out(f"done: {len(steps)} pings, {refused} refused, spoken {', '.join(spoken) or 'nothing'}")
+    return 0 if accepted else 1
 
 
 def main(argv: list[str] | None = None, send: Send | None = None) -> int:
@@ -280,7 +289,7 @@ def main(argv: list[str] | None = None, send: Send | None = None) -> int:
     try:
         with args.route.open(newline="", encoding="utf-8-sig") as file:
             steps = read_route(file)
-    except (OSError, RouteError) as error:
+    except (OSError, UnicodeDecodeError, RouteError) as error:
         print(f"{args.route}: {error}", file=sys.stderr)
         return 2
     password = os.environ.get("GPS_REPLAY_PASSWORD") or getpass.getpass("Password: ")
