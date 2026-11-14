@@ -3,7 +3,7 @@
 #8 creates classes, access_codes and class_enrollments; the engagement tables follow later.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from sqlalchemy import (
@@ -20,7 +20,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 from app.models.columns import created_at, in_check, language_check, updated_at, uuid_pk
-from app.models.enums import AchievementCategory, EnrollmentEndReason, PointsSourceType
+from app.models.enums import (
+    AchievementCategory,
+    DailyChallengeType,
+    EnrollmentEndReason,
+    PointsSourceType,
+)
 
 # Letters and digits that are hard to mix up when read aloud or copied by hand:
 # no 0/O, no 1/I/L. The code generator must pick from these characters too.
@@ -108,8 +113,8 @@ class ClassEnrollment(Base):
 
     id: Mapped[UUID] = uuid_pk()
     student_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
-    class_id: Mapped[UUID] = mapped_column(index=True)  # class rosters and analytics
-    access_code_id: Mapped[UUID]  # checked by the (access_code_id, class_id) FK above
+    class_id: Mapped[UUID] = mapped_column(index=True)
+    access_code_id: Mapped[UUID]
     language: Mapped[str]
     is_active: Mapped[bool] = mapped_column(default=True, server_default=true())
     end_reason: Mapped[str | None]
@@ -210,3 +215,90 @@ class UserAchievement(Base):
     # keep the transaction's now(), the same as points_ledger.created_at: a game summary
     # matches a badge to its award by these two times being equal (get_game_engagement)
     unlocked_at: Mapped[datetime] = created_at()
+
+
+class UserStats(Base):
+    """Global streak statistics for a student across all languages."""
+
+    __tablename__ = "user_stats"
+    __table_args__ = (
+        CheckConstraint(
+            "current_streak_days >= 0",
+            name="current_streak_days_nonnegative",
+        ),
+        CheckConstraint(
+            "best_streak_days >= 0",
+            name="best_streak_days_nonnegative",
+        ),
+        CheckConstraint(
+            "best_streak_days >= current_streak_days",
+            name="best_streak_at_least_current",
+        ),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"),
+        primary_key=True,
+    )
+    current_streak_days: Mapped[int] = mapped_column(
+        default=0,
+        server_default=text("0"),
+    )
+    best_streak_days: Mapped[int] = mapped_column(
+        default=0,
+        server_default=text("0"),
+    )
+    last_active_date: Mapped[date | None]
+    updated_at: Mapped[datetime] = updated_at()
+
+
+class DailyChallenge(Base):
+    """One of three challenges generated per student per Vancouver day."""
+
+    __tablename__ = "daily_challenges"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "challenge_date",
+            "slot",
+        ),
+        CheckConstraint(
+            "slot BETWEEN 1 AND 3",
+            name="slot_range",
+        ),
+        in_check(
+            "challenge_type",
+            DailyChallengeType,
+            name="challenge_type",
+        ),
+        CheckConstraint(
+            "reward_points IN (50, 100)",
+            name="reward_points_allowed",
+        ),
+        CheckConstraint(
+            "progress_required > 0",
+            name="progress_required_positive",
+        ),
+        CheckConstraint(
+            "progress_current >= 0 AND progress_current <= progress_required",
+            name="progress_within_required",
+        ),
+    )
+
+    id: Mapped[UUID] = uuid_pk()
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"),
+        index=True,
+    )
+    challenge_date: Mapped[date]
+    slot: Mapped[int]
+    challenge_type: Mapped[str]
+    params: Mapped[dict[str, object]] = mapped_column(JSONB)
+    description_key: Mapped[str]
+    reward_points: Mapped[int]
+    progress_current: Mapped[int] = mapped_column(
+        default=0,
+        server_default=text("0"),
+    )
+    progress_required: Mapped[int]
+    completed_at: Mapped[datetime | None]
