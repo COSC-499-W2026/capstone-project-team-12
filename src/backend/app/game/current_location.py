@@ -84,6 +84,11 @@ def describe(game: GameSession, row: SessionLocation, db: Session) -> CurrentLoc
         stage=stage,
         clue_audio_url=get_audio_service().clue_audio_url(row.audio_asset_id, db),
         attempts_used=row.attempts_used,
-        attempts_left=max(0, get_settings().max_photo_attempts - row.attempts_used),
+        attempts_left=attempts_left(row),
         gps_override_available_at=override_at,
     )
+
+
+def attempts_left(row: SessionLocation) -> int:
+    """Photo attempts the location has left (max_photo_attempts, never below 0)."""
+    return max(0, get_settings().max_photo_attempts - row.attempts_used)
