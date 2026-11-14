@@ -23,6 +23,13 @@ class PointsSourceType(StrEnum):
     STREAK_MILESTONE = "streak_milestone"
 
 
+class DailyChallengeType(StrEnum):
+    """Types of daily challenges available to students."""
+
+    COMPLETION = "completion"
+    DIFFICULTY = "difficulty"
+
+
 class AchievementCategory(StrEnum):
     """Categories of unlockable achievements."""
 
