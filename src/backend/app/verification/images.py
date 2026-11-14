@@ -99,7 +99,8 @@ def _decode(data: bytes) -> Image.Image:
         image = Image.open(io.BytesIO(data), formats=_FORMATS)
         if image.width * image.height > MAX_PHOTO_PIXELS:
             raise _unsupported(_TOO_MANY_PIXELS)
-        # a JPEG is decoded at a smaller scale when that still leaves the long edge to shrink to
+        # a JPEG is decoded at a smaller scale when that still leaves the long edge to shrink to;
+        # needs Pillow 13.0+: before it, draft() overflows on lossless JPEGs (GHSA-8g5g-8vmr-9782)
         image.draft("RGB", (MAX_LONG_EDGE_PX, MAX_LONG_EDGE_PX))
         image.load()
     except (OSError, SyntaxError, Image.DecompressionBombError) as error:
