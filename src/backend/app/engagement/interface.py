@@ -24,7 +24,7 @@ responsible for committing or rolling back the entire operation.
 """
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select, update
@@ -52,7 +52,11 @@ from app.engagement.stats import (
 from app.engagement.stats import (
     level_for_points as _level_for_points,
 )
-from app.engagement.streaks import record_active_day
+from app.engagement.streaks import (
+    award_streak_milestones,
+    record_active_day,
+    vancouver_date,
+)
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff
 from app.models.engagement import (
@@ -286,7 +290,8 @@ def apply_location_result(
         remain consistent within the caller's transaction.
 
     Pending functionality:
-        Streak milestones and advanced achievement types are not yet implemented.
+        Streak milestones are awarded once at 7 days (100 points) and
+        30 days (300 points). Advanced achievement types are pending.
         Completion badges can be unlocked by successful locations.
 
     Args:
@@ -376,9 +381,23 @@ def apply_location_result(
 
     if awarded > 0:
         streak_days = record_active_day(student_id, db)
+        award_streak_milestones(
+            student_id,
+            streak_days,
+            language=target_language,
+            class_id=class_id,
+            db=db,
+        )
     else:
         global_stats = db.get(UserStats, student_id)
-        streak_days = global_stats.current_streak_days if global_stats is not None else 0
+        today = vancouver_date()
+        streak_days = (
+            global_stats.current_streak_days
+            if global_stats is not None
+            and global_stats.last_active_date is not None
+            and global_stats.last_active_date >= today - timedelta(days=1)
+            else 0
+        )
 
     total_points = stats.total_points if stats is not None else 0
     level = _level_for_points(total_points)

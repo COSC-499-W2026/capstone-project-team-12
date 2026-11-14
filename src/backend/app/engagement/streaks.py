@@ -8,11 +8,18 @@ from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.engagement import UserStats
+from app.models.engagement import PointsLedger, UserLanguageStats, UserStats
+from app.models.enums import Language, PointsSourceType
 
 VANCOUVER = ZoneInfo("America/Vancouver")
+
+STREAK_MILESTONES = {
+    7: 100,
+    30: 300,
+}
 
 
 def vancouver_date(now: datetime | None = None) -> date:
@@ -72,3 +79,69 @@ def record_active_day(
 
     db.flush()
     return stats.current_streak_days
+
+
+def award_streak_milestones(
+    student_id: UUID,
+    streak_days: int,
+    *,
+    language: Language,
+    class_id: UUID | None,
+    db: Session,
+) -> int:
+    """Award any newly reached streak milestones.
+
+    Each milestone is awarded once per student, globally across languages.
+    The language and class are taken from the location that triggered it.
+
+    The caller must hold the student lock and own the transaction.
+    Returns the total number of newly awarded bonus points.
+    """
+    total_awarded = 0
+
+    for milestone, reward in STREAK_MILESTONES.items():
+        if streak_days < milestone:
+            continue
+
+        source_ref = str(milestone)
+
+        existing_award = db.scalar(
+            select(PointsLedger.id).where(
+                PointsLedger.user_id == student_id,
+                PointsLedger.source_type == PointsSourceType.STREAK_MILESTONE,
+                PointsLedger.source_ref == source_ref,
+            )
+        )
+
+        if existing_award is not None:
+            continue
+
+        db.add(
+            PointsLedger(
+                user_id=student_id,
+                source_type=PointsSourceType.STREAK_MILESTONE,
+                source_ref=source_ref,
+                class_id=class_id,
+                language=language,
+                points=reward,
+            )
+        )
+
+        stats = db.get(UserLanguageStats, (student_id, language))
+
+        if stats is None:
+            stats = UserLanguageStats(
+                user_id=student_id,
+                language=language,
+                total_points=reward,
+            )
+            db.add(stats)
+        else:
+            stats.total_points += reward
+
+        total_awarded += reward
+
+        # Persist each unique ledger entry before continuing.
+        db.flush()
+
+    return total_awarded
