@@ -167,22 +167,16 @@ def list_unlocked_achievements(
     Includes language-specific and global achievements. An achievement
     is unlocked only when a matching UserAchievement record exists.
     """
-    definitions = db.scalars(
-        select(Achievement).order_by(Achievement.achievement_key)
-    ).all()
+    definitions = db.scalars(select(Achievement).order_by(Achievement.achievement_key)).all()
 
     unlocks = db.scalars(
         select(UserAchievement).where(
             UserAchievement.user_id == student_id,
-            (UserAchievement.language == language)
-            | (UserAchievement.language.is_(None)),
+            (UserAchievement.language == language) | (UserAchievement.language.is_(None)),
         )
     ).all()
 
-    unlock_by_key = {
-        (unlock.achievement_id, unlock.language): unlock
-        for unlock in unlocks
-    }
+    unlock_by_key = {(unlock.achievement_id, unlock.language): unlock for unlock in unlocks}
 
     completed_count = (
         db.scalar(
@@ -201,9 +195,7 @@ def list_unlocked_achievements(
         is_global = achievement.category == "streak"
         achievement_language = None if is_global else language
 
-        unlock = unlock_by_key.get(
-            (achievement.id, achievement_language)
-        )
+        unlock = unlock_by_key.get((achievement.id, achievement_language))
 
         # Hide inactive definitions unless the user already earned them.
         if not achievement.is_active and unlock is None:
@@ -238,9 +230,7 @@ def list_unlocked_achievements(
     results.sort(
         key=lambda item: (
             not item.unlocked,
-            -item.unlocked_at.timestamp()
-            if item.unlocked_at is not None
-            else 0,
+            -item.unlocked_at.timestamp() if item.unlocked_at is not None else 0,
             item.achievement_key,
         )
     )
