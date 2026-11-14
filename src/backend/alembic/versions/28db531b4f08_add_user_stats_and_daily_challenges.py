@@ -48,7 +48,7 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "best_streak_days >= 0",
-            name=op.f("ck_user_stats_best_streak_at_least_current"),
+            name=op.f("ck_user_stats_best_streak_days_nonnegative"),
         ),
         sa.CheckConstraint(
             "best_streak_days >= current_streak_days",
