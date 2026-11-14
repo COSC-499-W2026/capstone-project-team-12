@@ -140,6 +140,8 @@ class PointsLedger(Base):
     class_id: Mapped[UUID | None]
     language: Mapped[str]
     points: Mapped[int]
+    # keep the transaction's now(), the same as user_achievements.unlocked_at: a game summary
+    # matches a badge to its award by these two times being equal (get_game_engagement)
     created_at: Mapped[datetime] = created_at()
 
 
@@ -205,4 +207,6 @@ class UserAchievement(Base):
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
     achievement_id: Mapped[UUID] = mapped_column(ForeignKey("achievements.id"))
     language: Mapped[str | None]
+    # keep the transaction's now(), the same as points_ledger.created_at: a game summary
+    # matches a badge to its award by these two times being equal (get_game_engagement)
     unlocked_at: Mapped[datetime] = created_at()

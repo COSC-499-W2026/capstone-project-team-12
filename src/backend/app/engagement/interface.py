@@ -13,6 +13,8 @@ Implemented in part:
   Streaks, daily challenges, and advanced achievements are pending.
 - Issue #86: Points, levels, and completion badge unlocking.
   Student engagement, achievements, and statistics API endpoints are pending.
+- Issue #47 (A23): what one game added (level as of the game, level_up, its badges),
+  for the game summary (get_game_engagement).
 
 Callers must check class existence and archived status before enrolment
 so archived classes produce CLASS_ARCHIVED rather than an enrolment error.
@@ -41,7 +43,9 @@ from app.engagement.classes import (
     update_class_settings,
 )
 from app.engagement.stats import (
+    GameEngagement,
     LanguageEngagementStats,
+    get_game_engagement,
     get_language_engagement_stats,
 )
 from app.engagement.stats import (
@@ -85,6 +89,8 @@ __all__ = [
     "validate_code_and_enrol",
     "LanguageEngagementStats",
     "get_language_engagement_stats",
+    "GameEngagement",
+    "get_game_engagement",
     "UnlockedAchievement",
     "list_unlocked_achievements",
 ]
