@@ -28,7 +28,7 @@ numpy==2.4.6
 opencv-python-headless==5.0.0.93
 opentelemetry-api==1.45.0
 packaging==26.3
-pillow==12.3.0
+pillow==13.0.0
 psycopg==3.3.6
 psycopg-binary==3.3.6
 pyclipper==1.4.0
