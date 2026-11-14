@@ -34,6 +34,7 @@ from app.engagement.badges import (
     UnlockedAchievement,
     list_unlocked_achievements,
     unlock_completion_badges,
+    unlock_streak_badges,
 )
 from app.engagement.challenge_progress import record_challenge_progress
 from app.engagement.classes import (
@@ -387,6 +388,9 @@ def apply_location_result(
             language=target_language,
             class_id=class_id,
             db=db,
+        )
+        achievements_unlocked = tuple(
+            sorted((*achievements_unlocked, *unlock_streak_badges(student_id, streak_days, db)))
         )
     else:
         global_stats = db.get(UserStats, student_id)
