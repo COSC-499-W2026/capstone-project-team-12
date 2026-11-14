@@ -5,7 +5,7 @@ from http import HTTPStatus
 from typing import Annotated, Self
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
@@ -14,8 +14,9 @@ from app.accounts.profile import current_class_id, select_class, set_practice_la
 from app.db import get_db
 from app.engagement.interface import get_language_engagement_stats, list_unlocked_achievements
 from app.errors import AppError, ErrorCode, error_responses
+from app.game.history import list_history
 from app.models.accounts import User
-from app.models.enums import Language, UserRole
+from app.models.enums import Difficulty, Language, SessionEndReason, SessionState, UserRole
 
 me_router = APIRouter(prefix="/me", tags=["me"])
 
@@ -254,4 +255,73 @@ def get_my_achievements(
             )
             for item in achievements
         ]
+    )
+
+
+class GameHistoryItemResponse(BaseModel):
+    """One finished game. Never a location's name, room or coordinates."""
+
+    session_id: UUID
+    started_at: datetime
+    ended_at: datetime = Field(
+        description=(
+            "When the game was completed, quit or reset. For an expired or class-closed game, "
+            "its last action."
+        )
+    )
+    language: Language
+    difficulty: Difficulty
+    class_id: UUID | None = Field(description="Null for Practice.")
+    state: SessionState = Field(description="completed or abandoned.")
+    end_reason: SessionEndReason | None = Field(description="Null for a completed game.")
+    total_score: int
+    locations_completed: int
+
+
+class GameHistoryResponse(BaseModel):
+    """A page of finished games (docs/api-conventions.md, Pagination)."""
+
+    items: list[GameHistoryItemResponse]
+    page: int
+    page_size: int
+    total: int
+    has_next_page: bool
+
+
+@me_router.get(
+    "/games",
+    response_model=GameHistoryResponse,
+    operation_id="listMyGames",
+    summary="List my finished games",
+    description=(
+        "The signed-in user's finished games (completed, or abandoned for any reason: quit, "
+        "reset, expired or class closed), newest first, optionally in one language. Open games "
+        "are not listed; an open game that has been idle for the expiry limit is expired first, "
+        "so it is listed. Paged with page and page_size (default 20, at most 100); a page past "
+        "the end has no items. The details of a game come from its summary. "
+        "Admins don't play, so for them it is 403 FORBIDDEN_ROLE."
+    ),
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
+)
+def list_my_games(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    language: Language | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> GameHistoryResponse:
+    """Read one page of the history; an expiry done while reading is committed."""
+    if user.role == UserRole.ADMIN:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
+    history = list_history(user.id, language, page, page_size, db)
+    db.commit()
+    return GameHistoryResponse(
+        items=[
+            GameHistoryItemResponse.model_validate(item, from_attributes=True)
+            for item in history.items
+        ],
+        page=page,
+        page_size=page_size,
+        total=history.total,
+        has_next_page=page * page_size < history.total,
     )
