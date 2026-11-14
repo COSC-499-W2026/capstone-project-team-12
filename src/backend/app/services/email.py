@@ -62,6 +62,9 @@ class EmailService:
             "template": kind,
             "priority": priority_for(kind),
             "params": params or {},
+            # the clock, not now() (the start of the transaction): the send job compares it
+            # with when a reset link was used (consume_token), see email_sender._token_for
+            "created_at": func.clock_timestamp(),
         }
         pending_reset = (EmailOutbox.user_id == user.id, _PENDING_RESET)
         refresh = {"populate_existing": True}
@@ -184,7 +187,9 @@ class EmailService:
                 EmailToken.used_at.is_(None),
                 EmailToken.expires_at > func.now(),
             )
-            .values(used_at=func.now())
+            # the clock, not now(): it is taken under the user lock, so it orders this use
+            # against mail queued for the user (EmailService.queue_email)
+            .values(used_at=func.clock_timestamp())
             .returning(EmailToken)
         ).one_or_none()
         if token is None:
