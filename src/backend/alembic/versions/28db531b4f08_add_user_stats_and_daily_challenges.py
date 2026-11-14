@@ -48,7 +48,7 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "best_streak_days >= 0",
-            name=op.f("ck_user_stats_best_streak_days_nonnegative"),
+            name=op.f("ck_user_stats_best_streak_at_least_current"),
         ),
         sa.CheckConstraint(
             "best_streak_days >= current_streak_days",
@@ -71,9 +71,9 @@ def upgrade() -> None:
         sa.Column("user_id", sa.Uuid(), nullable=False),
         sa.Column("challenge_date", sa.Date(), nullable=False),
         sa.Column("slot", sa.Integer(), nullable=False),
-        sa.Column("challenge_type", sa.String(), nullable=False),
+        sa.Column("challenge_type", sa.Text(), nullable=False),
         sa.Column("params", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-        sa.Column("description_key", sa.String(), nullable=False),
+        sa.Column("description_key", sa.Text(), nullable=False),
         sa.Column("reward_points", sa.Integer(), nullable=False),
         sa.Column(
             "progress_current",
