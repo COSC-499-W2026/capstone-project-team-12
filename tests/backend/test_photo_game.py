@@ -16,7 +16,6 @@ from app.game.control import quit_game
 from app.game.current_location import Stage
 from app.game.photo import PhotoProgress, finish_photo_location, lock_photo_location
 from app.game.shuffle import shuffle_game
-from app.models.accounts import User
 from app.models.engagement import PointsLedger
 from app.models.enums import Difficulty, Language, LocationStatus, SessionState, SkipReason
 from app.models.game import GameSession, SessionLocation
@@ -203,16 +202,6 @@ def test_lock_refuses_a_new_photo_and_writes_nothing(
     assert game.last_activity_at == AN_HOUR_AGO
 
 
-def test_lock_refuses_another_students_game(
-    db: Session, verifying_game: Callable[..., GameSession], make_user: Callable[..., User]
-) -> None:
-    game = verifying_game()
-
-    error = refused(lambda: lock_photo_location(make_user().id, game.id, db))
-
-    assert error == ErrorCode.NOT_FOUND
-
-
 # finish_photo_location
 
 
@@ -238,15 +227,15 @@ def test_a_match_completes_the_location_scores_it_and_moves_on(
 def test_a_miss_uses_an_attempt_and_stays_in_stage_2(
     db: Session, verifying_game: Callable[..., GameSession]
 ) -> None:
-    game = verifying_game(attempts_used=3)
+    game = verifying_game(attempts_used=4)  # the 5th miss: one before the limit
 
     progress = finish(game, False, db)
 
     assert not db.dirty  # flushed: the app's sessions don't autoflush before the next read
-    assert outcome(progress) == (LocationStatus.VERIFYING, 4, 2, 0)
+    assert outcome(progress) == (LocationStatus.VERIFYING, 5, 1, 0)
     assert (progress.engagement, upcoming(progress)) == (None, None)
     row = row_at(game, 1, db)
-    assert (row.status, row.attempts_used, ledger_rows(row, db)) == (LocationStatus.VERIFYING, 4, 0)
+    assert (row.status, row.attempts_used, ledger_rows(row, db)) == (LocationStatus.VERIFYING, 5, 0)
     assert game.current_position == 1
     assert game.last_activity_at == AN_HOUR_AGO  # a result arriving isn't a game action
 
@@ -290,37 +279,29 @@ def test_the_attempt_limit_comes_from_the_settings(
     assert refused(lambda: lock(used_up, db)) == ErrorCode.ATTEMPTS_EXHAUSTED
 
 
+@pytest.mark.parametrize("state", [SessionState.ACTIVE, SessionState.PAUSED])
 def test_a_match_at_the_last_location_completes_the_game(
-    db: Session, verifying_game: Callable[..., GameSession]
+    db: Session, verifying_game: Callable[..., GameSession], state: SessionState
 ) -> None:
-    game = verifying_game(locations=1)
+    # A8: a game paused while the photo was being read is completed too, and no longer paused
+    game = verifying_game(locations=1, state=state)
 
     progress = finish(game, True, db)
 
     assert (progress.game_state, upcoming(progress)) == (SessionState.COMPLETED, None)
-    assert (game.state, game.completed_at, game.total_score) == (SessionState.COMPLETED, NOW, 100)
+    assert (game.state, game.completed_at, game.paused_at) == (SessionState.COMPLETED, NOW, None)
+    assert game.total_score == 100
 
 
-@pytest.mark.parametrize(
-    ("locations", "state", "paused_at"),
-    [
-        (2, SessionState.PAUSED, AN_HOUR_AGO),  # stays paused at the next location
-        (1, SessionState.COMPLETED, None),  # the last location completes it
-    ],
-)
-def test_a_paused_game_still_takes_the_result(
-    db: Session,
-    verifying_game: Callable[..., GameSession],
-    locations: int,
-    state: SessionState,
-    paused_at: datetime | None,
+def test_a_paused_game_takes_the_result_and_stays_paused(
+    db: Session, verifying_game: Callable[..., GameSession]
 ) -> None:
     # A8: the student paused while the photo was being read
-    game = verifying_game(locations=locations, state=SessionState.PAUSED)
+    game = verifying_game(state=SessionState.PAUSED)
 
     assert finish(game, True, db).status == LocationStatus.COMPLETED
 
-    assert (game.state, game.paused_at, game.total_score) == (state, paused_at, 100)
+    assert (game.state, game.paused_at, game.total_score) == (SessionState.PAUSED, AN_HOUR_AGO, 100)
 
 
 def test_a_location_replaced_by_a_shuffle_gets_nothing(
@@ -339,6 +320,39 @@ def test_a_location_replaced_by_a_shuffle_gets_nothing(
     replacement = row_at(game, 1, db)
     assert (replacement.status, replacement.attempts_used) == (LocationStatus.NAVIGATING, 0)
     assert (game.current_position, game.total_score) == (1, 0)
+
+
+@pytest.mark.parametrize(("attempts_used", "matched"), [(0, True), (5, False)])
+def test_a_second_result_for_a_finished_location_gets_nothing(
+    db: Session, verifying_game: Callable[..., GameSession], attempts_used: int, matched: bool
+) -> None:
+    # completed, then failed: a repeated result must not count again or move the game on twice
+    game = verifying_game(locations=3, attempts_used=attempts_used)
+    finished = row_at(game, 1, db)
+    finish(game, matched, db, finished)
+    before = (finished.status, finished.attempts_used, game.current_position, game.total_score)
+
+    assert finish_photo_location(game.student_id, game.id, finished.id, True, db) is None
+
+    after = (finished.status, finished.attempts_used, game.current_position, game.total_score)
+    assert after == before
+    assert ledger_rows(finished, db) == int(matched)  # only a match writes a ledger row
+    following = row_at(game, 2, db)
+    assert (following.status, following.attempts_used) == (LocationStatus.NAVIGATING, 0)
+
+
+def test_another_students_game_is_never_touched(
+    db: Session, verifying_game: Callable[..., GameSession]
+) -> None:
+    game, other_game = verifying_game(), verifying_game()
+    others = row_at(other_game, 1, db)
+
+    error = refused(lambda: lock_photo_location(game.student_id, other_game.id, db))
+    progress = finish_photo_location(game.student_id, game.id, others.id, True, db)
+
+    assert (error, progress) == (ErrorCode.NOT_FOUND, None)
+    assert (others.status, others.attempts_used) == (LocationStatus.VERIFYING, 0)
+    assert (other_game.last_activity_at, other_game.total_score) == (AN_HOUR_AGO, 0)
 
 
 def test_a_game_that_ended_meanwhile_refuses_the_result(
