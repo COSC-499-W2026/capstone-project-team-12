@@ -10,7 +10,7 @@ Implemented:
 
 Implemented in part:
 - Issue #15: Location scoring, per-language levels, and completion badges.
-  Streaks, daily challenges, and advanced achievements are pending.
+  Streak milestones and advanced achievements are pending.
 - Issue #86: Points, levels, and completion badge unlocking.
   Student engagement, achievements, and statistics API endpoints are pending.
 - Issue #47 (A23): what one game added (level as of the game, level_up, its badges),
@@ -35,6 +35,7 @@ from app.engagement.badges import (
     list_unlocked_achievements,
     unlock_completion_badges,
 )
+from app.engagement.challenge_progress import record_challenge_progress
 from app.engagement.classes import (
     create_class,
     deactivate_access_code,
@@ -69,6 +70,7 @@ from app.models.enums import (
     PointsSourceType,
     UserRole,
 )
+from app.models.game import GameSession, SessionLocation
 from app.services.locks import lock_user
 
 LOCATION_COMPLETION_POINTS = 100
@@ -103,8 +105,8 @@ class EngagementResult:
     """Engagement information returned after processing a location result.
 
     Defines the engagement response contract for Issue #15.
-    Completion badges and daily streaks are implemented. Daily challenges,
-    streak milestones, and advanced achievements are pending implementation.
+    Completion badges, daily streaks, and daily challenge progress are implemented.
+    Streak milestones and advanced achievements are pending implementation.
 
     Attributes:
         location_points_awarded: New location points awarded by this call.
@@ -284,8 +286,7 @@ def apply_location_result(
         remain consistent within the caller's transaction.
 
     Pending functionality:
-        Daily challenges, streak milestones, and advanced achievement
-        types are not yet implemented. challenges_completed is empty.
+        Streak milestones and advanced achievement types are not yet implemented.
         Completion badges can be unlocked by successful locations.
 
     Args:
@@ -347,6 +348,28 @@ def apply_location_result(
             awarded = LOCATION_COMPLETION_POINTS
             db.flush()
 
+    challenges_completed: tuple[str, ...] = ()
+    if awarded > 0:
+        # Use the finalized location's game difficulty; challenge progress is
+        # recorded only for a newly awarded completion, never for retries.
+        game_difficulty = db.scalar(
+            select(GameSession.difficulty)
+            .join(SessionLocation, SessionLocation.session_id == GameSession.id)
+            .where(
+                SessionLocation.id == session_location_id,
+                GameSession.student_id == student_id,
+            )
+        )
+        if game_difficulty is None:
+            raise AppError(ErrorCode.NOT_FOUND)
+        challenges_completed = record_challenge_progress(
+            student_id,
+            difficulty=game_difficulty,
+            language=target_language,
+            class_id=class_id,
+            db=db,
+        )
+
     achievements_unlocked = (
         unlock_completion_badges(student_id, target_language, db) if awarded > 0 else ()
     )
@@ -366,7 +389,7 @@ def apply_location_result(
         level=level,
         level_up=level > previous_level,
         streak_days=streak_days,
-        challenges_completed=(),
+        challenges_completed=challenges_completed,
         achievements_unlocked=achievements_unlocked,
     )
 
