@@ -270,7 +270,7 @@ def test_the_route(
     assert_error(client.get(url), 401, ErrorCode.NOT_AUTHENTICATED)
 
 
-def test_the_route_returns_the_status_when_the_game_completes(
+def test_the_route_returns_the_summary_when_the_game_completes(
     db: Session,
     client: TestClient,
     auth_headers: Callable[[User], dict[str, str]],
@@ -285,10 +285,14 @@ def test_the_route_returns_the_status_when_the_game_completes(
     )
 
     assert response.status_code == 200, response.text
-    assert (response.json()["state"], response.json()["locations"][0]["skip_reason"]) == (
+    body = response.json()
+    assert (body["state"], body["locations"][0]["skip_reason"]) == (
         SessionState.COMPLETED.value,
         SkipReason.DEACTIVATED.value,
     )
+    # the summary (GET /games/{id}/summary): the game ended now, with no points
+    assert body["ended_at"] is not None
+    assert body["engagement"] == {"level": 1, "level_up": False, "new_badges": []}
     db.refresh(game)
     assert game.state == SessionState.COMPLETED
 

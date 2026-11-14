@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.content import interface as content
+from app.engagement.interface import apply_location_result
 from app.errors import AppError, ErrorCode
 from app.game.sessions import session_idle_limit
 from app.models.accounts import User
@@ -195,13 +196,15 @@ def test_quit(
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert set(body) == GAME_FIELDS
+    # the summary (GET /games/{id}/summary)
+    assert set(body) == GAME_FIELDS | {"ended_at", "engagement"}
     assert (body["state"], body["end_reason"], body["paused_at"], body["total_score"]) == (
         SessionState.ABANDONED.value,
         SessionEndReason.QUIT.value,
         None,
         100,
     )
+    assert before <= datetime.fromisoformat(body["ended_at"]) <= datetime.now(UTC)
     assert [location["status"] for location in body["locations"]] == [
         LocationStatus.COMPLETED.value,
         LocationStatus.SKIPPED.value,
@@ -211,6 +214,30 @@ def test_quit(
     db.refresh(game)
     assert (game.state, game.end_reason) == (SessionState.ABANDONED, SessionEndReason.QUIT)
     assert before <= game.last_activity_at <= datetime.now(UTC)
+
+
+def test_quit_returns_the_level_and_badges_the_game_brought(
+    db: Session,
+    post: Callable[..., Response],
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    student = make_user()
+    game = make_game_session(student, total_score=100)
+    first = make_session_location(
+        game, 1, status=LocationStatus.COMPLETED, points_awarded=100, completed_at=datetime.now(UTC)
+    )
+    make_session_location(game, 2, status=LocationStatus.NAVIGATING)
+    apply_location_result(
+        first.id, student.id, completed=True, target_language="ja", class_id=None, db=db
+    )
+
+    body = post(student, game.id, "quit").json()
+
+    engagement = body["engagement"]
+    assert (engagement["level"], engagement["level_up"]) == (1, False)
+    assert [badge["achievement_key"] for badge in engagement["new_badges"]] == ["first_step"]
 
 
 def test_reset(

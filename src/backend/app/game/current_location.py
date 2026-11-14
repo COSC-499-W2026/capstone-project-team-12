@@ -52,8 +52,8 @@ def get_current_location(
 
     If the location was deactivated before the student reached it, it is skipped (0 points) and
     the next one is returned; if it was the last one, the game is completed and its status comes
-    back instead (the summary once it exists, #47). The same lookup errors as pause_game, and 409
-    INVALID_STAGE if the game is out of step. Doesn't commit; a skip is flushed.
+    back instead (the route answers with the game summary). The same lookup errors as pause_game,
+    and 409 INVALID_STAGE if the game is out of step. Doesn't commit; a skip is flushed.
     """
     game = lock_open_game(student_id, game_id, db)
     row = current_row(game, db)
