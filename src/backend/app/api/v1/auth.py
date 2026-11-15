@@ -1,19 +1,17 @@
 from http import HTTPStatus
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Cookie, Depends, Request, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import get_current_user
 from app.accounts.login import get_login_form, get_login_key, login_account
-from app.accounts.logout import logout_user
+from app.accounts.logout import logout_session
 from app.accounts.register import RegisterRequest, RegisterResponse, register_account
 from app.accounts.tokens import REFRESH_TOKEN_LIFETIME, TokenResponse, rotate_tokens
 from app.config import get_settings
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
-from app.models.accounts import User
 from app.services.limiter import limiter
 
 auth_router = APIRouter(prefix="/auth")
@@ -88,32 +86,48 @@ def refresh(
             raise
 
 
-def _set_refresh_cookie(response: Response, token: str) -> None:
-    response.set_cookie(
-        "refresh_token",
-        token,
-        max_age=int(REFRESH_TOKEN_LIFETIME.total_seconds()),  # same lifetime as the DB row
-        path="/api/v1/auth",
-        httponly=True,
-        secure=get_settings().refresh_cookie_secure,
-        samesite="strict",
-    )
-
-
-
 @auth_router.post(
     "/logout",
     tags=["logout"],
     status_code=204,
     operation_id="logoutUser",
-    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
 )
 def logout(
     response: Response,
-    user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
+    refresh_token: Annotated[str | None, Cookie()] = None,
 ) -> None:
-    """Signs the user out on every device by revoking all of their refresh tokens."""
-    logout_user(user, db)
+    """Signs out this device: revokes the sign-in named by the refresh cookie and clears the cookie.
+
+    No access token is needed, so this works after the access token has expired, and for a
+    disabled account. The user's other devices stay signed in. Always returns 204, also when the
+    cookie is missing, unknown or already revoked, so a client can always finish logging out.
+    """
+    logout_session(refresh_token, db)
     db.commit()
-    response.delete_cookie("refresh_token")
+    _delete_refresh_cookie(response)
+
+
+def _refresh_cookie_options() -> dict[str, Any]:
+    """Options shared by setting and deleting the refresh cookie. A browser only deletes a cookie
+    when the delete matches the cookie it holds (path, domain, secure, samesite), so both must use
+    the same options."""
+    return {
+        "key": "refresh_token",
+        "path": "/api/v1/auth",
+        "httponly": True,
+        "secure": get_settings().refresh_cookie_secure,
+        "samesite": "strict",
+    }
+
+
+def _set_refresh_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        value=token,
+        max_age=int(REFRESH_TOKEN_LIFETIME.total_seconds()),  # same lifetime as the DB row
+        **_refresh_cookie_options(),
+    )
+
+
+def _delete_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(**_refresh_cookie_options())
