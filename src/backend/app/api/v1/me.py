@@ -27,7 +27,11 @@ class ProfileResponse(BaseModel):
     email: str
     role: UserRole
     classes: list[UUID] = Field(
-        description="The classes the student is actively enrolled in, most recently joined first."
+        description=(
+            "The classes the student is actively enrolled in, newest first by the date they first "
+            "joined each one. A class they left and rejoined keeps its original join date. Always "
+            "empty for staff and admins: classes a teacher teaches aren't listed here."
+        )
     )
     current_class_id: UUID | None = Field(
         description="The class the app follows. Null means Practice (or no active class)."
@@ -58,13 +62,15 @@ class UpdateProfileRequest(BaseModel):
 
 
 def _profile(user: User, db: Session) -> ProfileResponse:
+    # one read, so current_class_id is always one of classes
+    active = get_active_class_ids(user.id, db)
     return ProfileResponse(
         id=user.id,
         username=user.username,
         email=user.email,
         role=user.role,
-        classes=get_active_class_ids(user.id, db),
-        current_class_id=current_class_id(user, db),
+        classes=active,
+        current_class_id=current_class_id(user, db, active),
         preferred_language=user.preferred_language,
     )
 
@@ -115,7 +121,9 @@ def update_profile(
     summary="Get the current user's profile details.",
     description=(
         "The signed-in user's account details, their active classes and the settings of their "
-        "app. Staff and admins have no enrolments, so their classes list is empty."
+        "app. Staff and admins have no enrolments, so their classes list is empty. Admins get "
+        "their profile here, but they don't play, so PATCH /me/profile refuses them with 403 "
+        "FORBIDDEN_ROLE."
     ),
     responses=error_responses(HTTPStatus.UNAUTHORIZED),
 )

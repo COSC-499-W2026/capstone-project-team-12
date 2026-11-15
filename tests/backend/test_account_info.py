@@ -6,10 +6,13 @@ import pytest
 from conftest import TwoClassStudent
 from fastapi.testclient import TestClient
 from httpx2 import Response
+from sqlalchemy.orm import Session
 
 from app.accounts.password import hash_password
+from app.engagement.interface import validate_code_and_enrol
 from app.errors import ErrorCode
 from app.models.accounts import User
+from app.models.engagement import AccessCode
 from app.models.enums import Language, UserRole
 
 URL = "/api/v1/me/profile"
@@ -36,6 +39,11 @@ def get_profile(
 
 
 def login(client: TestClient, email: str = VALID_EMAIL, password: str = VALID_PASSWORD) -> Response:
+    """POST /auth/login and return the response.
+
+    Side effect: clears the client's cookies afterwards, so the refresh cookie from this login
+    doesn't leak into later requests on the shared client.
+    """
     response = client.post("/api/v1/auth/login", data={"username": email, "password": password})
     client.cookies.clear()  # tests send the refresh cookie themselves, so none leaks between calls
     return response
@@ -77,6 +85,24 @@ def test_profile_lists_classes_most_recently_joined_first(
     assert body["classes"] == [str(roster.french.id), str(roster.japanese.id)]
     assert body["current_class_id"] == str(roster.japanese.id)
     assert body["preferred_language"] == Language.JA.value
+
+
+def test_profile_keeps_the_first_join_date_of_a_rejoined_class(
+    db: Session,
+    get_profile: Callable[[User], Response],
+    two_class_student: TwoClassStudent,
+    end_enrolment: Callable[..., None],
+    make_access_code: Callable[..., AccessCode],
+) -> None:
+    roster = two_class_student  # joined Japanese, then French
+    end_enrolment(roster.japanese_enrolment)
+    validate_code_and_enrol(roster.student.id, make_access_code(roster.japanese).code, db)
+
+    response = get_profile(roster.student)
+
+    assert response.status_code == 200, response.text
+    # rejoining reuses the enrolment, so Japanese still ranks by the date it was first joined
+    assert response.json()["classes"] == [str(roster.french.id), str(roster.japanese.id)]
 
 
 def test_profile_leaves_out_ended_enrolments(
