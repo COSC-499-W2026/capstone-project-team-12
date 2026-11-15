@@ -210,6 +210,41 @@ def test_a_position_is_used_once_per_game(
         make_session_location(game, 1)
 
 
+def test_a_shuffle_can_replace_the_row_at_a_position(
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    # the unique position only counts rows that weren't shuffled, so a second shuffle can
+    # replace the replacement, and its rows stay too
+    game = make_game_session()
+    for _ in range(2):
+        make_session_location(
+            game, 1, status=LocationStatus.SKIPPED, skip_reason=SkipReason.SHUFFLED
+        )
+    make_session_location(game, 1)
+    with pytest.raises(IntegrityError, match="uq_session_locations_session_id_position"):
+        make_session_location(
+            game, 1, status=LocationStatus.SKIPPED, skip_reason=SkipReason.SESSION_ENDED
+        )
+
+
+def test_the_position_index_is_partial_in_the_model_and_the_database(db: Session) -> None:
+    # alembic check doesn't compare an index's WHERE, so this is what catches the model and the
+    # migration drifting apart
+    name = "uq_session_locations_session_id_position"
+    indexdef = db.scalar(
+        text("SELECT indexdef FROM pg_indexes WHERE indexname = :name"), {"name": name}
+    )
+    assert indexdef is not None
+    assert indexdef.startswith(f"CREATE UNIQUE INDEX {name} ON public.session_locations")
+    assert indexdef.endswith("WHERE (skip_reason IS DISTINCT FROM 'shuffled'::text)")
+    index = next(index for index in SessionLocation.__table__.indexes if index.name == name)
+    assert index.unique
+    assert [column.name for column in index.columns] == ["session_id", "position"]
+    where = index.dialect_options["postgresql"]["where"]
+    assert str(where) == "skip_reason IS DISTINCT FROM 'shuffled'"
+
+
 def test_a_location_is_drawn_once_per_game(
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],

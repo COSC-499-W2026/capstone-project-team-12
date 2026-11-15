@@ -23,9 +23,10 @@ __all__ = [
     "is_class_staff",
     "can_manage_content",
     "require_admin",
+    "require_staff",
 ]
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 KEY = get_settings().access_token_secret_key
 
 
@@ -78,6 +79,13 @@ def require_admin(user: Annotated[User, Depends(get_current_user)]) -> None:
         raise AppError(ErrorCode.FORBIDDEN_ROLE)
 
 
+def require_staff(user: Annotated[User, Depends(get_current_user)]) -> None:
+    """Raises a FORBIDDEN_ROLE (403) error unless the current user is a staff (teacher) account:
+    students, including TAs, and admins are refused"""
+    if user.role != UserRole.STAFF:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Only staff accounts can do this.")
+
+
 def is_class_staff(user_id: UUID, class_id: UUID, db: Session) -> bool:
     """Return True when the user is an assistant or owner for the provided class`."""
     stmt = (
@@ -103,4 +111,11 @@ def can_manage_content(user: Annotated[User, Depends(get_current_user)]) -> None
 
 
 def revoke_all_refresh_tokens(user_id: UUID, db: Session) -> None:
+    """Revoke every refresh token of the user. Doesn't commit.
+
+    Lock the user row first (FOR NO KEY UPDATE, as a password reset does), in the same
+    transaction. Without it, a token that a refresh or login is creating at the same time is
+    missed; and a refresh locks the user before its token, so locking the tokens first could
+    deadlock with it.
+    """
     revoke_refresh_tokens(user_id, db)

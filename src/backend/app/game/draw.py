@@ -1,4 +1,5 @@
-"""Choosing the locations of a new game (A11, spec Starting a Session).
+"""Choosing the locations of a new game (A11, spec Starting a Session), and the replacements
+for a shuffle (A9).
 
 Carry-over comes first: if the student's last game in the same mode (the same class, or
 Practice), language and difficulty was quit today, its unplayed locations are drawn again, so
@@ -8,9 +9,9 @@ locations are eligible; this module only picks among them.
 """
 
 import random
-from datetime import datetime
+from collections.abc import Collection, Sequence
+from collections.abc import Set as AbstractSet
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.content import interface as content
 from app.errors import AppError, ErrorCode
+from app.game.sessions import start_of_today
 from app.models.enums import Difficulty, Language, LocationStatus, SessionEndReason, SkipReason
 from app.models.game import OPEN_SESSION_STATES, GameSession, SessionLocation
 
@@ -47,6 +49,55 @@ def draw_locations(
     unplayed = _carried_over(student_id, class_id, language, difficulty, db) if carry_over else []
     carried = [location_id for location_id in unplayed if location_id in eligible]
     rest = eligible.difference(carried)
+    return _pick(
+        count=count,
+        first=carried,
+        rest=rest,
+        student_id=student_id,
+        language=language,
+        difficulty=difficulty,
+        db=db,
+    )
+
+
+def draw_replacements(
+    student_id: UUID,
+    language: Language,
+    difficulty: Difficulty,
+    exclude: Collection[UUID],
+    count: int,
+    db: Session,
+) -> list[content.LocationSnapshot]:
+    """Snapshots of `count` eligible locations that aren't in `exclude`, for a shuffle.
+
+    `exclude` is every location already in the game, including rows an earlier shuffle
+    replaced, so a shuffle never brings one back. Uncompleted locations come first, as in a new
+    game; there is no carry-over. Raises 409 NOT_ENOUGH_CONTENT. Only reads.
+    """
+    eligible = content.eligible_location_ids(language, difficulty, db)
+    return _pick(
+        count=count,
+        first=[],
+        rest=eligible.difference(exclude),
+        student_id=student_id,
+        language=language,
+        difficulty=difficulty,
+        db=db,
+    )
+
+
+def _pick(
+    *,
+    count: int,
+    first: Sequence[UUID],
+    rest: AbstractSet[UUID],
+    student_id: UUID,
+    language: Language,
+    difficulty: Difficulty,
+    db: Session,
+) -> list[content.LocationSnapshot]:
+    """`count` snapshots: `first` in order, then `rest` at random, the locations the student
+    hasn't completed before the ones they have. Raises NOT_ENOUGH_CONTENT."""
     completed = _completed(student_id, language, difficulty, db)
     fresh = list(rest - completed)
     played = list(rest & completed)
@@ -54,15 +105,17 @@ def draw_locations(
     random.shuffle(played)
 
     drawn: list[content.LocationSnapshot] = []
-    for location_id in carried + fresh + played:
+    for location_id in [*first, *fresh, *played]:
+        if len(drawn) == count:
+            break
         try:
             drawn.append(content.location_snapshot(location_id, language, difficulty, db))
         except content.LocationNotEligibleError:
             # e.g. deactivated since the eligible list was read
             continue
-        if len(drawn) == count:
-            return drawn
-    raise _not_enough_content()
+    if len(drawn) < count:
+        raise _not_enough_content()
+    return drawn
 
 
 def _not_enough_content() -> AppError:
@@ -79,9 +132,6 @@ def _carried_over(
     db: Session,
 ) -> list[UUID]:
     """Unplayed locations of the last game in this mode, if it was quit today, by position."""
-    settings = get_settings()
-    zone = ZoneInfo(settings.app_timezone)
-    today_start = datetime.now(zone).replace(hour=0, minute=0, second=0, microsecond=0)
     # Quit is a game action, so last_activity_at is when the game was quit.
     last = db.scalar(
         select(GameSession)
@@ -97,7 +147,7 @@ def _carried_over(
     )
     if last is None or last.end_reason != SessionEndReason.QUIT:
         return []
-    if last.last_activity_at < today_start:
+    if last.last_activity_at < start_of_today():
         return []
     return list(
         db.scalars(

@@ -49,7 +49,31 @@ def test_upload_limits_can_be_changed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert (settings.max_media_file_mb, settings.max_audio_seconds) == (8, 90)
 
 
-@pytest.mark.parametrize("variable", ["MAX_MEDIA_FILE_MB", "MAX_AUDIO_SECONDS"])
+def test_import_limits_default_to_1000_rows_and_512_kb(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(_env_file=None)
+    assert (settings.max_import_rows, settings.max_import_file_kb) == (1000, 512)
+    monkeypatch.setenv("MAX_IMPORT_ROWS", "50")
+    monkeypatch.setenv("MAX_IMPORT_FILE_KB", "64")
+    settings = Settings(_env_file=None)
+    assert (settings.max_import_rows, settings.max_import_file_kb) == (50, 64)
+
+
+def test_import_file_limit_defaults_to_600(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert Settings(_env_file=None).max_import_files == 600
+    monkeypatch.setenv("MAX_IMPORT_FILES", "50")
+    assert Settings(_env_file=None).max_import_files == 50
+
+
+@pytest.mark.parametrize(
+    "variable",
+    [
+        "MAX_MEDIA_FILE_MB",
+        "MAX_AUDIO_SECONDS",
+        "MAX_IMPORT_ROWS",
+        "MAX_IMPORT_FILE_KB",
+        "MAX_IMPORT_FILES",
+    ],
+)
 def test_upload_limits_must_be_positive(monkeypatch: pytest.MonkeyPatch, variable: str) -> None:
     monkeypatch.setenv(variable, "0")
     with pytest.raises(ValidationError, match=variable.lower()):
@@ -61,6 +85,16 @@ def test_upload_limits_must_be_positive(monkeypatch: pytest.MonkeyPatch, variabl
 def test_app_timezone_must_exist(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
     monkeypatch.setenv("APP_TIMEZONE", name)
     with pytest.raises(ValidationError, match="app_timezone"):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize(("reset", "interval"), [("20", "25"), ("25", "25")])
+def test_trend_reset_must_exceed_the_interval(
+    monkeypatch: pytest.MonkeyPatch, reset: str, interval: str
+) -> None:
+    monkeypatch.setenv("GPS_TREND_RESET_SECONDS", reset)
+    monkeypatch.setenv("GPS_TREND_INTERVAL_SECONDS", interval)
+    with pytest.raises(ValidationError, match="gps_trend_reset_seconds"):
         Settings(_env_file=None)
 
 
@@ -91,6 +125,29 @@ def test_unsafe_email_settings(
 
 
 @pytest.mark.parametrize(
+    ("app_env", "cookie_secure", "expected"),
+    [
+        ("development", None, False),
+        ("production", None, True),
+        ("production", "false", False),  # staging or test server on plain http
+        ("development", "true", True),
+    ],
+)
+def test_refresh_cookie_secure(
+    monkeypatch: pytest.MonkeyPatch, app_env: str, cookie_secure: str | None, expected: bool
+) -> None:
+    monkeypatch.setenv("APP_ENV", app_env)
+    monkeypatch.setenv("ACCESS_TOKEN_SECRET_KEY", "a-valid-secret-key-123")
+    monkeypatch.setenv("APP_BASE_URL", "https://hunt.example.ca")
+    monkeypatch.setenv("MAIL_FROM", "Hunt <no-reply@hunt.example.ca>")
+    if cookie_secure is None:
+        monkeypatch.delenv("COOKIE_SECURE", raising=False)
+    else:
+        monkeypatch.setenv("COOKIE_SECURE", cookie_secure)
+    assert Settings(_env_file=None).refresh_cookie_secure is expected
+
+
+@pytest.mark.parametrize(
     ("variable", "value", "message"),
     [
         (
@@ -116,4 +173,23 @@ def test_unsafe_token_settings(
     assert Settings(_env_file=None).app_env == "production"  # fine until one value is unsafe
     monkeypatch.setenv(variable, value)
     with pytest.raises(ValidationError, match=message):
+        Settings(_env_file=None)
+
+
+def test_rate_limits_default_to_the_spec_values() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.global_rate_limit == 100
+    assert settings.login_attempts_per_email == 5
+    assert settings.login_attempts_per_ip == 100
+
+
+@pytest.mark.parametrize(
+    "name", ["GLOBAL_RATE_LIMIT", "LOGIN_ATTEMPTS_PER_EMAIL", "LOGIN_ATTEMPTS_PER_IP"]
+)
+@pytest.mark.parametrize("value", ["0", "-5"])
+def test_rate_limits_must_be_positive(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError, match=name.lower()):
         Settings(_env_file=None)

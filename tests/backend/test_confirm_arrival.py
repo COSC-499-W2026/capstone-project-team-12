@@ -1,0 +1,442 @@
+"""POST /games/{id}/navigation/confirm-arrival (A19, TC2): from Stage 1 to Stage 2."""
+
+from collections.abc import Callable
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from functools import partial
+from typing import Any
+from uuid import uuid4
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.content import interface as content
+from app.errors import AppError, ErrorCode
+from app.game.arrival import Arrival, confirm_arrival
+from app.game.current_location import Stage
+from app.game.navigation import Ping, process_ping
+from app.game.shuffle import shuffle_game
+from app.models.accounts import User
+from app.models.enums import (
+    ArrivalOverride,
+    Difficulty,
+    FeedbackCode,
+    Language,
+    LocationStatus,
+    SessionState,
+    SkipReason,
+)
+from app.models.game import GameSession, SessionLocation
+
+NOW = datetime(2026, 10, 29, 20, 0, tzinfo=UTC)
+CLOCK = ("app.game.arrival", "app.game.navigation", "app.game.control", "app.game.status")
+LAT, LNG = 49.9394, -119.3948  # the entrance make_session_location uses, radius 30 m
+M = 1 / 111_195  # about one metre of latitude
+GPS = ArrivalOverride.GPS_UNAVAILABLE
+_Split = Callable[[str], tuple[str, int, str]]
+
+
+@pytest.fixture
+def playing(db: Session, navigating_game: Callable[..., Any]) -> Callable[..., Any]:
+    """An active game at its first location, started a minute ago, pinged 5 s ago from 10 m.
+
+    The location is eligible, so it counts as active. Pass location_id for a deactivated one.
+    """
+    active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
+    assert active, "needs an active ja/basic location"
+    recent = {
+        "last_ping_at": NOW - timedelta(seconds=5),
+        "last_distance_m": 10,
+        "location_id": active[0],
+    }
+    return partial(navigating_game, NOW, "app.game.arrival", "app.game.navigation", **recent)
+
+
+def confirm(
+    game: GameSession, db: Session, override: ArrivalOverride | None = None, *, position: int = 1
+) -> Arrival:
+    return confirm_arrival(game.student_id, game.id, override, position, db)
+
+
+def _part(split: _Split, url: str) -> str:
+    # full URLs differ: re-signing across a second boundary changes expires and sig
+    key, expires, sig = split(url)
+    assert expires and sig
+    return key
+
+
+def _same_arrival(left: Arrival, right: Arrival, split: _Split) -> None:
+    assert _part(split, left.location.clue_audio_url) == _part(split, right.location.clue_audio_url)
+    assert _part(split, left.feedback_audio_url) == _part(split, right.feedback_audio_url)
+    assert left.feedback == right.feedback
+    assert replace(left.location, clue_audio_url="") == replace(right.location, clue_audio_url="")
+
+
+def _same_route(left: dict[str, Any], right: dict[str, Any], split: _Split) -> None:
+    def bare(body: dict[str, Any]) -> dict[str, Any]:
+        heard = [{**i, "audio_url": _part(split, i["audio_url"])} for i in body["feedback"]]
+        return {**body, "clue_audio_url": _part(split, body["clue_audio_url"]), "feedback": heard}
+
+    assert bare(left) == bare(right)
+
+
+def refused(game: GameSession, db: Session, override: ArrivalOverride | None = None) -> ErrorCode:
+    with pytest.raises(AppError) as error:
+        confirm(game, db, override)
+    return error.value.code
+
+
+def test_a_recent_ping_within_the_radius(db: Session, playing: Callable[..., Any]) -> None:
+    game, row = playing()
+
+    arrival = confirm(game, db, position=1)
+
+    assert (row.status, row.arrived_at, row.arrival_override, row.flags) == (
+        LocationStatus.VERIFYING,
+        NOW,
+        None,
+        [],
+    )
+    assert game.last_activity_at == NOW
+    assert (arrival.location.stage, arrival.location.gps_override_available_at) == (
+        Stage.VERIFICATION,
+        None,
+    )
+    assert arrival.feedback == FeedbackCode.VERIFY_START
+
+
+@pytest.mark.parametrize(
+    ("fields", "code"),
+    [
+        ({"last_ping_at": NOW - timedelta(seconds=29.9)}, None),
+        ({"last_ping_at": NOW - timedelta(seconds=30)}, ErrorCode.STALE_POSITION),
+        ({"last_ping_at": None, "last_distance_m": None}, ErrorCode.STALE_POSITION),
+        ({"last_distance_m": 30}, None),
+        ({"last_distance_m": 30.01}, ErrorCode.NOT_WITHIN_RADIUS),
+    ],
+)
+def test_the_last_ping_must_be_recent_and_within_the_radius(
+    db: Session, playing: Callable[..., Any], fields: dict[str, Any], code: ErrorCode | None
+) -> None:
+    game, row = playing(**fields)
+
+    if code is None:
+        confirm(game, db)
+        assert row.status == LocationStatus.VERIFYING
+        return
+    assert refused(game, db) == code
+    assert (row.status, game.last_activity_at) == (
+        LocationStatus.NAVIGATING,
+        NOW - timedelta(hours=1),
+    )
+
+
+@pytest.mark.parametrize(("started", "allowed"), [(179, False), (180, True)])
+def test_the_override_after_3_minutes(
+    db: Session, playing: Callable[..., Any], started: int, allowed: bool
+) -> None:
+    # far away and no recent ping: the override doesn't look at either
+    game, row = playing(
+        started_at=NOW - timedelta(seconds=started), last_ping_at=None, last_distance_m=900
+    )
+
+    if not allowed:
+        assert refused(game, db, GPS) == ErrorCode.GPS_OVERRIDE_NOT_ALLOWED
+        assert row.flags == []
+        return
+    confirm(game, db, GPS)
+    assert (row.status, row.arrival_override, row.flags) == (
+        LocationStatus.VERIFYING,
+        GPS,
+        ["gps_override"],
+    )
+
+
+def test_weak_pings_allow_the_override_until_a_good_one(
+    db: Session, playing: Callable[..., Any], freeze_clock: Callable[..., None]
+) -> None:
+    game, row = playing(started_at=NOW, last_ping_at=None, last_distance_m=None)
+
+    def at(seconds: int) -> None:
+        freeze_clock(NOW + timedelta(seconds=seconds), *CLOCK)
+
+    def send(accuracy: float) -> None:
+        process_ping(game.student_id, game.id, Ping(LAT + 500 * M, LNG, accuracy), db)
+
+    for second in (0, 5):
+        at(second)
+        send(80)
+    assert refused(game, db, GPS) == ErrorCode.GPS_OVERRIDE_NOT_ALLOWED
+    at(10)
+    send(80)
+    at(12)
+    savepoint = db.begin_nested()
+    confirm(game, db, GPS)
+    assert row.status == LocationStatus.VERIFYING
+    savepoint.rollback()  # back to Stage 1, to see a good ping take it away
+
+    at(15)
+    send(5)
+    assert refused(game, db, GPS) == ErrorCode.GPS_OVERRIDE_NOT_ALLOWED
+    at(180)
+    confirm(game, db, GPS)
+    assert row.arrival_override == GPS
+
+
+def test_a_deactivated_location_is_409_and_changes_nothing(
+    db: Session, playing: Callable[..., Any]
+) -> None:
+    game, row = playing(location_id=uuid4())
+
+    assert refused(game, db) == ErrorCode.STATE_CHANGED
+    assert (row.status, row.arrived_at, game.last_activity_at) == (
+        LocationStatus.NAVIGATING,
+        None,
+        NOW - timedelta(hours=1),
+    )
+
+
+def _stored(game: GameSession, row: Any) -> tuple[object, ...]:
+    return (
+        game.state,
+        game.current_position,
+        game.last_activity_at,
+        game.end_reason,
+        game.paused_at,
+        game.completed_at,
+        game.shuffles_used,
+        game.total_score,
+        row.status,
+        row.position,
+        row.skip_reason,
+        row.arrived_at,
+        row.arrival_override,
+        row.points_awarded,
+        row.completed_at,
+        row.attempts_used,
+        row.last_ping_at,
+        row.weak_pings_in_row,
+        tuple(row.flags),
+    )
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"status": LocationStatus.COMPLETED, "completed_at": NOW, "points_awarded": 100},
+        {"status": LocationStatus.SKIPPED, "skip_reason": SkipReason.DEACTIVATED},
+    ],
+)
+def test_a_finished_deactivated_row_is_invalid_stage(
+    db: Session, playing: Callable[..., Any], fields: dict[str, Any]
+) -> None:
+    game, row = playing(location_id=uuid4(), **fields)
+    before = _stored(game, row)
+
+    assert refused(game, db) == ErrorCode.INVALID_STAGE
+    assert _stored(game, row) == before
+
+
+def test_a_verifying_deactivated_row_repeats_without_writes(
+    db: Session, playing: Callable[..., Any], split_media_url: _Split
+) -> None:
+    arrived = NOW - timedelta(minutes=1)
+    game, row = playing(location_id=uuid4(), status=LocationStatus.VERIFYING, arrived_at=arrived)
+    before = _stored(game, row)
+
+    first = confirm(game, db)
+    assert first.location.stage == Stage.VERIFICATION
+    assert _stored(game, row) == before
+
+    second = confirm(game, db)
+    _same_arrival(first, second, split_media_url)
+    assert _stored(game, row) == before
+
+
+def test_a_confirm_after_a_shuffle_needs_a_ping_on_the_new_location(
+    db: Session, playing: Callable[..., Any], freeze_clock: Callable[..., None]
+) -> None:
+    # the old row has a recent ping in the radius, but a shuffle replaced it at the same position
+    game, old = playing()
+    freeze_clock(NOW, *CLOCK, "app.game.shuffle")
+    shuffle_game(game.student_id, game.id, game.shuffles_used, db)
+    new = db.scalars(
+        select(SessionLocation).where(
+            SessionLocation.session_id == game.id,
+            SessionLocation.position == 1,
+            SessionLocation.status == LocationStatus.NAVIGATING,
+        )
+    ).one()
+    before = _stored(game, new)
+
+    assert refused(game, db) == ErrorCode.STALE_POSITION
+    assert _stored(game, new) == before
+    assert (old.status, old.skip_reason, old.arrived_at) == (
+        LocationStatus.SKIPPED,
+        SkipReason.SHUFFLED,
+        None,
+    )
+
+
+def test_a_pending_row_is_invalid_stage(db: Session, playing: Callable[..., Any]) -> None:
+    game, row = playing(status=LocationStatus.PENDING)
+
+    assert refused(game, db) == ErrorCode.INVALID_STAGE
+    assert (row.status, row.arrived_at) == (LocationStatus.PENDING, None)
+
+
+def test_a_repeat_gives_the_same_answer_and_changes_nothing(
+    db: Session,
+    playing: Callable[..., Any],
+    freeze_clock: Callable[..., None],
+    split_media_url: _Split,
+) -> None:
+    game, row = playing(started_at=NOW - timedelta(minutes=5))
+    first = confirm(game, db, GPS)
+    freeze_clock(NOW + timedelta(minutes=1), *CLOCK)
+
+    # the ping is old by now and the override wouldn't be checked again either
+    again = confirm(game, db, GPS, position=1)
+
+    _same_arrival(again, first, split_media_url)
+    assert (row.arrived_at, row.flags, game.last_activity_at) == (NOW, ["gps_override"], NOW)
+
+
+@pytest.mark.parametrize(
+    ("fields", "position", "code"),
+    [
+        ({}, 2, ErrorCode.STATE_CHANGED),
+        (
+            {"game": {"state": SessionState.PAUSED, "paused_at": NOW}},
+            1,
+            ErrorCode.SESSION_NOT_ACTIVE,
+        ),
+        (
+            {"status": LocationStatus.COMPLETED, "completed_at": NOW, "points_awarded": 100},
+            1,
+            ErrorCode.INVALID_STAGE,
+        ),
+    ],
+)
+def test_refused_without_changes(
+    db: Session,
+    playing: Callable[..., Any],
+    fields: dict[str, Any],
+    position: int,
+    code: ErrorCode,
+) -> None:
+    game, row = playing(**fields)
+
+    with pytest.raises(AppError) as error:
+        confirm(game, db, position=position)
+
+    assert error.value.code == code
+    assert row.arrived_at is None
+
+
+@pytest.mark.parametrize(("accuracy", "ok"), [(400, False), (8, True)])
+def test_confirm_follows_whether_the_fix_is_weak(
+    db: Session, playing: Callable[..., Any], accuracy: float, ok: bool
+) -> None:
+    game, row = playing(last_ping_at=None, last_distance_m=None)
+    outcome = process_ping(game.student_id, game.id, Ping(LAT, LNG, accuracy), db)
+
+    assert outcome.can_confirm is ok
+    if not ok:
+        with pytest.raises(AppError) as error:
+            confirm(game, db)
+        assert (error.value.code, error.value.details) == (
+            ErrorCode.NOT_WITHIN_RADIUS,
+            [{"reason": "gps_weak"}],
+        )
+        assert row.arrived_at is None
+        return
+    confirm(game, db)
+    assert (row.status, row.flags) == (LocationStatus.VERIFYING, [])
+
+
+def test_three_weak_pings_allow_manual_confirm(
+    db: Session, playing: Callable[..., Any], freeze_clock: Callable[..., None]
+) -> None:
+    game, row = playing(started_at=NOW, last_ping_at=None, last_distance_m=None)
+    for second in (0, 5, 10):
+        freeze_clock(NOW + timedelta(seconds=second), *CLOCK)
+        outcome = process_ping(game.student_id, game.id, Ping(LAT, LNG, 80), db)
+    assert (outcome.can_confirm, row.weak_pings_in_row) == (False, 3)
+    assert refused(game, db) == ErrorCode.NOT_WITHIN_RADIUS
+    confirm(game, db, GPS)
+    assert (row.arrival_override, row.flags) == (GPS, ["gps_override"])
+
+
+def test_a_paused_game_already_verifying_repeats_without_writes(
+    db: Session,
+    playing: Callable[..., Any],
+    freeze_clock: Callable[..., None],
+    split_media_url: _Split,
+) -> None:
+    game, row = playing()
+    confirm(game, db)
+    game.state, game.paused_at = SessionState.PAUSED, NOW
+    db.flush()
+    freeze_clock(NOW + timedelta(minutes=1), *CLOCK)
+    paused = confirm(game, db)
+
+    _same_arrival(confirm(game, db), paused, split_media_url)
+    assert paused.location.state == SessionState.PAUSED
+    assert paused.location.stage == Stage.VERIFICATION
+    assert (row.arrived_at, row.flags, game.last_activity_at) == (NOW, [], NOW)
+
+
+def test_the_route(
+    db: Session,
+    client: TestClient,
+    auth_headers: Callable[[User], dict[str, str]],
+    make_user: Callable[..., User],
+    playing: Callable[..., Any],
+    transaction_calls: list[str],
+    assert_error: Callable[..., None],
+    split_media_url: _Split,
+) -> None:
+    game, row = playing()
+    # saved already, so a rolled-back 409 does not remove the account
+    db.commit()
+    student = db.get(User, game.student_id)
+    assert student is not None
+    url = f"/api/v1/games/{game.id}/navigation/confirm-arrival"
+    headers = auth_headers(student)
+    assert_error(
+        client.post(
+            url, json={"override_reason": "gps_unavailable", "position": 1}, headers=headers
+        ),
+        409,
+        ErrorCode.GPS_OVERRIDE_NOT_ALLOWED,
+    )
+    bad = client.post(url, json={"override_reason": "lost", "position": 1}, headers=headers)
+    assert bad.status_code == 422
+    missing = client.post(url, json={}, headers=headers)
+    assert_error(missing, 422, ErrorCode.VALIDATION_ERROR)
+    transaction_calls.clear()
+
+    response = client.post(url, json={"position": 1}, headers=headers)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["stage"], body["position"], body["gps_override_available_at"]) == (
+        "verification",
+        1,
+        None,
+    )
+    assert [item["code"] for item in body["feedback"]] == ["VERIFY_START"]
+    assert transaction_calls.count("commit") == 1
+    _same_route(
+        client.post(url, json={"position": 1}, headers=headers).json(), body, split_media_url
+    )
+    other = auth_headers(make_user())
+    assert_error(client.post(url, json={"position": 1}, headers=other), 404, ErrorCode.NOT_FOUND)
+    admin = auth_headers(make_user(role="admin"))
+    assert_error(
+        client.post(url, json={"position": 1}, headers=admin), 403, ErrorCode.FORBIDDEN_ROLE
+    )
+    assert_error(client.post(url, json={"position": 1}), 401, ErrorCode.NOT_AUTHENTICATED)
