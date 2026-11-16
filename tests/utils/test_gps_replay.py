@@ -56,6 +56,8 @@ def test_a_route_is_read_in_order() -> None:
         (route("0,49.94,-119.39,-1"), "out of range"),
         (route("-1,49.94,-119.39,5"), "t_s"),
         (route("0,49.94,-119.39,5", "1.9,49.94,-119.39,5"), "line 3: t_s"),
+        (route("0,49.94,-119.39,5,1"), "line 2: unexpected extra columns"),
+        ([HEADER, "", "0,49.94,-119.39,5", "1,49.94,-119.39,5"], "line 4: t_s"),
     ],
 )
 def test_a_route_that_cant_be_replayed(lines: list[str], problem: str) -> None:
@@ -70,8 +72,15 @@ def test_each_ping_is_printed_after_waiting_its_time() -> None:
         (200, ping_answer("NAV_GPS_WEAK")),
     )
     waits: list[float] = []
+    clock = {"t": 0.0}
 
-    code = replay(STEPS, Api(send, "token"), GAME, sleep=waits.append, out=lambda _: None)
+    def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        clock["t"] += seconds
+
+    code = replay(
+        STEPS, Api(send, "token"), GAME, sleep=sleep, now=lambda: clock["t"], out=lambda _: None
+    )
 
     assert (code, waits) == (0, [0, 5, 25])
     assert [kwargs["json_body"] for _, _, kwargs in send.calls[1:]] == [
@@ -80,6 +89,111 @@ def test_each_ping_is_printed_after_waiting_its_time() -> None:
         {"lat": 49.9395, "lng": -119.39, "accuracy_m": 60},
     ]
     assert {kwargs["token"] for _, _, kwargs in send.calls} == {"token"}
+
+
+def test_a_route_that_is_not_utf8_is_refused(tmp_path: Any) -> None:
+    path = tmp_path / "route.csv"
+    path.write_text("t_s,lat,lng,accuracy_m\n0,49.94,-119.39,5\n", encoding="utf-16")
+
+    code = gps_replay.main([str(path), "--email", "s@x.com"], send=playing())
+
+    assert code == 2
+
+
+def test_every_refused_ping_stops_the_replay() -> None:
+    send = playing(*(api_error(422, "VALIDATION_ERROR") for _ in range(3)))
+
+    code, lines = run(send)
+
+    assert code == 1
+    assert lines[-1] == "done: 3 pings, 3 refused, spoken nothing"
+
+
+def test_a_string_error_is_an_http_error() -> None:
+    send = playing((422, {"error": "upstream timeout"}))
+
+    code, lines = run(send, steps=STEPS[:1])
+
+    assert code == 1
+    assert "HTTP_ERROR" in lines[1]
+
+
+def test_a_login_token_must_be_text() -> None:
+    for body in ({"access_token": ""}, {"access_token": None}, {"access_token": 5}):
+        send = FakeSend({"POST /api/v1/auth/login": [(200, body)]})
+        with pytest.raises(ApiError, match="access_token"):
+            Api.login(send, "a@b.c", "pw")
+
+
+def test_a_bad_ping_body_stops_the_replay() -> None:
+    send = playing((200, {"speak": True}), (200, ping_answer("NAV_START")))
+
+    code, lines = run(send, steps=STEPS[:2])
+
+    assert code == 1
+    assert "UNEXPECTED_BODY" in lines[-1]
+    assert send.paths().count(PING) == 1
+
+
+def test_a_ping_without_a_feedback_code_stops() -> None:
+    bad = {"speak": True, "feedback": {}, "trend": None, "can_confirm": False}
+    send = playing((200, bad), (200, ping_answer("NAV_START")))
+
+    code, lines = run(send, steps=STEPS[:2])
+
+    assert code == 1
+    assert "UNEXPECTED_BODY" in lines[-1]
+    assert send.paths().count(PING) == 1
+
+
+def test_catching_up_after_a_slow_answer_keeps_the_rate_limit() -> None:
+    """The first answer takes 3 s, so the second ping goes out late, at 3 s. Its answer is
+    instant, so the third is due at its recorded 4 s, but that is under 2 s after the second:
+    it waits until 5 s instead of getting a 429."""
+    send = playing(*[(200, ping_answer("NAV_START", speak=False)) for _ in range(3)])
+    clock = {"t": 0.0}
+    answer_s = [3.0, 0.0, 0.0]  # how long each ping's answer takes
+    sent: list[float] = []
+
+    def slow(method: str, path: str, **kwargs: Any) -> tuple[int, Any]:
+        if path.endswith("/ping"):
+            sent.append(clock["t"])
+            clock["t"] += answer_s[len(sent) - 1]
+        return FakeSend.__call__(send, method, path, **kwargs)
+
+    def sleep(seconds: float) -> None:
+        clock["t"] += seconds
+
+    steps = [Step(t, 49.94, -119.39, 5) for t in (0, 2, 4)]
+    code = replay(
+        steps, Api(slow, "token"), GAME, sleep=sleep, now=lambda: clock["t"], out=lambda _: None
+    )
+
+    assert (code, sent) == (0, [0, 3, 5])
+
+
+def test_a_one_second_answer_keeps_a_two_second_route_on_time() -> None:
+    """Send times stay on 0, 2, 4, 6 when each answer takes a second."""
+    send = playing(*[(200, ping_answer("NAV_START", speak=False)) for _ in range(4)])
+    clock = {"t": 0.0}
+    sent: list[float] = []
+
+    def slow(method: str, path: str, **kwargs: Any) -> tuple[int, Any]:
+        if path.endswith("/ping"):
+            sent.append(clock["t"])
+            clock["t"] += 1
+        return FakeSend.__call__(send, method, path, **kwargs)
+
+    def sleep(seconds: float) -> None:
+        clock["t"] += seconds
+
+    steps = [Step(t, 49.94, -119.39, 5) for t in (0, 2, 4, 6)]
+    code = replay(
+        steps, Api(slow, "token"), GAME, sleep=sleep, now=lambda: clock["t"], out=lambda _: None
+    )
+
+    assert code == 0
+    assert sent == [0, 2, 4, 6]
 
 
 def test_the_output_shows_each_code_and_the_spoken_ones_at_the_end() -> None:
@@ -97,7 +211,7 @@ def test_the_output_shows_each_code_and_the_spoken_ones_at_the_end() -> None:
         "t=    0s  acc    5 m  NAV_START            spoken  trend -        can_confirm=no",
         "t=    5s  acc    5 m  NAV_START            silent  trend -        can_confirm=no",
         "t=   30s  acc   60 m  NAV_GETTING_CLOSER   spoken  trend closer   can_confirm=no",
-        "done: 3 pings, spoken NAV_START, NAV_GETTING_CLOSER",
+        "done: 3 pings, 0 refused, spoken NAV_START, NAV_GETTING_CLOSER",
     ]
 
 
@@ -160,6 +274,17 @@ def test_confirm_on_the_first_ping_that_allows_it() -> None:
     assert len(send.calls) == 4  # the third step is never sent
 
 
+def test_a_confirm_without_feedback_codes_stops() -> None:
+    send = playing((200, ping_answer("NAV_ARRIVED", can_confirm=True)))
+    confirm = f"POST /api/v1/games/{GAME}/navigation/confirm-arrival"
+    send.answers[confirm] = [(200, {"stage": "verification", "feedback": "x"})]
+
+    code, lines = run(send, confirm=True)
+
+    assert code == 1
+    assert lines[-1].startswith("confirm-arrival: 200 UNEXPECTED_BODY")
+
+
 def test_without_confirm_the_route_plays_to_the_end() -> None:
     allowed = ping_answer("NAV_ARRIVED", can_confirm=True)
     send = playing((200, allowed), (200, allowed), (200, allowed))
@@ -197,6 +322,17 @@ def test_only_a_location_in_stage_1(location: dict[str, Any]) -> None:
     assert "not in Stage 1" in lines[0]
 
 
+def test_a_navigation_location_without_a_position_stops() -> None:
+    send = playing()
+    send.answers[f"GET /api/v1/games/{GAME}/current-location"] = [(200, {"stage": "navigation"})]
+
+    code, lines = run(send)
+
+    assert (code, len(send.calls)) == (1, 1)
+    assert "UNEXPECTED_BODY" in lines[0]
+    assert "position" in lines[0]
+
+
 def test_a_game_that_cant_be_read() -> None:
     send = playing()
     send.answers[f"GET /api/v1/games/{GAME}/current-location"] = [api_error(404, "NOT_FOUND")]
@@ -226,7 +362,14 @@ def test_main_logs_in_and_replays_the_open_game_in_real_time(
 ) -> None:
     monkeypatch.setenv("GPS_REPLAY_PASSWORD", "secret")
     waits: list[float] = []
-    monkeypatch.setattr(gps_replay.time, "sleep", waits.append)
+    clock = {"t": 0.0}
+
+    def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        clock["t"] += seconds
+
+    monkeypatch.setattr(gps_replay.time, "sleep", sleep)
+    monkeypatch.setattr(gps_replay.time, "monotonic", lambda: clock["t"])
     send = playing((200, ping_answer("NAV_START")), (200, ping_answer("NAV_START", speak=False)))
     send.answers["POST /api/v1/auth/login"] = [(200, {"access_token": "abc"})]
     send.answers["GET /api/v1/games/current"] = [(200, {"session_id": GAME})]
@@ -290,6 +433,7 @@ def test_http_sender_sends_json_forms_and_the_token(server: str) -> None:
     [
         ("http://127.0.0.1:9", "/api/v1/games/current"),  # nothing listens on port 9
         (None, "/slow"),  # the server accepts the request but answers too late
+        (None, "/cut"),  # the body ends before Content-Length
     ],
 )
 def test_a_server_that_doesnt_answer(server: str, url: str | None, path: str) -> None:
@@ -298,3 +442,104 @@ def test_a_server_that_doesnt_answer(server: str, url: str | None, path: str) ->
     with pytest.raises(ApiError) as failure:
         send("POST", path, json_body={})
     assert (failure.value.status, failure.value.code) == (0, "CONNECTION_FAILED")
+
+
+def test_a_cut_off_error_page_is_returned(server: str) -> None:
+    send = gps_replay.http_sender(server, timeout_s=2)
+
+    status, body = send("POST", "/cut502", json_body={})
+
+    assert status == 502
+    assert isinstance(body, str)
+
+
+def test_a_slow_answer_comes_out_of_the_next_wait() -> None:
+    send = playing((200, ping_answer("NAV_START")), (200, ping_answer("NAV_START", speak=False)))
+    clock = {"t": 0.0}
+
+    def slow(method: str, path: str, **kwargs: Any) -> tuple[int, Any]:
+        if path.endswith("/ping"):
+            clock["t"] += 1  # this answer took a second of the recorded gap
+        return FakeSend.__call__(send, method, path, **kwargs)
+
+    waits: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        clock["t"] += seconds
+
+    steps = [Step(0, 49.94, -119.39, 5), Step(5, 49.9399, -119.39, 5)]
+    code = replay(
+        steps,
+        Api(slow, "token"),
+        GAME,
+        sleep=sleep,
+        now=lambda: clock["t"],
+        out=lambda _: None,
+    )
+    assert (code, waits) == (0, [0, 4])
+
+
+def test_main_confirms_arrival_when_asked(
+    route_file: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GPS_REPLAY_PASSWORD", "secret")
+    monkeypatch.setattr(gps_replay.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(gps_replay.time, "monotonic", lambda: 0.0)
+    send = playing((200, ping_answer("NAV_ARRIVED", can_confirm=True)))
+    send.answers["POST /api/v1/auth/login"] = [(200, {"access_token": "abc"})]
+
+    code = gps_replay.main(
+        [str(route_file), "--email", "s@x.com", "--game", GAME, "--confirm"], send=send
+    )
+
+    assert code == 0
+    assert send.paths()[-1].endswith("/navigation/confirm-arrival")
+    assert "arrival confirmed" in capsys.readouterr().out
+
+
+def test_main_asks_for_the_password_when_it_is_unset(
+    route_file: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GPS_REPLAY_PASSWORD", raising=False)
+    monkeypatch.setattr(gps_replay.getpass, "getpass", lambda _prompt: "typed")
+    monkeypatch.setattr(gps_replay.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(gps_replay.time, "monotonic", lambda: 0.0)
+    send = playing((200, ping_answer("NAV_START")), (200, ping_answer("NAV_START", speak=False)))
+    send.answers["POST /api/v1/auth/login"] = [(200, {"access_token": "abc"})]
+    send.answers["GET /api/v1/games/current"] = [(200, {"session_id": GAME})]
+
+    code = gps_replay.main([str(route_file), "--email", "s@x.com"], send=send)
+
+    assert code == 0
+    assert send.calls[0][2]["form"]["password"] == "typed"
+
+
+def test_main_reads_a_route_saved_with_an_excel_bom(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "route.csv"
+    path.write_bytes(b"\xef\xbb\xbf" + b"t_s,lat,lng,accuracy_m\n0,49.94,-119.39,5\n")
+    monkeypatch.setenv("GPS_REPLAY_PASSWORD", "secret")
+    monkeypatch.setattr(gps_replay.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(gps_replay.time, "monotonic", lambda: 0.0)
+    send = playing((200, ping_answer("NAV_START")))
+    send.answers["POST /api/v1/auth/login"] = [(200, {"access_token": "abc"})]
+
+    code = gps_replay.main([str(path), "--email", "s@x.com", "--game", GAME], send=send)
+
+    assert code == 0
+    assert send.paths()[-1].endswith("/navigation/ping")
+
+
+def test_main_exits_when_the_login_body_is_not_the_token(
+    route_file: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GPS_REPLAY_PASSWORD", "secret")
+    send = FakeSend({"POST /api/v1/auth/login": [(200, "<html>no token</html>"), (200, {})]})
+
+    html = gps_replay.main([str(route_file), "--email", "s@x.com"], send=send)
+    missing = gps_replay.main([str(route_file), "--email", "s@x.com"], send=send)
+
+    assert html == 1 and missing == 1
+    assert "UNEXPECTED_BODY" in capsys.readouterr().err

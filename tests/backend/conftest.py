@@ -466,8 +466,12 @@ def navigating_game(
 
 
 # the modules whose clock the GPS replay moves, besides the two navigating_game freezes
-_REPLAY_CLOCKS = ("app.game.navigation", "app.game.arrival", "app.game.current_location")
-_REPLAY_CLOCKS += ("app.game.sessions",)
+_REPLAY_CLOCKS = (
+    "app.game.navigation",
+    "app.game.arrival",
+    "app.game.current_location",
+    "app.game.sessions",
+)
 
 
 @pytest.fixture
@@ -485,7 +489,11 @@ def replay_route(
     """
 
     def run(
-        steps: list[Step], *, now: datetime, **kwargs: Any
+        steps: list[Step],
+        *,
+        now: datetime,
+        after_ping: Callable[[TestClient, str, str], None] | None = None,
+        **kwargs: Any,
     ) -> tuple[int, list[str], SessionLocation]:
         active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
         assert active, "needs an active ja/basic location"
@@ -495,20 +503,34 @@ def replay_route(
         assert student is not None
         token = auth_headers(student)["Authorization"].removeprefix("Bearer ")
         clock = [now]
+        elapsed = {"s": 0.0}
 
         def send(method: str, path: str, *, token: str | None = None, **body: Any) -> Any:
             headers = {"Authorization": f"Bearer {token}"} if token else {}
             json_body, form = body.get("json_body"), body.get("form")
             response = client.request(method, path, json=json_body, data=form, headers=headers)
+            if after_ping is not None and path.endswith("/navigation/ping"):
+                game_id = path.split("/")[4]
+                after_ping(client, token or "", game_id)
             return response.status_code, response.json()
 
         def sleep(seconds: float) -> None:
+            elapsed["s"] += seconds
             clock[0] += timedelta(seconds=seconds)
             freeze_clock(clock[0], "app.game.control", "app.game.status", *_REPLAY_CLOCKS)
 
         lines: list[str] = []
         api = Api(send, token)
-        code = replay(steps, api, str(game.id), sleep=sleep, out=lines.append, **kwargs)
+        # the replay clock only moves in sleep, so a request's wall time does not shrink the gap
+        code = replay(
+            steps,
+            api,
+            str(game.id),
+            sleep=sleep,
+            now=lambda: elapsed["s"],
+            out=lines.append,
+            **kwargs,
+        )
         db.refresh(row)
         return code, lines, row
 
