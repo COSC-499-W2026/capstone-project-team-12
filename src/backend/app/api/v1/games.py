@@ -10,15 +10,17 @@ from pydantic import BaseModel, Field, PositiveInt, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
+from app.api.v1.me import RecentBadgeResponse
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.arrival import confirm_arrival
 from app.game.control import pause_game, quit_game, reset_game, resume_game
-from app.game.current_location import Stage, get_current_location
+from app.game.current_location import CurrentLocation, Stage, get_current_location
 from app.game.navigation import Ping, Trend, process_ping
 from app.game.shuffle import shuffle_game
 from app.game.start import start_game
 from app.game.status import GameStatus, find_current_game, get_game
+from app.game.summary import GameSummary, get_summary
 from app.models.accounts import User
 from app.models.enums import (
     ArrivalOverride,
@@ -173,6 +175,65 @@ def game_status(
     return GameStatusResponse.model_validate(status, from_attributes=True)
 
 
+class GameEngagementResponse(BaseModel):
+    """What the game added to the student's engagement. A streak field comes with A13 (#87)."""
+
+    level: int = Field(
+        ge=1, le=5, description="The level in the game's language as of the game's last points."
+    )
+    level_up: bool = Field(description="Whether the game's points raised the level.")
+    new_badges: list[RecentBadgeResponse] = Field(
+        description="Badges the game's locations unlocked, global ones included, oldest first."
+    )
+
+
+class GameSummaryResponse(GameStatusResponse):
+    """A game's status, when it ended and what it added to the student's engagement."""
+
+    ended_at: datetime | None = Field(
+        description=(
+            "When the game was completed, quit or reset; for an expired or class-closed game, "
+            "its last action. Null while it is open."
+        )
+    )
+    engagement: GameEngagementResponse
+
+
+def _summary_response(summary: GameSummary) -> GameSummaryResponse:
+    return GameSummaryResponse(
+        **asdict(summary.status),
+        ended_at=summary.ended_at,
+        engagement=GameEngagementResponse.model_validate(summary.engagement, from_attributes=True),
+    )
+
+
+@games_router.get(
+    "/{game_id}/summary",
+    operation_id="getGameSummary",
+    response_model=GameSummaryResponse,
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND),
+)
+def game_summary(
+    game_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> GameSummaryResponse:
+    """The summary of one of the student's games: the game status (each location's result and
+    the session points), when it ended, and the level, level-up and new badges it brought.
+
+    An open game can be read too and shows its results so far (`ended_at` null). The level is
+    the one the game reached, not today's. 404 NOT_FOUND for another student's game, the same as
+    for an id that doesn't exist. An open game idle for the expiry limit (24 hours by default) is
+    expired when it is read. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
+    account.
+    """
+    if user.role == UserRole.ADMIN:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
+    summary = get_summary(user.id, game_id, db)
+    db.commit()
+    return _summary_response(summary)
+
+
 class CurrentLocationResponse(BaseModel):
     """The current location of a game. Never its name, room number, coordinates or answers."""
 
@@ -192,7 +253,7 @@ class CurrentLocationResponse(BaseModel):
 @games_router.get(
     "/{game_id}/current-location",
     operation_id="getCurrentLocation",
-    response_model=CurrentLocationResponse | GameStatusResponse,
+    response_model=CurrentLocationResponse | GameSummaryResponse,
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
     ),
@@ -201,7 +262,7 @@ def current_location(
     game_id: UUID,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-) -> CurrentLocationResponse | GameStatusResponse:
+) -> CurrentLocationResponse | GameSummaryResponse:
     """The current location of the student's game: position, stage (`navigation` or
     `verification`), clue audio link and attempts. A paused game can be read too.
 
@@ -213,16 +274,22 @@ def current_location(
 
     If a content manager deactivated the location before the student reached it, it is skipped
     (0 points) and the next location comes back. If that was the last one, the game is completed
-    and the response is the game status (the same body as GET /games/{id}) instead.
+    and the response is the game summary (the same body as GET /games/{id}/summary) instead.
     409 SESSION_NOT_ACTIVE for a game that has ended, or one that has been idle for the expiry
     limit (24 hours by default), which is expired. 409 INVALID_STAGE if the game has no location
     to play at its position (out of step). 404 NOT_FOUND for another student's game, or if the
     clue has no recording. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
     account.
     """
-    result = _play(lambda: get_current_location(user.id, game_id, db), user, db)
-    if isinstance(result, GameStatus):
-        return GameStatusResponse.model_validate(result, from_attributes=True)
+
+    def current_or_summary() -> CurrentLocation | GameSummary:
+        found = get_current_location(user.id, game_id, db)
+        # the last location was skipped, so the game is over: its summary, in this transaction
+        return get_summary(user.id, game_id, db) if isinstance(found, GameStatus) else found
+
+    result = _play(current_or_summary, user, db)
+    if isinstance(result, GameSummary):
+        return _summary_response(result)
     return CurrentLocationResponse.model_validate(result, from_attributes=True)
 
 
@@ -403,7 +470,7 @@ def resume(
 @games_router.post(
     "/{game_id}/quit",
     operation_id="quitGame",
-    response_model=GameStatusResponse,
+    response_model=GameSummaryResponse,
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
     ),
@@ -412,19 +479,23 @@ def quit_the_game(
     game_id: UUID,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-) -> GameStatusResponse:
+) -> GameSummaryResponse:
     """End the student's game (abandoned, end reason quit). A paused game can be quit too.
 
     Points already earned stay. The unplayed locations are skipped and come first in the next
-    game started today in the same mode, language and difficulty. Returns the game status for
-    now; once GET /games/{id}/summary exists, it returns the summary instead. 409
+    game started today in the same mode, language and difficulty. Returns the game summary (the
+    same body as GET /games/{id}/summary). 409
     SESSION_NOT_ACTIVE for a game that has already ended (so quitting twice is a 409), or one that
     has been idle for the expiry limit (24 hours by default), which is expired. 404 NOT_FOUND for
     another student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
     account.
     """
-    status = _play(lambda: quit_game(user.id, game_id, db), user, db)
-    return GameStatusResponse.model_validate(status, from_attributes=True)
+
+    def quit_and_summarize() -> GameSummary:
+        quit_game(user.id, game_id, db)
+        return get_summary(user.id, game_id, db)
+
+    return _summary_response(_play(quit_and_summarize, user, db))
 
 
 @games_router.post(

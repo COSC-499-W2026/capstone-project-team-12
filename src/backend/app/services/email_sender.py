@@ -19,7 +19,13 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.models.accounts import User
-from app.models.email import MAX_EMAIL_ATTEMPTS, PENDING_WHERE, TOKEN_KINDS, EmailOutbox
+from app.models.email import (
+    MAX_EMAIL_ATTEMPTS,
+    PENDING_WHERE,
+    TOKEN_KINDS,
+    EmailOutbox,
+    EmailToken,
+)
 from app.models.enums import EmailKind, EmailStatus
 from app.services.email import EmailService
 
@@ -40,7 +46,8 @@ _CURRENT_ADDRESS_KINDS = (EmailKind.VERIFY_EMAIL, EmailKind.RESET_PASSWORD, Emai
 
 
 class _SkipError(Exception):
-    """The address changed or a newer mail of the kind exists; its link would replace theirs."""
+    """The mail must not go out: the address changed, a newer mail of the kind exists (its link
+    would replace theirs), or the password was reset after a reset mail was queued."""
 
 
 class MailUnavailableError(Exception):
@@ -162,6 +169,8 @@ def _token_for(row: EmailOutbox, db: Session) -> str | None:
         raise _SkipError
     if _newer_mail_exists(row, db):
         raise _SkipError  # e.g. a retried change_email to a typo would cancel the right link
+    if kind == EmailKind.RESET_PASSWORD and _reset_since_queued(row, db):
+        raise _SkipError  # its link would work for 60 minutes after the password changed
     new_email = row.to_email if kind == EmailKind.CHANGE_EMAIL else None  # sent to the new one
     return EmailService.create_token(user, kind, db, new_email=new_email)
 
@@ -174,6 +183,24 @@ def _newer_mail_exists(row: EmailOutbox, db: Session) -> bool:
         EmailOutbox.created_at > row.created_at,
     )
     return db.scalar(newer.limit(1)) is not None
+
+
+def _reset_since_queued(row: EmailOutbox, db: Session) -> bool:
+    """Whether the user reset their password after this reset mail was queued (#199).
+
+    A reset marks the user's pending reset mails failed, but skips (SKIP LOCKED) one this job
+    holds, so that one is checked here. The user lock taken just before waits for a reset in
+    progress, and this query then sees it. Both times are the clock (clock_timestamp), so a
+    reset that started before the mail was queued but used its link after still counts. A link
+    replaced by a newer one is marked used too; that only happens when a newer mail is sent,
+    and this one is then skipped as older anyway.
+    """
+    used = select(EmailToken.id).where(
+        EmailToken.user_id == row.user_id,
+        EmailToken.purpose == EmailKind.RESET_PASSWORD,
+        EmailToken.used_at > row.created_at,
+    )
+    return db.scalar(used.limit(1)) is not None
 
 
 def _pause_queue(pause: timedelta, db: Session) -> None:
