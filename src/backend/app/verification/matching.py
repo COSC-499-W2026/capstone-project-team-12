@@ -6,7 +6,7 @@ OCR output (spec, Testing & Acceptance). Rules from the spec, Game Flow > Stage 
 - Normalise: uppercase, remove spaces and hyphens, keep tokens of 3 letters and 3 or 4 digits.
   The building letters and the number may be read as separate boxes, so neighbouring boxes are
   also joined, in both orders: OCR sometimes lists the number's box before the letters' box.
-  That other order is a guess, so it may find the answer but never another building.
+  Joining boxes is a guess, so it may find the answer but never another building.
 - Decide on the best candidate: an accepted answer read with at least the match confidence is
   MATCH; an accepted answer from the unclear confidence up, a token one character away from an
   answer from the unclear confidence up, or an answer's number read without its building letters
@@ -24,10 +24,12 @@ for the team to decide). Digits are never cut off: ADM0267 is not ADM026.
 Choices the spec leaves open (proposed, to be confirmed by the team): "one character away" is one
 substitution, insertion or deletion (Levenshtein distance 1); a number read without building
 letters needs the unclear confidence too, like the other UNCLEAR rows; building letters read
-below the unclear confidence count as unreadable, so reading more of a sign never gives a worse
-result than reading less; and a number read with other building letters ("LIB" and "333" for
-SCI333) is that other building, so NO_MATCH, since the same number can exist in more than one
-building.
+below the unclear confidence count as unreadable, so unsure letters never hide a clear number;
+and a number read with other building letters in the same box ("LIB 333" for SCI333) is that
+other building, so NO_MATCH, since the same number can exist in more than one building. In two
+boxes ("COMPUTER LAB", then "333") the number counts as read alone, so UNCLEAR. A room number
+missing a digit ("SCI 33" for SCI333) is one character away, like "ABC 123" for ABC1234, even
+though 2 digits are no room's format: it can be UNCLEAR, but never another room.
 
 Candidates hold OCR text: they are stored for statistics, never sent to the student. The text of
 boxes and candidates is left out of `repr`, so logs and tracebacks never show a room number.
@@ -48,6 +50,8 @@ SEPARATORS = re.compile(r"[ -]")
 ROOM_NUMBER = re.compile(rf"({ANSWER_PATTERN.strip('^$')})[A-Z]?")
 # 3 or 4 digits ending a word, before at most one letter: "333" in "CI333", "314" in "314W".
 NUMBER = re.compile(r"(?<![0-9])([0-9]{3,4})[A-Z]?$")
+# A building code and 2 digits: a 3-digit room read with one digit missing, "SCI33" for SCI333.
+DIGIT_MISSING = re.compile(r"([A-Z]{3}[0-9]{2})")
 
 FEEDBACK = {
     PhotoResult.MATCH: FeedbackCode.VERIFY_SUCCESS,
@@ -107,16 +111,23 @@ def decide(
     """
     by_box = _words(boxes)
     words = [word for box in by_box for word in box]
-    rooms = _room_numbers([*words, *_joined(pairwise(words))])
-    # The number's box read before the letters' box ("1121-1", then "EME"). The order is a guess,
-    # so these count only as the answer or one character away from it: never another building.
-    guessed = _room_numbers(_joined((later[-1], first[0]) for first, later in pairwise(by_box)))
+    texts = [*words, *_joined(pair for box in by_box for pair in pairwise(box))]
+    rooms = _room_numbers(texts)
+    # These count only as the answer or one character away from it, never as another building:
+    # two neighbouring boxes joined, in reading order or the other way round (the number's box
+    # read before the letters' box: "1121-1", then "EME"), as the box before the number may be
+    # another line of the sign ("COMPUTER LAB"); and a room number missing a digit ("SCI33").
+    neighbours = list(pairwise(by_box))
+    across = _joined(
+        [*((a[-1], b[0]) for a, b in neighbours), *((b[-1], a[0]) for a, b in neighbours)]
+    )
+    close_only = [*_room_numbers(across), *_room_numbers([*texts, *across], DIGIT_MISSING)]
     answers = frozenset(accepted_answers)
     numbers = {answer[BUILDING_LETTERS:] for answer in answers}
     judged = [(_judge(room, answers, thresholds), room) for room in rooms]
     judged += [
         (result, room)
-        for room in guessed
+        for room in close_only
         if (result := _judge(room, answers, thresholds)) != PhotoResult.NO_MATCH
     ]
     judged += [
@@ -153,18 +164,20 @@ def _words(boxes: Sequence[TextBox]) -> list[list[Candidate]]:
 def _joined(pairs: Iterable[tuple[Candidate, Candidate]]) -> list[Candidate]:
     """Each pair of words joined into one, with the lower confidence.
 
-    Reversed pairs join whole boxes, not words: a hyphen splits "1121-1" into two words, so the
+    Boxes are reversed as wholes, not words: a hyphen splits "1121-1" into two words, so the
     building letters in the next box are never the number's neighbouring word.
     """
     return [Candidate(a.text + b.text, min(a.confidence, b.confidence)) for a, b in pairs]
 
 
-def _room_numbers(texts: Iterable[Candidate]) -> list[Candidate]:
+def _room_numbers(
+    texts: Iterable[Candidate], pattern: re.Pattern[str] = ROOM_NUMBER
+) -> list[Candidate]:
     """The texts that are room numbers, without one letter after the number."""
     return [
         Candidate(found.group(1), text.confidence)
         for text in texts
-        if (found := ROOM_NUMBER.fullmatch(text.text))
+        if (found := pattern.fullmatch(text.text))
     ]
 
 

@@ -45,6 +45,8 @@ def test_sign_text_is_normalised_before_matching(text: str) -> None:
         ("SCI 334", 0.4499, PhotoResult.NO_MATCH, "SCI334"),
         ("SCI 3333", 0.9, PhotoResult.UNCLEAR, "SCI3333"),  # one character added at the end
         ("SCI 3433", 0.9, PhotoResult.UNCLEAR, "SCI3433"),  # one character added inside
+        ("SCI 33", 0.9, PhotoResult.UNCLEAR, "SCI33"),  # one digit missing
+        ("SCI 345", 0.99, PhotoResult.NO_MATCH, "SCI345"),  # two characters away
         ("LIB 312", 0.99, PhotoResult.NO_MATCH, "LIB312"),  # a different room
         ("LIB 333", 0.99, PhotoResult.NO_MATCH, "LIB333"),  # the same number in another building
     ],
@@ -64,6 +66,8 @@ def test_decision_table_for_a_room_number(
         [("SCII 333", 0.9)],  # four letters are no building code
         [("ROOM 333", 0.9)],  # a word before the number is not a building
         [("ROOM", 0.9), ("333", 0.9)],
+        [("COMPUTER LAB", 0.9), ("333", 0.9)],  # a box before may be another line of the sign
+        [("LIB", 0.9), ("333", 0.9)],  # so only letters in the number's own box are a building
         [("SCI", 0.9), ("EXIT", 0.9), ("333", 0.9)],  # only neighbouring boxes are joined
         [("333 SCI", 0.9)],  # words inside one box are joined in reading order only
         [("333A", 0.9)],  # one letter after the number is left out
@@ -82,11 +86,6 @@ def test_building_letters_read_too_unsure_count_as_unreadable() -> None:
     )
 
 
-def test_number_next_to_other_building_letters_is_no_match() -> None:
-    # "LIB" and "333" in neighbouring boxes are read as LIB333, not as a number alone.
-    assert decide_spec(("LIB", 0.9), ("333", 0.9))[0] == PhotoResult.NO_MATCH
-
-
 @pytest.mark.parametrize(
     "items",
     [
@@ -95,7 +94,7 @@ def test_number_next_to_other_building_letters_is_no_match() -> None:
         [("312", 0.9)],  # a number that is not the answer's
         [("333", 0.4499)],  # a number alone needs the unclear confidence too
         [("SCI 33345", 0.9)],  # the digits run on: no room number
-        [("SCI 33", 0.9)],
+        [("SCI 45", 0.9)],  # a digit missing and another wrong: no room at all
         [("SCI 333AB", 0.9)],  # only one letter after the number is left out
     ],
 )
@@ -136,6 +135,7 @@ MATCH, UNCLEAR, NO_MATCH = PhotoResult.MATCH, PhotoResult.UNCLEAR, PhotoResult.N
         # An extra digit is one character away: a digit is never cut off; 125V read as 1251.
         ([("ADM 0267", 0.9)], "ADM026", UNCLEAR, Candidate("ADM0267", 0.9)),
         ([("SCI", 1.0), ("1251", 0.9)], "SCI125", UNCLEAR, Candidate("SCI1251", 0.9)),
+        ([("SCI", 1.0), ("10", 0.7)], "SCI130", UNCLEAR, Candidate("SCI10", 0.7)),  # 3 missing
         # Among UNCLEAR reads, the answer comes first, then one away, then a number alone.
         ([("SCI 333", 0.5), ("SCI 334", 0.9)], "SCI333", UNCLEAR, Candidate("SCI333", 0.5)),
         ([("SCI 334", 0.9), ("333", 0.95)], "SCI333", UNCLEAR, Candidate("SCI334", 0.9)),
