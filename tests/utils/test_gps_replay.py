@@ -1,10 +1,12 @@
 """utils/gps_replay.py (#46): reading routes and replaying them against a fake API."""
 
+from collections.abc import Iterator
 from typing import Any
 
+import gps_replay
 import pytest
-from gps_fakes import FakeSend, api_error, fake_game_api
-from gps_replay import Api, RouteError, Step, read_route, replay
+from gps_fakes import FakeSend, api_error, echo_server, fake_game_api
+from gps_replay import Api, ApiError, RouteError, Step, read_route, replay
 
 HEADER = "t_s,lat,lng,accuracy_m"
 GAME = "game-1"
@@ -133,6 +135,16 @@ def test_the_replay_stops_when_the_game_or_the_login_changes(status: int, code: 
     assert send.paths().count(PING) == 2
 
 
+def test_the_replay_stops_when_the_server_cant_be_reached() -> None:
+    lost = ApiError(0, "CONNECTION_FAILED", "timed out")
+    send = playing((200, ping_answer("NAV_START")), lost)
+
+    exit_code, lines = run(send)
+
+    assert (exit_code, lines[-1]) == (1, "t=    5s  0 CONNECTION_FAILED: timed out")
+    assert send.paths().count(PING) == 2
+
+
 def test_confirm_on_the_first_ping_that_allows_it() -> None:
     send = playing(
         (200, ping_answer("NAV_START")), (200, ping_answer("NAV_ARRIVED", can_confirm=True))
@@ -156,3 +168,133 @@ def test_without_confirm_the_route_plays_to_the_end() -> None:
 
     assert code == 0
     assert "/navigation/confirm-arrival" not in "".join(send.paths())
+
+
+def test_a_refused_confirm_stops_the_replay() -> None:
+    send = playing((200, ping_answer("NAV_ARRIVED", can_confirm=True)))
+    confirm = f"POST /api/v1/games/{GAME}/navigation/confirm-arrival"
+    send.answers[confirm] = [api_error(409, "STALE_POSITION")]
+
+    code, lines = run(send, confirm=True)
+
+    assert (code, lines[-1]) == (1, "confirm-arrival: 409 STALE_POSITION: STALE_POSITION message")
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        {"position": 2, "stage": "verification"},
+        {"session_id": GAME, "state": "completed", "locations": []},  # the game is over
+    ],
+)
+def test_only_a_location_in_stage_1(location: dict[str, Any]) -> None:
+    send = playing()
+    send.answers[f"GET /api/v1/games/{GAME}/current-location"] = [(200, location)]
+
+    code, lines = run(send)
+
+    assert (code, len(send.calls)) == (1, 1)
+    assert "not in Stage 1" in lines[0]
+
+
+def test_a_game_that_cant_be_read() -> None:
+    send = playing()
+    send.answers[f"GET /api/v1/games/{GAME}/current-location"] = [api_error(404, "NOT_FOUND")]
+
+    code, lines = run(send)
+
+    assert (code, lines) == (1, ["can't replay: 404 NOT_FOUND: NOT_FOUND message"])
+
+
+@pytest.fixture
+def server() -> Iterator[str]:
+    with echo_server() as url:
+        yield url
+
+
+@pytest.fixture
+def route_file(tmp_path: Any) -> Any:
+    path = tmp_path / "route.csv"
+    path.write_text("\n".join(route("0,49.94,-119.39,5", "2,49.9399,-119.39,5")), "utf-8")
+    return path
+
+
+def test_main_logs_in_and_replays_the_open_game_in_real_time(
+    route_file: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GPS_REPLAY_PASSWORD", "secret")
+    waits: list[float] = []
+    monkeypatch.setattr(gps_replay.time, "sleep", waits.append)
+    send = playing((200, ping_answer("NAV_START")), (200, ping_answer("NAV_START", speak=False)))
+    send.answers["POST /api/v1/auth/login"] = [(200, {"access_token": "abc"})]
+    send.answers["GET /api/v1/games/current"] = [(200, {"session_id": GAME})]
+
+    code = gps_replay.main([str(route_file), "--email", "s@example.com"], send=send)
+
+    assert (code, waits) == (0, [0, 2])  # the script waits with time.sleep
+    assert send.calls[0] == (
+        "POST",
+        "/api/v1/auth/login",
+        {"form": {"username": "s@example.com", "password": "secret"}},
+    )
+    assert send.calls[1][2]["token"] == "abc"
+    assert "NAV_START" in capsys.readouterr().out
+
+
+def test_main_with_a_game_id_and_a_failed_login(
+    route_file: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GPS_REPLAY_PASSWORD", "wrong")
+    send = playing()
+    send.answers["POST /api/v1/auth/login"] = [api_error(401, "INVALID_CREDENTIALS")]
+
+    code = gps_replay.main([str(route_file), "--email", "s@x.com", "--game", GAME], send=send)
+
+    assert (code, len(send.calls)) == (1, 1)
+    assert "401 INVALID_CREDENTIALS" in capsys.readouterr().err
+
+
+def test_main_refuses_a_bad_route(tmp_path: Any, capsys: pytest.CaptureFixture[str]) -> None:
+    bad = tmp_path / "bad.csv"
+    bad.write_text("lat,lng\n", encoding="utf-8")
+    send = playing()
+
+    assert gps_replay.main([str(bad), "--email", "s@x.com"], send=send) == 2
+    assert gps_replay.main([str(tmp_path / "missing.csv"), "--email", "s@x.com"], send=send) == 2
+    assert send.calls == []
+    assert "the header must be" in capsys.readouterr().err
+
+
+def test_http_sender_sends_json_forms_and_the_token(server: str) -> None:
+    send = gps_replay.http_sender(server)
+
+    status, body = send("POST", "/api/v1/auth/login", form={"username": "a@b.c", "password": "p"})
+    assert status == 200
+    assert body["type"] == "application/x-www-form-urlencoded"
+    assert body["body"] == "username=a%40b.c&password=p"
+
+    status, body = send("POST", "/x/ping", token="abc", json_body={"lat": 1})
+    assert status == 409
+    assert (body["path"], body["auth"]) == ("/x/ping", "Bearer abc")
+    assert (body["type"], body["body"]) == ("application/json", '{"lat": 1}')
+
+    assert send("POST", "/html", json_body={}) == (502, "<html>Bad gateway</html>")
+
+
+@pytest.mark.parametrize(
+    ("url", "path"),
+    [
+        ("http://127.0.0.1:9", "/api/v1/games/current"),  # nothing listens on port 9
+        (None, "/slow"),  # the server accepts the request but answers too late
+    ],
+)
+def test_a_server_that_doesnt_answer(server: str, url: str | None, path: str) -> None:
+    send = gps_replay.http_sender(url or server, timeout_s=0.2)
+
+    with pytest.raises(ApiError) as failure:
+        send("POST", path, json_body={})
+    assert (failure.value.status, failure.value.code) == (0, "CONNECTION_FAILED")

@@ -3,6 +3,12 @@
 Not a conftest.py: tests/backend has one, and with both on the import path the backend tests'
 `from conftest import ...` could pick up this folder's file instead."""
 
+import json
+import threading
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 
@@ -42,3 +48,40 @@ def fake_game_api(game_id: str, *pings: Any, stage: str = "navigation") -> FakeS
             f"POST {games}/navigation/confirm-arrival": [(200, arrival)],
         }
     )
+
+
+class _EchoHandler(BaseHTTPRequestHandler):
+    """Answers a POST with what it received as JSON: 409 for a path ending in /ping, 502 with an
+    HTML page for /html, and a late 200 (after 1 s) for /slow."""
+
+    def do_POST(self) -> None:  # noqa: N802 (http.server's name)
+        received = {
+            "path": self.path,
+            "type": self.headers["Content-Type"],
+            "auth": self.headers["Authorization"],
+            "body": self.rfile.read(int(self.headers["Content-Length"])).decode(),
+        }
+        if self.path == "/html":
+            self._reply(502, b"<html>Bad gateway</html>")
+            return
+        if self.path == "/slow":
+            time.sleep(1)
+        self._reply(409 if self.path.endswith("/ping") else 200, json.dumps(received).encode())
+
+    def _reply(self, status: int, body: bytes) -> None:
+        self.send_response(status)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args: Any) -> None:
+        pass
+
+
+@contextmanager
+def echo_server() -> Iterator[str]:
+    """The base URL of a local HTTP server that echoes each request (see _EchoHandler)."""
+    server = HTTPServer(("127.0.0.1", 0), _EchoHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}/"
+    server.shutdown()
+    server.server_close()
