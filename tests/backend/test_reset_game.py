@@ -39,16 +39,13 @@ from app.services.locks import lock_user
 # the modules whose clock reset reads
 CLOCK = ("app.game.control", "app.game.status", "app.game.sessions")
 
+# most games here are ja/basic; a test in another mode asks for its own content
+pytestmark = pytest.mark.usefixtures("ja_basic_content")
+
 
 class _WithoutRecordings(UploadedAudioService):
     def clue_audio_url(self, audio_asset_id: UUID, db: Session) -> str:
         raise MediaNotFoundError
-
-
-@pytest.fixture(autouse=True)
-def ja_basic_content(playable_location_ids: Callable[..., list[UUID]]) -> None:
-    """Most games here are ja/basic; a test in another mode asks for its own content."""
-    playable_location_ids(Language.JA, Difficulty.BASIC)
 
 
 def _locations(game_id: UUID, db: Session) -> list[SessionLocation]:

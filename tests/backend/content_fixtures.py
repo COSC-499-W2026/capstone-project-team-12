@@ -59,10 +59,19 @@ def playable_location_ids(db: Session) -> Callable[..., list[UUID]]:
 
 
 @pytest.fixture
+def ja_basic_content(playable_location_ids: Callable[..., list[UUID]]) -> None:
+    """Content for ja/basic games. A file whose games are mostly ja/basic uses it for every
+    test (`pytestmark = pytest.mark.usefixtures("ja_basic_content")`); a test in another mode
+    asks playable_location_ids for its own."""
+    playable_location_ids(Language.JA, Difficulty.BASIC)
+
+
+@pytest.fixture
 def committed_location_ids(test_engine: Engine) -> Callable[..., list[UUID]]:
     """playable_location_ids for a test whose game runs in its own committed sessions, which
-    can't see the rows of the `db` fixture. The test deletes the games it committed itself; the
-    content goes after the test ends."""
+    can't see the rows of the `db` fixture. The test deletes the games it committed itself.
+    For now this only reads the stub's IDs, so it commits nothing and has nothing to clean up;
+    once it creates rows, it must delete them after the test."""
 
     def make(
         language: Language = Language.JA,

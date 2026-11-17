@@ -34,11 +34,8 @@ URL = "/api/v1/games"
 
 StartGame = Callable[..., Response]
 
-
-@pytest.fixture(autouse=True)
-def ja_basic_content(playable_location_ids: Callable[..., list[UUID]]) -> None:
-    """Most games here are ja/basic; a test in another mode asks for its own content."""
-    playable_location_ids(Language.JA, Difficulty.BASIC)
+# most games here are ja/basic; a test in another mode asks for its own content
+pytestmark = pytest.mark.usefixtures("ja_basic_content")
 
 
 @pytest.fixture
