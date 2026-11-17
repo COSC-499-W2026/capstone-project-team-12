@@ -220,7 +220,9 @@ def _open_zip(zip_file: IO[bytes]) -> zipfile.ZipFile:
     as the size says, whatever the number."""
     try:
         # zipfile's own reading of the end of the zip (ZIP64 included), so the size checked is
-        # the one it then reads. It is private, but Python is pinned to 3.11 and tests cover it
+        # the one it then reads. It is private, and zipfile changes between 3.11 patch releases
+        # (it is stricter about ZIP64 records since 3.11.14): the tests in
+        # test_audio_import_directory.py are the guard, so keep them passing on the CI version
         end_record = zipfile._EndRecData(zip_file)  # type: ignore[attr-defined]
         if end_record is not None:  # else ZipFile refuses it below
             _check_directory_size(end_record[_DIRECTORY_SIZE])

@@ -49,14 +49,26 @@ def directory_size(data: bytes) -> int:
     return int(struct.unpack_from("<I", data, data.rfind(END) + 12)[0])
 
 
-def with_zip64_end(data: bytes, size: int) -> bytes:
-    """The zip with a ZIP64 end record before its end record, stating the list's size as `size`,
-    as a zip of over 65535 files or 4 GB has. zipfile then reads the ZIP64 record's size."""
+def with_zip64_end(data: bytes) -> bytes:
+    """The same zip with a ZIP64 end record before its end record, as a zip of over 65535 files
+    or 4 GB has: the real size and offset of the list are in the ZIP64 record, and the end
+    record's size is 0xFFFFFFFF. It is consistent (the list ends where the ZIP64 record starts),
+    as zipfile since 3.11.14 refuses a record that is not."""
     end = data.rfind(END)
-    entries, _, offset = struct.unpack_from("<HII", data, end + 10)
+    entries, size, offset = struct.unpack_from("<HII", data, end + 10)
+    assert offset + size == end
     record = struct.pack("<4sQ2H2L4Q", ZIP64_END, 44, 45, 45, 0, 0, entries, entries, size, offset)
     locator = struct.pack("<4sLQL", ZIP64_LOCATOR, 0, end, 1)
-    return data[:end] + record + locator + data[end:]
+    classic = data[end : end + 12] + struct.pack("<I", 0xFFFFFFFF) + data[end + 16 :]
+    return data[:end] + record + locator + classic
+
+
+def zip_with_list_of(size: int) -> bytes:
+    """A zip of one file whose list of files is `size` bytes (a long name makes up the rest)."""
+    name = "x" * (size - ENTRY - len(".mp3")) + ".mp3"
+    data = zip_of({name: b""})
+    assert directory_size(data) == size
+    return data
 
 
 def forbid_reading_the_list(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -80,14 +92,10 @@ def test_list_longer_than_the_files_need_is_refused_before_it_is_read(
     one_file_limit: int,
     import_zip: Callable[[bytes], AudioImportReport],
 ) -> None:
-    name = "x" * (one_file_limit - ENTRY - len(".mp3")) + ".mp3"
-    longest = zip_of({name: b""})
-    assert directory_size(longest) == one_file_limit
-    assert [rejected.file for rejected in import_zip(longest).rejected] == [name]  # bad name
+    assert len(import_zip(zip_with_list_of(one_file_limit)).rejected) == 1  # bad name
 
-    too_long = zip_of({f"x{name}": b""})
     forbid_reading_the_list(monkeypatch)
-    assert_refused(import_zip, too_long)
+    assert_refused(import_zip, zip_with_list_of(one_file_limit + 1))
 
 
 def test_size_in_a_zip64_end_record_is_the_one_checked(
@@ -95,12 +103,12 @@ def test_size_in_a_zip64_end_record_is_the_one_checked(
     one_file_limit: int,
     import_zip: Callable[[bytes], AudioImportReport],
 ) -> None:
-    data = zip_of({"x.mp3": b""})
-    stated = with_zip64_end(data, directory_size(data))
-    assert [rejected.file for rejected in import_zip(stated).rejected] == ["x.mp3"]
+    at_limit = with_zip64_end(zip_with_list_of(one_file_limit))
+    assert directory_size(at_limit) == one_file_limit  # read from the ZIP64 record
+    assert len(import_zip(at_limit).rejected) == 1  # imported as far as its (bad) name
 
     forbid_reading_the_list(monkeypatch)
-    assert_refused(import_zip, with_zip64_end(data, one_file_limit + 1))
+    assert_refused(import_zip, with_zip64_end(zip_with_list_of(one_file_limit + 1)))
 
 
 def test_zip_of_the_most_files_made_on_a_mac_is_not_refused(
