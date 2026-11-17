@@ -10,10 +10,11 @@ from itertools import count
 from pathlib import Path
 from typing import Any, NamedTuple, TypeVar
 from urllib.parse import parse_qs, unquote, urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import av
 import pytest
+from content_fixtures import SnapshotIds
 from fastapi.testclient import TestClient
 from gps_replay import Api, Step, replay
 from httpx2 import Response
@@ -22,7 +23,6 @@ from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.content import interface as content
 from app.content.clue_audio import UPLOAD_PROVIDER
 from app.db import DB_CONNECT_ARGS, get_db
 from app.errors import AppError, ErrorCode
@@ -41,9 +41,11 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.game import GameSession, SessionLocation
-from app.services.audio import UploadedAudioService
 from app.services.limiter import limiter
 from app.services.storage import MEDIA_URL_PREFIX, get_storage_service
+
+# playable content for game tests (content_fixtures.py)
+pytest_plugins = ["content_fixtures"]
 
 
 @pytest.fixture(scope="session")
@@ -415,16 +417,16 @@ def open_game(make_game_session: Callable[..., GameSession]) -> Callable[..., Ga
 
 
 @pytest.fixture
-def make_session_location(db: Session) -> Callable[..., SessionLocation]:
-    """A pending location in the game with a valid content snapshot (a random location id)."""
+def make_session_location(
+    db: Session, snapshot_ids: Callable[[], SnapshotIds]
+) -> Callable[..., SessionLocation]:
+    """A pending location in the game with a valid content snapshot (IDs from snapshot_ids)."""
 
     def make(game: GameSession, position: int, **fields: Any) -> SessionLocation:
         values: dict[str, Any] = {
             "session_id": game.id,
-            "location_id": uuid4(),
             "position": position,
-            "clue_id": uuid4(),
-            "audio_asset_id": UploadedAudioService().clue_audio_asset_id(uuid4(), db),
+            **snapshot_ids()._asdict(),
             "accepted_answers_snapshot": ["SCI333"],
             "gps_points_snapshot": [{"lat": 49.9394, "lng": -119.3948}],
             "radius_snapshot": 30,
@@ -481,6 +483,7 @@ def replay_route(
     auth_headers: Callable[[User], dict[str, str]],
     navigating_game: Callable[..., tuple[GameSession, SessionLocation]],
     freeze_clock: Callable[..., None],
+    playable_location_ids: Callable[..., list[UUID]],
 ) -> Callable[..., tuple[int, list[str], SessionLocation]]:
     """Plays a route with utils/gps_replay.py against a new game through the API: the game is at
     an active ja/basic location (entrance and radius of make_session_location), in Stage 1 since
@@ -495,9 +498,8 @@ def replay_route(
         after_ping: Callable[[TestClient, str, str], None] | None = None,
         **kwargs: Any,
     ) -> tuple[int, list[str], SessionLocation]:
-        active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
-        assert active, "needs an active ja/basic location"
-        game, row = navigating_game(now, *_REPLAY_CLOCKS, location_id=active[0])
+        location_id = playable_location_ids(count=1)[0]
+        game, row = navigating_game(now, *_REPLAY_CLOCKS, location_id=location_id)
         db.commit()  # so an error the route rolls back keeps the game
         student = db.get(User, game.student_id)
         assert student is not None

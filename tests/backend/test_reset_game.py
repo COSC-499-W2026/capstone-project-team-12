@@ -45,6 +45,12 @@ class _WithoutRecordings(UploadedAudioService):
         raise MediaNotFoundError
 
 
+@pytest.fixture(autouse=True)
+def ja_basic_content(playable_location_ids: Callable[..., list[UUID]]) -> None:
+    """Most games here are ja/basic; a test in another mode asks for its own content."""
+    playable_location_ids(Language.JA, Difficulty.BASIC)
+
+
 def _locations(game_id: UUID, db: Session) -> list[SessionLocation]:
     return list(
         db.scalars(
@@ -93,8 +99,10 @@ def test_reset_starts_a_new_game_with_the_same_settings(
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
     freeze_clock: Callable[..., None],
+    playable_location_ids: Callable[..., list[UUID]],
     in_class: bool,
 ) -> None:
+    playable_location_ids(Language.JA, Difficulty.ADVANCING)
     student = make_user()
     class_id = make_class().id if in_class else None
     old = make_game_session(
@@ -173,14 +181,14 @@ def test_reset_does_not_bring_back_a_quit_games_locations(
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
+    playable_location_ids: Callable[..., list[UUID]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     student = make_user()
-    eligible = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
     quit_earlier = make_game_session(
         student, state=SessionState.ABANDONED, end_reason=SessionEndReason.QUIT
     )
-    unplayed = eligible[:2]
+    unplayed = playable_location_ids(count=2)
     for position, location_id in enumerate(unplayed, start=1):
         make_session_location(
             quit_earlier,
@@ -373,10 +381,13 @@ def test_reset_does_not_commit(
     assert calls == []
 
 
-def test_reset_holds_the_students_lock_until_the_transaction_ends(test_engine: Engine) -> None:
+def test_reset_holds_the_students_lock_until_the_transaction_ends(
+    test_engine: Engine, committed_location_ids: Callable[..., list[UUID]]
+) -> None:
     """A start or a class switch takes the student's lock first, so a reset has to take it too,
     in the same order (the student, then the game), or the two could deadlock. The setup
     commits, unlike the other tests, so the lock is visible to another connection."""
+    committed_location_ids(Language.JA, Difficulty.BASIC)
     student_id = game_id = None
     holder: Session | None = None
     try:

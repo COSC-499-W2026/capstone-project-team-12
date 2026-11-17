@@ -28,9 +28,10 @@ from app.models.game import GameSession, SessionLocation
 JA, BASIC = Language.JA, Difficulty.BASIC
 
 
-@pytest.fixture
-def eligible(db: Session) -> list[UUID]:
-    return sorted(content.eligible_location_ids(JA, BASIC, db))
+@pytest.fixture(autouse=True)
+def eligible(playable_location_ids: Callable[..., list[UUID]]) -> list[UUID]:
+    """The ja/basic locations, sorted; for every test, so each draw has content."""
+    return playable_location_ids(JA, BASIC)
 
 
 @pytest.fixture

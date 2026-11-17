@@ -8,7 +8,7 @@ expired before the 409.
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -22,8 +22,6 @@ from app.errors import AppError, ErrorCode
 from app.game.sessions import session_idle_limit
 from app.models.accounts import User
 from app.models.enums import (
-    Difficulty,
-    Language,
     LocationStatus,
     SessionEndReason,
     SessionState,
@@ -245,8 +243,10 @@ def test_reset(
     post: Callable[..., Response],
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
+    playable_location_ids: Callable[..., list[UUID]],
     transaction_calls: list[str],
 ) -> None:
+    playable_location_ids()
     student = make_user()
     paused_at = datetime.now(UTC)
     old = make_game_session(student, state=SessionState.PAUSED, paused_at=paused_at)
@@ -271,8 +271,10 @@ def test_the_fourth_reset_today_is_409(
     post: Callable[..., Response],
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
+    playable_location_ids: Callable[..., list[UUID]],
     assert_error: Callable[..., None],
 ) -> None:
+    playable_location_ids()
     student = make_user()
     game = make_game_session(student)
     for _ in range(3):
@@ -290,9 +292,11 @@ def test_a_reset_that_cannot_save_the_new_game_is_not_counted(
     post: Callable[..., Response],
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
+    playable_location_ids: Callable[..., list[UUID]],
     monkeypatch: pytest.MonkeyPatch,
     assert_error: Callable[..., None],
 ) -> None:
+    playable_location_ids()
     student = make_user()
     game = make_game_session(student)
     # the game is already saved, so the route's rollback only undoes this reset
@@ -322,13 +326,14 @@ def test_not_enough_content_returns_409(
     post: Callable[..., Response],
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
+    playable_location_ids: Callable[..., list[UUID]],
     monkeypatch: pytest.MonkeyPatch,
     assert_error: Callable[..., None],
 ) -> None:
+    four = frozenset(playable_location_ids(count=4))
     student = make_user()
     game = make_game_session(student)
     db.commit()
-    four = frozenset(list(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))[:4])
     monkeypatch.setattr(content, "eligible_location_ids", lambda *_: four)
 
     assert_error(post(student, game.id, "reset"), 409, ErrorCode.NOT_ENOUGH_CONTENT)
