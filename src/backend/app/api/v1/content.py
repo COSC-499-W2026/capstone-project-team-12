@@ -287,8 +287,11 @@ def post_clue_audio_import(
     same zip again adds a new primary recording to each clue.
 
     415 UNSUPPORTED_MEDIA_TYPE if the upload is not a zip; 422 VALIDATION_ERROR on `file` without
-    a file or with more than `MAX_IMPORT_FILES` files (100 by default: one zip per language covers
-    a campus). Needs content rights: 403 FORBIDDEN_ROLE otherwise.
+    a file, with more than `MAX_IMPORT_FILES` files (100 by default: one zip per language covers
+    a campus) or with a list of files longer than that many files need (folders and hidden files
+    count). Split a zip of long recordings: the import re-encodes each file, and a very long one
+    can outlast a proxy's timeout (the import still commits; do not upload it again). Needs
+    content rights: 403 FORBIDDEN_ROLE otherwise.
     """
     report = import_clue_audio(file.file, user.id, db)
     db.commit()
@@ -317,7 +320,8 @@ def post_feedback_audio_import(
     language (78) fits in one zip.
 
     415 UNSUPPORTED_MEDIA_TYPE if the upload is not a zip; 422 VALIDATION_ERROR on `file` without
-    a file or with more than `MAX_IMPORT_FILES` files. Needs content rights: 403 FORBIDDEN_ROLE
+    a file, with more than `MAX_IMPORT_FILES` files or with a list of files longer than that many
+    files need (folders and hidden files count). Needs content rights: 403 FORBIDDEN_ROLE
     otherwise.
     """
     report = import_feedback_audio(file.file, db)
