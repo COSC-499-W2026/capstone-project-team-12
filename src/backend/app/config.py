@@ -48,8 +48,12 @@ class Settings(BaseSettings):
     max_import_file_kb: PositiveInt = 512
     # proposed too: files in one audio zip. One import is one transaction that locks each clue it
     # touches until it commits, and each file is re-encoded (0.08 s for a 10 s clip, 0.41 s for
-    # 60 s), so 100 files take under 45 s, inside a 60 s proxy timeout: a zip per language (90
-    # clues for 30 locations), and every feedback phrase (78) in one
+    # 60 s) on the machine measured, so 100 files take under 45 s, inside a 60 s proxy timeout: a
+    # zip per language (90 clues for 30 locations), and every feedback phrase (78) in one.
+    # NOT yet measured on the deployment machine: a review run took ~0.85 s for a 60 s stereo MP3,
+    # so 100 long clips could pass 60 s (the import still commits, but the client sees an error
+    # and may upload again, adding a second primary recording per clue). Until the deployment is
+    # checked, split zips of long recordings, or lower MAX_IMPORT_FILES
     max_import_files: PositiveInt = 100
     audio_service_type: AudioServiceType = "uploaded"
     gps_radius_meters: PositiveInt = 30  # default for a new location; each location stores its own

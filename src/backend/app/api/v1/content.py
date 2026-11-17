@@ -242,7 +242,9 @@ def post_location_import(
     `"49.9394,-119.3948;49.9401,-119.3952"`. Each row is checked as in `createLocation`; a room
     number another row or location has (a deactivated one included: reactivate it with
     `replaceLocation`) is rejected. Imports, dry runs included, run one at a time: a second one
-    waits until the first has finished.
+    waits until the first has finished. The file cannot set accepted answers or `is_active`: an
+    imported location accepts only the answer its room number gives and is active; add other
+    answers afterwards with `replaceLocation`.
 
     413 FILE_TOO_LARGE over `MAX_IMPORT_FILE_KB`; 422 VALIDATION_ERROR on `file` without a file,
     or when the whole file is refused: not UTF-8, not valid CSV (e.g. a quote left open), a header
