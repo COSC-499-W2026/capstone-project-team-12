@@ -50,8 +50,8 @@ from app.content.schemas import (
     LocationImportReport,
     RejectedRow,
 )
-from app.content.uploads import BYTES_PER_KB, read_upload
 from app.errors import AppError, ErrorCode
+from app.services.uploads import BYTES_PER_KB, read_upload
 
 COLUMNS = ("name", "building_name", "floor_number", "room_number", "entrances", "gps_radius_meters")
 OPTIONAL_COLUMNS = frozenset({"floor_number", "gps_radius_meters"})

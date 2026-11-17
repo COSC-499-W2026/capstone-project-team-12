@@ -30,8 +30,8 @@ from av.container import InputContainer, OutputContainer
 from av.stream import Disposition
 
 from app.config import get_settings
-from app.content.uploads import BYTES_PER_MB, read_upload
 from app.errors import AppError, ErrorCode
+from app.services.uploads import BYTES_PER_MB, read_upload
 
 # what every stored recording is encoded as: enough for speech, playable in every browser
 _SAMPLE_RATE = 44100

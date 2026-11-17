@@ -1,8 +1,8 @@
 """A game's summary (A23, #47): how each location went, the points, and what the game added to
 the student's level and badges.
 
-summary_of builds it for a loaded game, so a finishing response (quit, a game completed on its
-last location, A10's last photo) can return it in the same transaction.
+summary_of is for a caller that already holds the game, such as A10's last photo, so it
+can return the summary in the same transaction.
 """
 
 from dataclasses import dataclass
