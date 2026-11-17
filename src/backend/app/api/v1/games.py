@@ -15,7 +15,7 @@ from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.arrival import confirm_arrival
 from app.game.control import pause_game, quit_game, reset_game, resume_game
-from app.game.current_location import Stage, get_current_location
+from app.game.current_location import CurrentLocation, Stage, get_current_location
 from app.game.navigation import Ping, Trend, process_ping
 from app.game.shuffle import shuffle_game
 from app.game.start import start_game
@@ -253,7 +253,7 @@ class CurrentLocationResponse(BaseModel):
 @games_router.get(
     "/{game_id}/current-location",
     operation_id="getCurrentLocation",
-    response_model=CurrentLocationResponse | GameStatusResponse,
+    response_model=CurrentLocationResponse | GameSummaryResponse,
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
     ),
@@ -262,7 +262,7 @@ def current_location(
     game_id: UUID,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-) -> CurrentLocationResponse | GameStatusResponse:
+) -> CurrentLocationResponse | GameSummaryResponse:
     """The current location of the student's game: position, stage (`navigation` or
     `verification`), clue audio link and attempts. A paused game can be read too.
 
@@ -274,16 +274,22 @@ def current_location(
 
     If a content manager deactivated the location before the student reached it, it is skipped
     (0 points) and the next location comes back. If that was the last one, the game is completed
-    and the response is the game status (the same body as GET /games/{id}) instead.
+    and the response is the game summary (the same body as GET /games/{id}/summary) instead.
     409 SESSION_NOT_ACTIVE for a game that has ended, or one that has been idle for the expiry
     limit (24 hours by default), which is expired. 409 INVALID_STAGE if the game has no location
     to play at its position (out of step). 404 NOT_FOUND for another student's game, or if the
     clue has no recording. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
     account.
     """
-    result = _play(lambda: get_current_location(user.id, game_id, db), user, db)
-    if isinstance(result, GameStatus):
-        return GameStatusResponse.model_validate(result, from_attributes=True)
+
+    def current_or_summary() -> CurrentLocation | GameSummary:
+        found = get_current_location(user.id, game_id, db)
+        # the last location was skipped, so the game is over: its summary, in this transaction
+        return get_summary(user.id, game_id, db) if isinstance(found, GameStatus) else found
+
+    result = _play(current_or_summary, user, db)
+    if isinstance(result, GameSummary):
+        return _summary_response(result)
     return CurrentLocationResponse.model_validate(result, from_attributes=True)
 
 
@@ -464,7 +470,7 @@ def resume(
 @games_router.post(
     "/{game_id}/quit",
     operation_id="quitGame",
-    response_model=GameStatusResponse,
+    response_model=GameSummaryResponse,
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
     ),
@@ -473,19 +479,23 @@ def quit_the_game(
     game_id: UUID,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-) -> GameStatusResponse:
+) -> GameSummaryResponse:
     """End the student's game (abandoned, end reason quit). A paused game can be quit too.
 
     Points already earned stay. The unplayed locations are skipped and come first in the next
-    game started today in the same mode, language and difficulty. Returns the game status for
-    now; once GET /games/{id}/summary exists, it returns the summary instead. 409
+    game started today in the same mode, language and difficulty. Returns the game summary (the
+    same body as GET /games/{id}/summary). 409
     SESSION_NOT_ACTIVE for a game that has already ended (so quitting twice is a 409), or one that
     has been idle for the expiry limit (24 hours by default), which is expired. 404 NOT_FOUND for
     another student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
     account.
     """
-    status = _play(lambda: quit_game(user.id, game_id, db), user, db)
-    return GameStatusResponse.model_validate(status, from_attributes=True)
+
+    def quit_and_summarize() -> GameSummary:
+        quit_game(user.id, game_id, db)
+        return get_summary(user.id, game_id, db)
+
+    return _summary_response(_play(quit_and_summarize, user, db))
 
 
 @games_router.post(

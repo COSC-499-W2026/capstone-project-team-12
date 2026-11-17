@@ -1,7 +1,7 @@
 """Replay a recorded walking route against a game (#46, spec: Simulation Scripts).
 
-Logs in as the student, sends each position of the route to POST /games/{id}/navigation/ping,
-waiting the recorded time between rows, and prints the feedback code the server returns at
+Logs in as the student, sends each position of the route to POST /games/{id}/navigation/ping
+on the recorded timeline, and prints the feedback code the server returns at
 each step. It only uses the public API, the same as the app.
 
 The route is a CSV with the header t_s,lat,lng,accuracy_m: seconds since the start of the
@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import csv
 import getpass
+import http.client
 import json
 import math
 import os
@@ -40,6 +41,7 @@ API = "/api/v1"
 # no longer works, or the server can't be reached. Others, such as 429, skip one step.
 STOP_CODES = {"SESSION_NOT_ACTIVE", "INVALID_STAGE", "STATE_CHANGED", "NOT_FOUND"}
 STOP_CODES |= {"NOT_AUTHENTICATED", "ACCOUNT_DISABLED", "FORBIDDEN_ROLE", "CONNECTION_FAILED"}
+STOP_CODES |= {"UNEXPECTED_BODY"}  # a 200 that is not the JSON we need ends the replay
 
 
 @dataclass(frozen=True)
@@ -66,7 +68,10 @@ def read_route(lines: Iterable[str]) -> list[Step]:
     if tuple(reader.fieldnames or ()) != COLUMNS:
         raise RouteError(f"the header must be {','.join(COLUMNS)}")
     steps: list[Step] = []
-    for line, row in enumerate(reader, start=2):
+    for row in reader:
+        line = reader.line_num  # blank lines are not rows, so enumerate would number them wrong
+        if row.get(None):
+            raise RouteError(f"line {line}: unexpected extra columns")
         try:
             step = Step(*(float(row[name]) for name in COLUMNS))
         except (TypeError, ValueError):
@@ -122,9 +127,13 @@ def http_sender(base_url: str, timeout_s: float = 30) -> Send:
             with urlopen(request, timeout=timeout_s) as response:
                 return response.status, _decode(response.read())
         except HTTPError as error:
-            with error:
-                return error.code, _decode(error.read())
-        except OSError as error:  # URLError, or a timeout or reset while reading the answer
+            try:
+                raw = error.read()
+            except (OSError, http.client.HTTPException):
+                raw = b""
+            error.close()
+            return error.code, _decode(raw)
+        except (OSError, http.client.HTTPException) as error:  # timeout, reset, or a cut body
             reason = error.reason if isinstance(error, URLError) else error
             raise ApiError(0, "CONNECTION_FAILED", str(reason) or type(error).__name__) from None
 
@@ -147,33 +156,49 @@ class Api:
     @classmethod
     def login(cls, send: Send, email: str, password: str) -> Api:
         form = {"username": email, "password": password}
-        body = _check(*send("POST", f"{API}/auth/login", form=form))
-        return cls(send, body["access_token"])
+        body = _fields(_check(*send("POST", f"{API}/auth/login", form=form)), "access_token")
+        token = body["access_token"]
+        if not isinstance(token, str) or not token:
+            raise ApiError(200, "UNEXPECTED_BODY", "access_token")
+        return cls(send, token)
 
     def current_game(self) -> str:
-        return str(self._call("GET", "/games/current")["session_id"])
+        return str(_fields(self._call("GET", "/games/current"), "session_id")["session_id"])
 
     def current_location(self, game_id: str) -> dict[str, Any]:
-        return self._call("GET", f"/games/{game_id}/current-location")
+        return _fields(self._call("GET", f"/games/{game_id}/current-location"))
 
     def ping(self, game_id: str, step: Step) -> dict[str, Any]:
         body = {"lat": step.lat, "lng": step.lng, "accuracy_m": step.accuracy_m}
-        return self._call("POST", f"/games/{game_id}/navigation/ping", body)
+        answer = self._call("POST", f"/games/{game_id}/navigation/ping", body)
+        answer = _fields(answer, "speak", "feedback", "trend", "can_confirm")
+        _fields(answer["feedback"], "code")
+        return answer
 
     def confirm(self, game_id: str, position: int) -> dict[str, Any]:
-        body = {"position": position}
-        return self._call("POST", f"/games/{game_id}/navigation/confirm-arrival", body)
+        return _fields(
+            self._call(
+                "POST", f"/games/{game_id}/navigation/confirm-arrival", {"position": position}
+            ),
+            "stage",
+            "feedback",
+        )
 
-    def _call(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        answer = _check(*self._send(method, API + path, token=self._token, json_body=body))
-        if not isinstance(answer, dict):
-            raise ApiError(200, "UNEXPECTED_BODY", f"expected a JSON object: {answer!r:.200}")
-        return answer
+    def _call(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+        return _check(*self._send(method, API + path, token=self._token, json_body=body))
+
+
+def _fields(body: Any, *keys: str) -> dict[str, Any]:
+    if isinstance(body, dict) and set(keys) <= body.keys():
+        return body
+    raise ApiError(200, "UNEXPECTED_BODY", repr(body)[:120])
 
 
 def _check(status: int, body: Any) -> Any:
     if status >= 400:
-        error = body.get("error", {}) if isinstance(body, dict) else {}
+        error = body.get("error") if isinstance(body, dict) else None
+        if not isinstance(error, dict):
+            raise ApiError(status, "HTTP_ERROR", str(body))
         raise ApiError(status, error.get("code", "HTTP_ERROR"), error.get("message", str(body)))
     return body
 
@@ -196,6 +221,7 @@ def replay(
     *,
     confirm: bool = False,
     sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], float] | None = None,
     out: Callable[[str], None] = print,
 ) -> int:
     """Play the route against the game; 0 when it was played to the end (or arrival was
@@ -208,34 +234,47 @@ def replay(
     if location.get("stage") != "navigation":
         out("can't replay: the game's current location is not in Stage 1 (navigation)")
         return 1
+    if "position" not in location:
+        out("can't replay: 200 UNEXPECTED_BODY: position")
+        return 1
     out(f"game {game_id}, location {location['position']}: {len(steps)} pings")
 
     spoken: list[str] = []
-    elapsed = 0.0
+    accepted = 0
+    refused = 0
+    clock = time.monotonic if now is None else now
+    start = clock()
+    # catching up after a slow answer must not send the next ping inside the 2 s rate limit
+    sent_at = start - MIN_GAP_S
     for step in steps:
-        sleep(step.t_s - elapsed)
-        elapsed = step.t_s
+        earliest = max(start + step.t_s, sent_at + MIN_GAP_S)
+        sleep(max(0.0, earliest - clock()))
+        sent_at = clock()  # when the ping is sent, not when its answer comes back
         try:
             answer = api.ping(game_id, step)
         except ApiError as error:
+            refused += 1
             out(f"t={step.t_s:>5.0f}s  {error}")
             if error.code in STOP_CODES:
                 return 1
             continue
+        accepted += 1
         out(describe(step, answer))
         if answer["speak"]:
             spoken.append(answer["feedback"]["code"])
         if confirm and answer["can_confirm"]:
             try:
                 arrival = api.confirm(game_id, location["position"])
-            except ApiError as error:
+                codes = ", ".join(item["code"] for item in arrival["feedback"])
+            except (ApiError, KeyError, TypeError) as error:
+                if not isinstance(error, ApiError):
+                    error = ApiError(200, "UNEXPECTED_BODY", "feedback")
                 out(f"confirm-arrival: {error}")
                 return 1
-            codes = ", ".join(item["code"] for item in arrival["feedback"])
             out(f"arrival confirmed: {codes}, now in Stage 2 ({arrival['stage']})")
             return 0
-    out(f"done: {len(steps)} pings, spoken {', '.join(spoken) or 'nothing'}")
-    return 0
+    out(f"done: {len(steps)} pings, {refused} refused, spoken {', '.join(spoken) or 'nothing'}")
+    return 0 if accepted else 1
 
 
 def main(argv: list[str] | None = None, send: Send | None = None) -> int:
@@ -248,9 +287,9 @@ def main(argv: list[str] | None = None, send: Send | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        with args.route.open(newline="", encoding="utf-8") as file:
+        with args.route.open(newline="", encoding="utf-8-sig") as file:
             steps = read_route(file)
-    except (OSError, RouteError) as error:
+    except (OSError, UnicodeDecodeError, RouteError) as error:
         print(f"{args.route}: {error}", file=sys.stderr)
         return 2
     password = os.environ.get("GPS_REPLAY_PASSWORD") or getpass.getpass("Password: ")
