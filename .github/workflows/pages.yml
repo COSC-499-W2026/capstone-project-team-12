@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, ARM64]
 
     steps:
       - name: Checkout repository
@@ -28,6 +28,11 @@ jobs:
           cache-dependency-path: |
             src/backend/requirements.txt
             src/backend/requirements-dev.txt
+
+      - name: Create a fresh venv
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
@@ -53,7 +58,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, ARM64]
     permissions:
       pages: write
       id-token: write
