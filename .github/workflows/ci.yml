@@ -39,7 +39,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Point DATABASE_URL at this job's Postgres
-        run: echo "DATABASE_URL=postgresql+psycopg://hunt:hunt@localhost:${{ job.services.postgres.ports['5432'] }}/hunt_test" >> "$GITHUB_ENV"
+        run: |
+          echo "Postgres is on host port ${{ job.services.postgres.ports['5432'] }}"
+          echo "DATABASE_URL=postgresql+psycopg://hunt:hunt@localhost:${{ job.services.postgres.ports['5432'] }}/hunt_test" >> "$GITHUB_ENV"
 
       - name: Set up Python
         uses: actions/setup-python@v5
