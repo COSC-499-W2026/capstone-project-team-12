@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from app.api.v1.auth import auth_router
 from app.api.v1.classes import (
     classes_router,
+    leaderboard_router,
     teacher_access_codes_router,
     teacher_classes_router,
 )
@@ -21,6 +22,7 @@ from app.errors import error_responses
 api_router = APIRouter(prefix="/api/v1", responses=error_responses(HTTPStatus.UNPROCESSABLE_ENTITY))
 api_router.include_router(auth_router)
 api_router.include_router(classes_router)
+api_router.include_router(leaderboard_router)
 api_router.include_router(teacher_classes_router)
 api_router.include_router(teacher_access_codes_router)
 api_router.include_router(content_router)

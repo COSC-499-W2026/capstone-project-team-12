@@ -45,6 +45,7 @@ from app.engagement.classes import (
     update_class_settings,
 )
 from app.engagement.daily_challenges import ensure_daily_challenges
+from app.engagement.leaderboard import LeaderboardEntry, get_class_leaderboard
 from app.engagement.stats import (
     GameEngagement,
     LanguageEngagementStats,
@@ -110,6 +111,8 @@ __all__ = [
     "get_game_engagement",
     "UnlockedAchievement",
     "list_unlocked_achievements",
+    "LeaderboardEntry",
+    "get_class_leaderboard",
 ]
 
 
