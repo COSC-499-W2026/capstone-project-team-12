@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+from http import HTTPStatus
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,7 +15,7 @@ from app.errors import ErrorCode
 from app.models.accounts import User
 
 LIMIT = 3
-URL = "/api/v1/me"
+URL = "/api/v1/me/profile"
 AUTH_URL = "/api/v1/auth/refresh"
 
 
@@ -108,3 +109,9 @@ def test_every_api_route_documents_429(client: TestClient) -> None:
     ]
 
     assert not missing
+
+
+def use_up(send: Callable[..., Response], headers: dict[str, str] | None = None) -> None:
+    for _ in range(LIMIT):
+        # 200 signed in, 401 otherwise: a 404 would mean URL isn't a route, so nothing is counted
+        assert send(headers).status_code in (HTTPStatus.OK, HTTPStatus.UNAUTHORIZED)
