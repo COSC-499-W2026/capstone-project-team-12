@@ -105,6 +105,31 @@ def test_difficulty_eligibility(
     assert stats.total_points == expected_bonus
 
 
+def test_progress_uses_configured_difficulty_and_count(
+    db: Session, make_user: Callable[..., User]
+) -> None:
+    student = make_user()
+    now = datetime.now(UTC)
+    challenge = ensure_daily_challenges(student.id, db, now=now)[2]
+    challenge.params = {"difficulty": Difficulty.ADVANCING, "count": 2}
+
+    for difficulty, expected_progress in (
+        (Difficulty.CHALLENGING, 0),
+        (Difficulty.ADVANCING, 1),
+        (Difficulty.ADVANCING, 2),
+    ):
+        completed = record_challenge_progress(
+            student.id,
+            difficulty=difficulty,
+            language=Language.JA,
+            class_id=None,
+            db=db,
+            now=now,
+        )
+        assert challenge.progress_current == expected_progress
+        assert (str(challenge.id) in completed) == (expected_progress == 2)
+
+
 def test_three_completions_and_global_progress(
     db: Session,
     make_user: Callable[..., User],
