@@ -18,6 +18,9 @@ jobs:
     environment: netlify
     env:
       NETLIFY_SITE_URL: https://cosc499-team12.netlify.app
+      # Cycle day comes from the Netlify billing page: Free plan credits were
+      # granted Nov 16, 2026 and expire Dec 16, 2026, so the cycle starts on the
+      # 16th. Counted in UTC. Update this if the plan or cycle changes.
       NETLIFY_CYCLE_DAY: "16"
       MAX_DEPLOYS_PER_CYCLE: "19"
 
@@ -180,7 +183,7 @@ jobs:
               fh.write(f"under_cap={'true' if under_cap else 'false'}\n")
           PY
 
-      # netlify-cli@27 requires Node 22.13+. The runner image is not assumed to have it.
+      # netlify-cli@27.20.0 requires Node >=22.13.0. The runner image is not assumed to have it.
       - name: Set up Node.js
         if: github.ref == 'refs/heads/main' && steps.changed.outputs.changed == 'true' && steps.cap.outputs.under_cap == 'true'
         uses: actions/setup-node@v4
@@ -193,7 +196,7 @@ jobs:
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
-        run: npx --yes netlify-cli@27 deploy --dir=site --prod --no-build --message "${{ github.sha }}"
+        run: npx --yes netlify-cli@27.20.0 deploy --dir=site --prod --no-build --message "${{ github.sha }}"
 
       - name: Write deploy summary
         if: github.ref == 'refs/heads/main'
