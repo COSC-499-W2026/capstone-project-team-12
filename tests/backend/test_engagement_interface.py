@@ -273,13 +273,22 @@ def test_apply_location_result_awards_completed_location(
         db=db,
     )
 
+    challenge_award = db.scalar(
+        select(PointsLedger).where(
+            PointsLedger.user_id == student.id,
+            PointsLedger.source_type == "daily_challenge",
+        )
+    )
+    assert challenge_award is not None
+    assert challenge_award.points == 50
+
     assert result == EngagementResult(
         location_points_awarded=100,
-        total_points=100,
+        total_points=150,
         level=1,
         level_up=False,
         streak_days=1,
-        challenges_completed=(),
+        challenges_completed=(str(challenge_award.source_ref),),
         achievements_unlocked=("first_step",),
     )
 
@@ -297,7 +306,7 @@ def test_apply_location_result_awards_completed_location(
 
     stats = db.get(UserLanguageStats, (student.id, game.target_language))
     assert stats is not None
-    assert stats.total_points == 100
+    assert stats.total_points == 150
 
 
 def test_apply_location_result_does_not_manage_transaction(
@@ -365,7 +374,7 @@ def test_completed_location_awarded_only_once(
 
     assert first.location_points_awarded == 100
     assert second.location_points_awarded == 0
-    assert second.total_points == 100
+    assert second.total_points == 150
 
     awards = db.scalars(
         select(PointsLedger).where(
@@ -374,6 +383,16 @@ def test_completed_location_awarded_only_once(
         )
     ).all()
     assert len(awards) == 1
+    assert second.challenges_completed == ()
+
+    challenge_awards = db.scalars(
+        select(PointsLedger).where(
+            PointsLedger.user_id == student.id,
+            PointsLedger.source_type == "daily_challenge",
+        )
+    ).all()
+    assert len(challenge_awards) == 1
+    assert challenge_awards[0].points == 50
 
 
 @pytest.mark.parametrize(
@@ -415,14 +434,14 @@ def test_unsuccessful_location_awards_zero(
 @pytest.mark.parametrize(
     ("starting_points", "expected_level", "expected_level_up"),
     [
-        (399, 1, False),
-        (400, 2, True),
-        (1399, 2, False),
-        (1400, 3, True),
-        (2899, 3, False),
-        (2900, 4, True),
-        (4899, 4, False),
-        (4900, 5, True),
+        (349, 1, False),
+        (350, 2, True),
+        (1349, 2, False),
+        (1350, 3, True),
+        (2849, 3, False),
+        (2850, 4, True),
+        (4849, 4, False),
+        (4850, 5, True),
     ],
 )
 def test_level_thresholds(
@@ -463,7 +482,7 @@ def test_level_thresholds(
         db=db,
     )
 
-    assert result.total_points == starting_points + 100
+    assert result.total_points == starting_points + 150
     assert result.level == expected_level
     assert result.level_up is expected_level_up
 
@@ -506,8 +525,8 @@ def test_location_award_preserves_other_language_totals(
     japanese = db.get(UserLanguageStats, (student.id, Language.JA))
     french = db.get(UserLanguageStats, (student.id, Language.FR))
 
-    assert result.total_points == 100
-    assert japanese is not None and japanese.total_points == 100
+    assert result.total_points == 150
+    assert japanese is not None and japanese.total_points == 150
     assert french is not None and french.total_points == 500
 
 
@@ -590,7 +609,7 @@ def test_first_step_badge_is_unlocked_only_once(
     assert first.achievements_unlocked == ("first_step",)
     assert second.achievements_unlocked == ()
     assert second.location_points_awarded == 0
-    assert second.total_points == 100
+    assert second.total_points == 150
 
     badge = db.scalar(select(Achievement).where(Achievement.achievement_key == "first_step"))
     assert badge is not None
