@@ -7,7 +7,7 @@ request body, the access token, the status codes, the response body and the comm
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,7 +15,6 @@ from httpx2 import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.content import interface as content
 from app.errors import ErrorCode
 from app.models.accounts import User
 from app.models.engagement import Class, ClassEnrollment
@@ -33,6 +32,9 @@ from app.services.storage import get_storage_service
 URL = "/api/v1/games"
 
 StartGame = Callable[..., Response]
+
+# most games here are ja/basic; a test in another mode asks for its own content
+pytestmark = pytest.mark.usefixtures("ja_basic_content")
 
 
 @pytest.fixture
@@ -74,8 +76,12 @@ def test_class_game_is_created(
 
 
 def test_practice_game_is_created(
-    start: StartGame, db: Session, make_user: Callable[..., User]
+    start: StartGame,
+    db: Session,
+    make_user: Callable[..., User],
+    playable_location_ids: Callable[..., list[UUID]],
 ) -> None:
+    playable_location_ids(Language.KO, Difficulty.ADVANCING)
     student = make_user(role=UserRole.STAFF)
 
     response = start(student, difficulty=2, language="ko")
@@ -132,12 +138,10 @@ def test_idle_open_game_is_expired_and_the_new_game_starts(
 
 def test_not_enough_content_returns_409(
     start: StartGame,
-    db: Session,
     make_user: Callable[..., User],
-    monkeypatch: pytest.MonkeyPatch,
+    limit_playable_locations: Callable[[int], None],
 ) -> None:
-    four = frozenset(list(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))[:4])
-    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: four)
+    limit_playable_locations(4)
 
     response = start(make_user(), difficulty=1, language="ja")
 

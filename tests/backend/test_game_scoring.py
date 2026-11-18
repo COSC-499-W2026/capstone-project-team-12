@@ -1,4 +1,4 @@
-"""Integration tests for A12 gameplay scoring."""
+"""Integration tests for A12 gameplay scoring and A13 daily challenge bonuses."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -33,12 +33,23 @@ def test_completed_location_awards_points(
     result = score_finalized_location(game, location, db)
 
     assert result.location_points_awarded == 100
+    assert result.total_points == 150
+    assert len(result.challenges_completed) == 1
     assert location.points_awarded == 100
     assert game.total_score == 100
 
     stats = db.get(UserLanguageStats, (student.id, Language.JA))
     assert stats is not None
-    assert stats.total_points == 100
+    assert stats.total_points == 150
+
+    challenge_awards = db.scalars(
+        select(PointsLedger).where(
+            PointsLedger.user_id == student.id,
+            PointsLedger.source_type == "daily_challenge",
+        )
+    ).all()
+    assert len(challenge_awards) == 1
+    assert challenge_awards[0].points == 50
 
 
 def test_duplicate_scoring_preserves_points(
@@ -62,17 +73,27 @@ def test_duplicate_scoring_preserves_points(
 
     assert first.location_points_awarded == 100
     assert second.location_points_awarded == 0
+    assert first.total_points == second.total_points == 150
+    assert len(first.challenges_completed) == 1
+    assert second.challenges_completed == ()
     assert location.points_awarded == 100
     assert game.total_score == 100
 
-    awards = db.scalars(
+    location_awards = db.scalars(
         select(PointsLedger).where(
             PointsLedger.user_id == student.id,
+            PointsLedger.source_type == "location",
             PointsLedger.source_ref == str(location.id),
         )
     ).all()
-
-    assert len(awards) == 1
+    challenge_awards = db.scalars(
+        select(PointsLedger).where(
+            PointsLedger.user_id == student.id,
+            PointsLedger.source_type == "daily_challenge",
+        )
+    ).all()
+    assert len(location_awards) == 1
+    assert len(challenge_awards) == 1
 
 
 @pytest.mark.parametrize("status", [LocationStatus.FAILED, LocationStatus.SKIPPED])
@@ -96,6 +117,7 @@ def test_unsuccessful_location_awards_zero(
     result = score_finalized_location(game, location, db)
 
     assert result.location_points_awarded == 0
+    assert result.challenges_completed == ()
     assert location.points_awarded == 0
     assert game.total_score == 0
 
@@ -163,20 +185,23 @@ def test_multiple_locations_keep_game_total_consistent(
 
     stats = db.get(UserLanguageStats, (student.id, Language.JA))
     assert stats is not None
-    assert stats.total_points == 200
+    assert stats.total_points == 250
 
     score_finalized_location(game, first_location, db)
     score_finalized_location(game, second_location, db)
 
     assert game.total_score == 200
-    assert stats.total_points == 200
+    assert stats.total_points == 250
 
     awards = db.scalars(
         select(PointsLedger).where(
             PointsLedger.user_id == student.id,
         )
     ).all()
-    assert len(awards) == 2
+    assert len(awards) == 3
+    assert sum(award.points for award in awards) == 250
+    assert sum(award.source_type == "location" for award in awards) == 2
+    assert sum(award.source_type == "daily_challenge" for award in awards) == 1
 
 
 def test_scoring_rolls_back_with_transaction(
@@ -228,6 +253,15 @@ def test_scoring_rolls_back_with_transaction(
         is None
     )
     assert db.get(UserLanguageStats, (student.id, Language.JA)) is None
+    assert (
+        db.scalars(
+            select(PointsLedger).where(
+                PointsLedger.user_id == student.id,
+                PointsLedger.source_type == "daily_challenge",
+            )
+        ).all()
+        == []
+    )
 
 
 def test_pending_location_can_be_finalized_and_scored(
@@ -253,6 +287,7 @@ def test_pending_location_can_be_finalized_and_scored(
     result = score_finalized_location(game, location, db)
 
     assert result.location_points_awarded == 100
+    assert result.total_points == 150
     assert location.points_awarded == 100
     assert game.total_score == 100
 
@@ -265,4 +300,4 @@ def test_pending_location_can_be_finalized_and_scored(
 
     stats = db.get(UserLanguageStats, (student.id, Language.JA))
     assert stats is not None
-    assert stats.total_points == 100
+    assert stats.total_points == 150
