@@ -6,9 +6,11 @@ from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.config import AudioServiceType, Settings
+from app.models.content import FeedbackAudio
 from app.models.enums import FeedbackCode, Language
 from app.services import audio as audio_module
 from app.services.audio import (
@@ -36,7 +38,7 @@ def verified_key(url: str, split_media_url: SplitUrl) -> str:
 
 
 def is_random_uuid(key: str) -> bool:
-    """A version 4 UUID plus ".mp3", so the key cannot be worked out from the clue or phrase."""
+    """A version 4 UUID plus ".mp3", so the key cannot be worked out from the clue."""
     stem = key.removesuffix(".mp3")
     parsed = UUID(stem)
     return key.endswith(".mp3") and str(parsed) == stem and parsed.version == 4
@@ -66,22 +68,56 @@ def test_get_audio_service_is_cached() -> None:
     assert get_audio_service() is get_audio_service()
 
 
-def test_every_feedback_phrase_has_its_own_signed_url_that_reveals_nothing(
-    db: Session, audio: AudioService, split_media_url: SplitUrl
+def test_a_feedback_phrase_url_is_a_signed_link_to_that_phrase_s_file(
+    db: Session,
+    audio: AudioService,
+    make_feedback_audio: Callable[..., FeedbackAudio],
+    split_media_url: SplitUrl,
 ) -> None:
-    keys = [
-        verified_key(audio.feedback_audio_url(code, language, db), split_media_url)
-        for code, language in ALL_PHRASES
+    # the same code in two languages, and two codes in one language
+    phrases = [
+        make_feedback_audio(FeedbackCode.NAV_ARRIVED, Language.KO),
+        make_feedback_audio(FeedbackCode.NAV_ARRIVED, Language.FR),
+        make_feedback_audio(FeedbackCode.VERIFY_START, Language.KO),
     ]
-    assert len(set(keys)) == len(ALL_PHRASES)
-    assert all(is_random_uuid(key) for key in keys)
+    urls = [audio.feedback_audio_url(phrase.code, phrase.language, db) for phrase in phrases]
+    assert [verified_key(url, split_media_url) for url in urls] == [
+        phrase.file_path for phrase in phrases
+    ]
 
 
 @pytest.mark.parametrize("language", Language)
-def test_the_stub_has_every_feedback_phrase_in_every_language(
-    db: Session, audio: AudioService, language: Language
+def test_a_language_with_every_phrase_has_them_all(
+    db: Session,
+    audio: AudioService,
+    feedback_phrases: Callable[[Language], None],
+    language: Language,
 ) -> None:
+    feedback_phrases(language)
     assert audio.has_all_feedback_phrases(language, db)
+
+
+@pytest.mark.parametrize("missing", FeedbackCode)
+def test_a_language_without_one_phrase_lacks_it(
+    db: Session,
+    audio: AudioService,
+    feedback_phrases: Callable[[Language], None],
+    missing: FeedbackCode,
+) -> None:
+    for language in Language:
+        feedback_phrases(language)
+    db.execute(
+        delete(FeedbackAudio).where(
+            FeedbackAudio.code == missing, FeedbackAudio.language == Language.KO
+        )
+    )
+
+    # the same phrase in another language does not count
+    assert not audio.has_all_feedback_phrases(Language.KO, db)
+    with pytest.raises(MediaNotFoundError) as refused:
+        audio.feedback_audio_url(missing, Language.KO, db)
+    assert refused.value.status == HTTPStatus.NOT_FOUND
+    assert audio.has_all_feedback_phrases(Language.JA, db)
 
 
 def test_a_clue_keeps_its_recording_and_each_clue_has_its_own(
@@ -121,8 +157,15 @@ def test_clue_audio_url_of_an_unknown_recording_is_not_found(
 
 
 def test_audio_lookups_never_commit_flush_or_roll_back_the_callers_session(
-    db: Session, audio: AudioService, transaction_calls: list[str]
+    db: Session,
+    audio: AudioService,
+    feedback_phrases: Callable[[Language], None],
+    transaction_calls: list[str],
 ) -> None:
+    for language in Language:
+        feedback_phrases(language)
+    transaction_calls.clear()  # adding the phrases flushed
+
     audio.clue_audio_url(audio.clue_audio_asset_id(uuid4(), db), db)
     for code, language in ALL_PHRASES:
         audio.feedback_audio_url(code, language, db)

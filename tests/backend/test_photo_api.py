@@ -7,6 +7,7 @@ game rows are committed before each request, so a refusal's rollback only undoes
 import io
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,11 +16,10 @@ from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.content import interface as content
 from app.errors import ErrorCode
 from app.models.accounts import User
 from app.models.engagement import PointsLedger
-from app.models.enums import Difficulty, Language, LocationStatus, SessionState
+from app.models.enums import LocationStatus, SessionState
 from app.models.game import GameSession, SessionLocation
 from app.services.uploads import BYTES_PER_MB
 from app.verification import verify
@@ -46,6 +46,7 @@ def verifying_game(
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
+    playable_location_ids: Callable[..., list[UUID]],
     fixed_daily_challenge_targets: None,
 ) -> Callable[..., GameSession]:
     """A saved game with `locations` active (stub) locations, at the first one, which is in Stage
@@ -59,7 +60,7 @@ def verifying_game(
         **fields: object,
     ) -> GameSession:
         game = make_game_session(make_user(), last_activity_at=AN_HOUR_AGO, **fields)
-        active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
+        active = playable_location_ids(count=locations)
         for position in range(1, locations + 1):
             make_session_location(game, position, location_id=active[position - 1])
         first = location(game, 1, db)

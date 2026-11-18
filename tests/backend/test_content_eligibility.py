@@ -1,9 +1,11 @@
 import math
 import re
+from collections.abc import Callable
 from itertools import combinations, product
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -16,6 +18,8 @@ from app.content.interface import (
     is_location_active,
     location_snapshot,
 )
+from app.models.content import FeedbackAudio
+from app.models.enums import FeedbackCode
 from app.services.audio import MediaNotFoundError, UploadedAudioService, get_audio_service
 
 ALL_MODES = list(product(Language, Difficulty))
@@ -38,18 +42,15 @@ class WithoutRecordings(UploadedAudioService):
         raise MediaNotFoundError
 
 
-class MissingAPhraseIn(UploadedAudioService):
-    """Every feedback phrase exists, except that `language` lacks at least one."""
-
-    def __init__(self, language: Language) -> None:
-        self.language = language
-
-    def has_all_feedback_phrases(self, language: Language, db: Session) -> bool:
-        return language != self.language
-
-
 def use_audio_service(monkeypatch: pytest.MonkeyPatch, service: UploadedAudioService) -> None:
     monkeypatch.setattr("app.content.interface.get_audio_service", lambda: service)
+
+
+@pytest.fixture(autouse=True)
+def every_feedback_phrase(feedback_phrases: Callable[[Language], None]) -> None:
+    """Every phrase in every language, so only the locations decide what is eligible."""
+    for language in Language:
+        feedback_phrases(language)
 
 
 @pytest.mark.parametrize(("language", "difficulty"), ALL_MODES)
@@ -131,9 +132,13 @@ def test_snapshot_of_a_location_without_a_recording_is_refused(
 
 @pytest.mark.parametrize("difficulty", Difficulty)
 def test_a_language_missing_a_feedback_phrase_has_no_eligible_locations(
-    db: Session, monkeypatch: pytest.MonkeyPatch, difficulty: Difficulty
+    db: Session, difficulty: Difficulty
 ) -> None:
-    use_audio_service(monkeypatch, MissingAPhraseIn(Language.KO))
+    db.execute(
+        delete(FeedbackAudio).where(
+            FeedbackAudio.code == FeedbackCode.NAV_GPS_WEAK, FeedbackAudio.language == Language.KO
+        )
+    )
     assert eligible_location_ids(Language.KO, difficulty, db) == frozenset()
     assert len(eligible_location_ids(Language.JA, difficulty, db)) == (
         LOCATIONS_PER_LANGUAGE_AND_DIFFICULTY
