@@ -15,6 +15,7 @@ from app.config import get_settings
 from app.db import get_db
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
+from app.models.engagement import Class
 from app.models.enums import ClassStaffRole, UserRole
 
 __all__ = [
@@ -54,13 +55,15 @@ def get_current_user(
 
 
 def require_class_role(*allowed_roles: ClassStaffRole) -> Callable[..., None]:
-    """Raises a FORBIDDEN_ROLE error if the current user does not have one of the allowed roles."""
+    """404 NOT_FOUND for an unknown class; 403 FORBIDDEN_ROLE without an allowed role."""
 
     def role_checker(
         user: Annotated[User, Depends(get_current_user)],
         class_id: Annotated[UUID, Path()],
         db: Annotated[Session, Depends(get_db)],
     ) -> None:
+        if db.get(Class, class_id) is None:
+            raise AppError(ErrorCode.NOT_FOUND)
         role = db.execute(
             select(ClassStaff.role)
             .where(ClassStaff.user_id == user.id, ClassStaff.class_id == class_id)
