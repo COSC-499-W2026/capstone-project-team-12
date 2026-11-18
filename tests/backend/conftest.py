@@ -41,7 +41,7 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.game import GameSession, SessionLocation
-from app.services.limiter import limiter
+from app.services.limiter import reset_counts
 from app.services.storage import MEDIA_URL_PREFIX, get_storage_service
 
 # playable content for game tests; importing content_fixtures here would skip assert rewriting
@@ -154,7 +154,7 @@ def split_media_url() -> Callable[[str], tuple[str, int, str]]:
 @pytest.fixture(autouse=True)
 def reset_rate_limits() -> None:
     """Every test client sends from the same IP, so counts from one test must not reach the next."""
-    limiter.reset()
+    reset_counts()
 
 
 @pytest.fixture
