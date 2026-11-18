@@ -29,7 +29,7 @@ from app.errors import AppError, ErrorCode, error_responses
 from app.game.interface import end_open_sessions
 from app.models.accounts import User
 from app.models.engagement import Class
-from app.models.enums import ClassStaffRole, Language
+from app.models.enums import ClassStaffRole, Difficulty, DifficultySuggestion, Language
 
 classes_router = APIRouter(prefix="/me/classes", tags=["classes"])
 leaderboard_router = APIRouter(prefix="/classes", tags=["classes"])
@@ -341,8 +341,23 @@ def get_class_analytics_endpoint(
     return ClassAnalyticsResponse.model_validate(get_class_location_analytics(class_id, db))
 
 
+class DifficultyHintResponse(BaseModel):
+    """Advisory hint based on finished classroom results at one difficulty."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    difficulty: Difficulty
+    finished: int
+    completed: int
+    failed: int
+    success_rate: float | None
+    suggestion: DifficultySuggestion | None
+
+
 class StudentAnalyticsResponse(BaseModel):
     """Classroom-specific progress for an enrolled student."""
+
+    model_config = ConfigDict(from_attributes=True)
 
     student_id: UUID
     username: str
@@ -357,6 +372,7 @@ class StudentAnalyticsResponse(BaseModel):
     last_activity_at: datetime | None
     streak_days: int
     flags: list[str]
+    difficulty_hints: list[DifficultyHintResponse]
 
 
 @teacher_classes_router.get(
@@ -368,6 +384,8 @@ class StudentAnalyticsResponse(BaseModel):
         "Return classroom-specific progress for current and former students, "
         "including sessions, completed and failed locations, points, and "
         "success rates, plus global streaks and classroom flags. "
+        "Difficulty hints use all finished results at each level in this class "
+        "and require at least five results. "
         "Class owners and assigned teaching assistants may access these "
         "statistics, including for archived classrooms."
     ),
@@ -385,24 +403,7 @@ def get_class_students_endpoint(
     """Return individual classroom student statistics without modifying data."""
     statistics = get_class_student_analytics(class_id, db)
 
-    return [
-        StudentAnalyticsResponse(
-            student_id=item.student_id,
-            username=item.username,
-            is_active_enrollment=item.is_active_enrollment,
-            joined_at=item.joined_at,
-            left_at=item.left_at,
-            sessions=item.sessions,
-            completed_locations=item.completed_locations,
-            failed_locations=item.failed_locations,
-            classroom_points=item.classroom_points,
-            success_rate=item.success_rate,
-            last_activity_at=item.last_activity_at,
-            streak_days=item.streak_days,
-            flags=item.flags,
-        )
-        for item in statistics
-    ]
+    return [StudentAnalyticsResponse.model_validate(item) for item in statistics]
 
 
 class ClassListItem(BaseModel):

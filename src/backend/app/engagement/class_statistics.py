@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.engagement.streaks import app_calendar_date, visible_streak
 from app.models.accounts import User
 from app.models.engagement import ClassEnrollment, PointsLedger, UserStats
-from app.models.enums import ArrivalOverride, LocationStatus
+from app.models.enums import ArrivalOverride, Difficulty, DifficultySuggestion, LocationStatus
 from app.models.game import GameSession, SessionLocation
 
 
@@ -109,6 +109,37 @@ def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
 
 
 @dataclass(frozen=True)
+class DifficultyHint:
+    """Performance-based difficulty hint for one student and level."""
+
+    difficulty: Difficulty
+    finished: int
+    completed: int
+    failed: int
+    success_rate: float | None
+    suggestion: DifficultySuggestion | None
+
+
+def _difficulty_hint(difficulty: Difficulty, completed: int, failed: int) -> DifficultyHint:
+    finished = completed + failed
+    rate = completed / finished * 100 if finished else None
+    suggestion = None
+    if finished >= 5 and rate is not None:
+        if rate < 40 and difficulty != Difficulty.BASIC:
+            suggestion = DifficultySuggestion.EASIER
+        elif rate > 85 and difficulty != Difficulty.CHALLENGING:
+            suggestion = DifficultySuggestion.HARDER
+    return DifficultyHint(
+        difficulty,
+        finished,
+        completed,
+        failed,
+        round(rate, 2) if rate is not None else None,
+        suggestion,
+    )
+
+
+@dataclass(frozen=True)
 class StudentAnalytics:
     """Classroom-specific progress for one enrolled student."""
 
@@ -125,6 +156,7 @@ class StudentAnalytics:
     last_activity_at: datetime | None
     streak_days: int
     flags: list[str]
+    difficulty_hints: list[DifficultyHint]
 
 
 def get_class_student_analytics(
@@ -185,6 +217,25 @@ def get_class_student_analytics(
     ):
         flags.setdefault(student_id, set()).update(location_flags)
 
+    # Aggregate all finished classroom results in one query for every student.
+    difficulty_counts = {
+        (student_id, difficulty): (completed, failed)
+        for student_id, difficulty, completed, failed in db.execute(
+            select(
+                GameSession.student_id,
+                GameSession.difficulty,
+                func.count().filter(SessionLocation.status == LocationStatus.COMPLETED),
+                func.count().filter(SessionLocation.status == LocationStatus.FAILED),
+            )
+            .join(SessionLocation, SessionLocation.session_id == GameSession.id)
+            .where(
+                GameSession.class_id == class_id,
+                SessionLocation.status.in_((LocationStatus.COMPLETED, LocationStatus.FAILED)),
+            )
+            .group_by(GameSession.student_id, GameSession.difficulty)
+        )
+    }
+
     today = app_calendar_date()
     results: list[StudentAnalytics] = []
     for enrollment, student, stats in enrollments:
@@ -208,6 +259,12 @@ def get_class_student_analytics(
                 last_activity_at=last_activity,
                 streak_days=visible_streak(stats, today=today),
                 flags=sorted(flags.get(student.id, set())),
+                difficulty_hints=[
+                    _difficulty_hint(
+                        difficulty, *difficulty_counts.get((student.id, difficulty), (0, 0))
+                    )
+                    for difficulty in Difficulty
+                ],
             )
         )
 
