@@ -2,16 +2,18 @@
 
 from collections.abc import Callable
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import Engine, delete, func, select
 from sqlalchemy.orm import Session
 
 from app.engagement.daily_challenges import ensure_daily_challenges
+from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.engagement import DailyChallenge
 from app.models.enums import UserRole
@@ -56,7 +58,12 @@ def test_challenge_types_and_rewards() -> None:
     ]
     assert [challenge.reward_points for challenge in challenges] == [50, 100, 100]
     assert [challenge.progress_required for challenge in challenges] == [1, 3, 1]
-    assert challenges[2].params == {"difficulty": "hard"}
+    assert [challenge.params for challenge in challenges] == [
+        {"count": 1},
+        {"count": 3},
+        {"count": 1, "difficulty": 3},
+    ]
+    assert challenges[2].description_key == "complete_1_challenging_location"
 
 
 def test_new_challenges_start_without_progress() -> None:
@@ -78,9 +85,14 @@ def test_existing_challenges_are_reused() -> None:
     db = MagicMock()
     db.scalar.return_value = MagicMock()
     existing = [
-        MagicMock(slot=1),
-        MagicMock(slot=2),
-        MagicMock(slot=3),
+        DailyChallenge(slot=1, params={}, progress_required=1),
+        DailyChallenge(slot=2, params={"count": 3}, progress_required=3),
+        DailyChallenge(
+            slot=3,
+            params={"difficulty": "hard"},
+            progress_required=1,
+            description_key="complete_1_hard_location",
+        ),
     ]
     existing[0].progress_current = 1
     db.scalars.return_value = existing
@@ -93,40 +105,34 @@ def test_existing_challenges_are_reused() -> None:
 
     assert challenges == tuple(existing)
     assert existing[0].progress_current == 1
+    assert existing[0].params == {"count": 1}
+    assert existing[2].params == {"count": 1, "difficulty": 3}
+    assert existing[2].description_key == "complete_1_challenging_location"
     db.add_all.assert_not_called()
     db.flush.assert_called_once()
 
 
-def test_incomplete_challenge_set_is_rejected() -> None:
-    db = MagicMock()
-    db.scalar.return_value = MagicMock()
-    db.scalars.return_value = [MagicMock(slot=1), MagicMock(slot=2)]
+def test_incomplete_challenge_set_fills_missing_slot(
+    db: Session, make_user: Callable[..., User]
+) -> None:
+    student = make_user()
+    now = datetime(2026, 11, 14, 20, tzinfo=UTC)
+    first, second, third = ensure_daily_challenges(student.id, db, now=now)
+    second.progress_current = 1
+    db.delete(third)
 
-    with pytest.raises(ValueError, match="Incomplete daily challenge set"):
-        ensure_daily_challenges(
-            uuid4(),
-            db,
-            now=datetime(2026, 11, 14, 20, tzinfo=UTC),
-        )
+    challenges = ensure_daily_challenges(student.id, db, now=now)
 
-    db.add_all.assert_not_called()
+    assert [challenge.slot for challenge in challenges] == [1, 2, 3]
+    assert challenges[:2] == (first, second)
+    assert challenges[1].progress_current == 1
+    assert challenges[2].id != third.id
 
 
-def test_duplicate_slots_are_rejected() -> None:
-    db = MagicMock()
-    db.scalar.return_value = MagicMock()
-    db.scalars.return_value = [
-        MagicMock(slot=1),
-        MagicMock(slot=1),
-        MagicMock(slot=3),
-    ]
-
-    with pytest.raises(ValueError, match="Incomplete daily challenge set"):
-        ensure_daily_challenges(
-            uuid4(),
-            db,
-            now=datetime(2026, 11, 14, 20, tzinfo=UTC),
-        )
+def test_missing_student_raises_not_found(db: Session) -> None:
+    with pytest.raises(AppError) as error:
+        ensure_daily_challenges(uuid4(), db)
+    assert error.value.code == ErrorCode.NOT_FOUND
 
 
 def test_challenge_date_changes_at_vancouver_midnight() -> None:
@@ -135,15 +141,16 @@ def test_challenge_date_changes_at_vancouver_midnight() -> None:
     db.scalars.return_value = []
     student_id = uuid4()
 
+    midnight = datetime(2026, 11, 15, tzinfo=ZoneInfo("America/Vancouver")).astimezone(UTC)
     before = ensure_daily_challenges(
         student_id,
         db,
-        now=datetime(2026, 11, 15, 6, 59, tzinfo=UTC),
+        now=midnight - timedelta(minutes=1),
     )
     after = ensure_daily_challenges(
         student_id,
         db,
-        now=datetime(2026, 11, 15, 7, 0, tzinfo=UTC),
+        now=midnight,
     )
 
     assert before[0].challenge_date.isoformat() == "2026-11-14"
@@ -201,15 +208,16 @@ def test_postgres_midnight_creates_new_challenges(
 ) -> None:
     student = make_user()
 
+    midnight = datetime(2026, 11, 15, tzinfo=ZoneInfo("America/Vancouver")).astimezone(UTC)
     yesterday = ensure_daily_challenges(
         student.id,
         db,
-        now=datetime(2026, 11, 15, 6, 59, tzinfo=UTC),
+        now=midnight - timedelta(minutes=1),
     )
     today = ensure_daily_challenges(
         student.id,
         db,
-        now=datetime(2026, 11, 15, 7, 0, tzinfo=UTC),
+        now=midnight,
     )
 
     assert len(yesterday) == 3
