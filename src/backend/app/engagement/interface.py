@@ -39,7 +39,9 @@ from app.engagement.badges import (
 from app.engagement.challenge_progress import record_challenge_progress
 from app.engagement.class_statistics import (
     LocationAnalytics,
+    StudentAnalytics,
     get_class_location_analytics,
+    get_class_student_analytics,
 )
 from app.engagement.classes import (
     create_class,
@@ -119,6 +121,8 @@ __all__ = [
     "get_class_leaderboard",
     "LocationAnalytics",
     "get_class_location_analytics",
+    "StudentAnalytics",
+    "get_class_student_analytics",
 ]
 
 
