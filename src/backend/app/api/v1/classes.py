@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import get_current_user, is_class_staff
+from app.accounts.interface import get_current_user, is_class_staff, require_class_role
 from app.db import get_db
 from app.engagement.interface import (
     create_class,
@@ -17,6 +17,7 @@ from app.engagement.interface import (
     generate_access_code,
     get_class_language,
     get_class_leaderboard,
+    get_class_location_analytics,
     leave_class,
     list_staff_classes,
     require_active_enrolment,
@@ -283,6 +284,62 @@ def create_class_access_code(
     except Exception:
         db.rollback()
         raise
+
+
+class LocationAnalyticsResponse(BaseModel):
+    """Statistics for one location in a classroom."""
+
+    location_id: UUID
+    finished: int
+    completed: int
+    failed: int
+    success_rate: float
+    photo_attempts: int
+    average_time_seconds: float | None
+    flagged_results: int
+    gps_overrides: int
+
+
+@teacher_classes_router.get(
+    "/{class_id}/analytics",
+    response_model=list[LocationAnalyticsResponse],
+    operation_id="getClassLocationAnalytics",
+    summary="Get classroom location analytics",
+    description=(
+        "Return per-location success rates, photo attempts, completion "
+        "times, flags, and GPS overrides. Only completed and failed "
+        "classroom location results are included. Practice sessions "
+        "are excluded. Class owners and assigned teaching assistants "
+        "may access statistics, including for archived classrooms."
+    ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT))],
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+    ),
+)
+def get_class_analytics_endpoint(
+    class_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[LocationAnalyticsResponse]:
+    """Return classroom location analytics without modifying data."""
+    statistics = get_class_location_analytics(class_id, db)
+
+    return [
+        LocationAnalyticsResponse(
+            location_id=item.location_id,
+            finished=item.finished,
+            completed=item.completed,
+            failed=item.failed,
+            success_rate=item.success_rate,
+            photo_attempts=item.photo_attempts,
+            average_time_seconds=item.average_time_seconds,
+            flagged_results=item.flagged_results,
+            gps_overrides=item.gps_overrides,
+        )
+        for item in statistics
+    ]
 
 
 class ClassListItem(BaseModel):

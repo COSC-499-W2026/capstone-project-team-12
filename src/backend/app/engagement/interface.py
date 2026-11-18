@@ -37,6 +37,10 @@ from app.engagement.badges import (
     unlock_streak_badges,
 )
 from app.engagement.challenge_progress import record_challenge_progress
+from app.engagement.class_statistics import (
+    LocationAnalytics,
+    get_class_location_analytics,
+)
 from app.engagement.classes import (
     create_class,
     deactivate_access_code,
@@ -113,6 +117,8 @@ __all__ = [
     "list_unlocked_achievements",
     "LeaderboardEntry",
     "get_class_leaderboard",
+    "LocationAnalytics",
+    "get_class_location_analytics",
 ]
 
 
