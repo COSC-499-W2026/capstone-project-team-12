@@ -11,7 +11,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from app.accounts.interface import user_id_from_token
 from app.config import get_settings
-from app.services.limiter import client_ip, count_request
+from app.services.limiter import count_request
 
 AUTH_PATH = "/api/v1/auth/"
 
@@ -30,14 +30,14 @@ def login_rate_limit(
     """Per IP, and per (email, IP) so one address can't be guessed at from one place. The email
     is hashed so the counter keys don't store it."""
     settings = get_settings()
-    ip = client_ip(request)
+    ip = _client_ip(request)
     email = hashlib.sha256(form.username.strip().casefold().encode()).hexdigest()
     count_request("login", settings.login_attempts_per_ip, ip)
     count_request("login-email", settings.login_attempts_per_email, f"{ip}:{email}")
 
 
 def _caller_key(request: Request) -> str:
-    ip_key = f"ip:{client_ip(request)}"
+    ip_key = f"ip:{_client_ip(request)}"
     if request.url.path.startswith(AUTH_PATH):
         return ip_key
     scheme, _, token = request.headers.get("Authorization", "").partition(" ")
@@ -46,3 +46,7 @@ def _caller_key(request: Request) -> str:
         if user_id is not None:
             return f"user:{user_id}"
     return ip_key
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
