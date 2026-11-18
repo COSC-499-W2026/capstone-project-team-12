@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import get_current_user, is_class_staff
+from app.accounts.interface import get_current_user, is_class_staff, require_class_role
 from app.db import get_db
 from app.engagement.interface import (
     create_class,
@@ -17,6 +17,7 @@ from app.engagement.interface import (
     generate_access_code,
     get_class_language,
     get_class_leaderboard,
+    get_class_location_analytics,
     leave_class,
     list_staff_classes,
     require_active_enrolment,
@@ -283,6 +284,60 @@ def create_class_access_code(
     except Exception:
         db.rollback()
         raise
+
+
+class AnalyticsTotalsResponse(BaseModel):
+    """Statistics for finished classroom results."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    finished: int
+    completed: int
+    failed: int
+    success_rate: float
+    photo_attempts: int
+    average_time_seconds: float | None
+    flagged_results: int
+    gps_overrides: int
+
+
+class LocationAnalyticsResponse(AnalyticsTotalsResponse):
+    location_id: UUID
+    label: str
+
+
+class ClassAnalyticsResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    class_stats: AnalyticsTotalsResponse
+    locations: list[LocationAnalyticsResponse]
+
+
+@teacher_classes_router.get(
+    "/{class_id}/analytics",
+    response_model=ClassAnalyticsResponse,
+    operation_id="getClassLocationAnalytics",
+    summary="Get classroom location analytics",
+    description=(
+        "Return class totals and per-location success rates, photo attempts, completion "
+        "times, flags, and GPS overrides. Only completed and failed "
+        "classroom location results are included. Practice sessions "
+        "are excluded. Class owners and assigned teaching assistants "
+        "may access statistics, including for archived classrooms."
+    ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT))],
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+    ),
+)
+def get_class_analytics_endpoint(
+    class_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> ClassAnalyticsResponse:
+    """Return classroom location analytics without modifying data."""
+    return ClassAnalyticsResponse.model_validate(get_class_location_analytics(class_id, db))
 
 
 class ClassListItem(BaseModel):
