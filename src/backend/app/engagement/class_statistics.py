@@ -44,9 +44,11 @@ def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
     average = func.avg(func.least(func.greatest(elapsed, 0), 1800)).filter(
         completed_filter, location.started_at.is_not(None), location.completed_at.is_not(None)
     )
+    first_position = func.min(location.position)
     rows = db.execute(
         select(
             location.location_id,
+            first_position,
             func.count(),
             func.count().filter(completed_filter),
             func.coalesce(func.sum(location.attempts_used), 0),
@@ -60,11 +62,11 @@ def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
             location.status.in_((LocationStatus.COMPLETED, LocationStatus.FAILED)),
         )
         .group_by(func.rollup(location.location_id))
-        .order_by(location.location_id.asc().nulls_first())
+        .order_by(func.grouping(location.location_id).desc(), first_position, location.location_id)
     ).all()
 
     # ROLLUP includes a class summary even when no location results match.
-    _, finished, completed, attempts, seconds, flagged, overrides = rows[0]
+    _, _, finished, completed, attempts, seconds, flagged, overrides = rows[0]
     class_stats = AnalyticsTotals(
         finished,
         completed,
@@ -88,14 +90,15 @@ def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
             location_id,
             f"Location {position}",
         )
-        for position, (
+        for (
             location_id,
+            position,
             finished,
             completed,
             attempts,
             seconds,
             flagged,
             overrides,
-        ) in enumerate(rows[1:], start=1)
+        ) in rows[1:]
     ]
     return ClassAnalytics(class_stats, locations)

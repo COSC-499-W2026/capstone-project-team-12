@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,7 +39,7 @@ def test_location_statistics_and_time_cap(
 
     make_session_location(
         game1,
-        1,
+        3,
         location_id=location_id,
         status=LocationStatus.COMPLETED,
         points_awarded=100,
@@ -63,6 +63,7 @@ def test_location_statistics_and_time_cap(
     assert len(results) == 1
     result = results[0]
     assert result.location_id == location_id
+    assert result.label == "Location 1"
     assert result.finished == 2
     assert result.completed == 1
     assert result.failed == 1
@@ -166,14 +167,17 @@ def test_teacher_analytics_endpoint(
     game = make_game_session(class_id=school_class.id)
     make_session_location(
         game,
-        1,
+        2,
+        location_id=UUID(int=2),
         status=LocationStatus.COMPLETED,
         points_awarded=100,
         attempts_used=1,
         completed_at=datetime(2026, 11, 1, 12, tzinfo=UTC),
     )
 
-    make_session_location(game, 2, status=LocationStatus.FAILED, attempts_used=2)
+    make_session_location(
+        game, 4, location_id=UUID(int=1), status=LocationStatus.FAILED, attempts_used=2
+    )
 
     response = client.get(
         f"/api/v1/teacher/classes/{school_class.id}/analytics",
@@ -185,7 +189,10 @@ def test_teacher_analytics_endpoint(
     assert data["class_stats"]["finished"] == 2
     assert data["class_stats"]["success_rate"] == 50.0
     assert data["class_stats"]["photo_attempts"] == 3
-    assert [item["label"] for item in data["locations"]] == ["Location 1", "Location 2"]
+    assert [(item["location_id"], item["label"]) for item in data["locations"]] == [
+        (str(UUID(int=2)), "Location 2"),
+        (str(UUID(int=1)), "Location 4"),
+    ]
     assert all(
         {"room_number", "name", "location_name"}.isdisjoint(item) for item in data["locations"]
     )
@@ -242,8 +249,7 @@ def test_unknown_class_cannot_be_read(
         f"/api/v1/teacher/classes/{uuid4()}/analytics",
         headers=auth_headers(teacher),
     )
-    # The shared dependency will return 404 instead of 403 after #379.
-    assert response.status_code in (403, 404)
+    assert response.status_code == 404
 
 
 def test_owner_can_read_archived_class_analytics(
