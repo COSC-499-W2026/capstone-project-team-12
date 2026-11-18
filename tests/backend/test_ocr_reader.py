@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -125,14 +126,14 @@ def test_reads_that_arrive_together_build_one_reader(fake_easyocr: FakeEasyOcr) 
         return build(*args, **kwargs)
 
     fake_easyocr.Reader = slow_build
-    readers = [threading.Thread(target=ocr.read_text, args=(gray_image(),)) for _ in range(2)]
-    readers[0].start()
-    assert building.acquire(timeout=5)
-    readers[1].start()
-    second_started_building = building.acquire(timeout=0.5)
-    finish.set()
-    for reader in readers:
-        reader.join(timeout=5)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(ocr.read_text, gray_image())
+        assert building.acquire(timeout=5)
+        second = pool.submit(ocr.read_text, gray_image())
+        second_started_building = building.acquire(timeout=0.5)
+        finish.set()
+        first.result(timeout=5)  # re-raises anything a read raised in its thread
+        second.result(timeout=5)
 
     assert not second_started_building
     assert len(fake_easyocr.readers) == 1
