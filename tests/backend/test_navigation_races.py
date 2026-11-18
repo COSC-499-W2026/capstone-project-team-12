@@ -37,7 +37,7 @@ if TYPE_CHECKING:  # pytest_plugins in conftest imports it at run time, so pytes
     from content_fixtures import SnapshotIds
 
 LAT, LNG = 49.9394, -119.3948
-FAR_LAT = 50.0  # well outside every stub entrance
+FAR_LAT = 50.0  # well outside every playable entrance
 # delay before the later job, and how long the first job keeps its lock afterwards.
 # The later job only starts second if the first takes the lock within this time.
 HOLD = 0.3
@@ -45,8 +45,14 @@ GPS = ArrivalOverride.GPS_UNAVAILABLE
 
 
 def _start(
-    engine: Engine, rows: list[dict[str, Any]], locations: list[UUID], snapshot: "SnapshotIds"
+    engine: Engine,
+    rows: list[dict[str, Any]],
+    locations: list[UUID],
+    snapshot: Callable[[UUID], "SnapshotIds"],
 ) -> tuple[UUID, UUID]:
+    # a row's own location_id wins; the snapshot is taken before the game's session opens
+    at = [fields.get("location_id", spot) for fields, spot in zip(rows, locations, strict=False)]
+    snapshots = [snapshot(location_id)._asdict() for location_id in at]
     with Session(engine) as session:
         user = User(
             email=f"{uuid4().hex[:12]}@example.com",
@@ -64,13 +70,11 @@ def _start(
         )
         session.add(game)
         session.flush()
-        for position, fields in enumerate(rows, start=1):
+        for position, (fields, ids) in enumerate(zip(rows, snapshots, strict=True), start=1):
             values: dict[str, Any] = {
                 "session_id": game.id,
-                "location_id": locations[position - 1],
                 "position": position,
-                "clue_id": snapshot.clue_id,
-                "audio_asset_id": snapshot.audio_asset_id,
+                **ids,
                 "accepted_answers_snapshot": ["SCI333"],
                 "gps_points_snapshot": [{"lat": LAT, "lng": LNG}],
                 "radius_snapshot": 30,
@@ -95,7 +99,7 @@ def _cleanup(engine: Engine, user_id: UUID) -> None:
 def playing(
     test_engine: Engine,
     committed_location_ids: Callable[..., list[UUID]],
-    committed_snapshot_ids: Callable[[], "SnapshotIds"],
+    committed_snapshot_ids: Callable[[UUID], "SnapshotIds"],
 ) -> Callable[..., Any]:
     """playing(rows): a committed ja/basic game with one location per row, as a context manager
     giving (student id, game id), deleted afterwards. A row without a location_id is at a
@@ -104,7 +108,7 @@ def playing(
     @contextmanager
     def play(rows: list[dict[str, Any]]) -> Iterator[tuple[UUID, UUID]]:
         locations = committed_location_ids(Language.JA, Difficulty.BASIC)
-        user_id, game_id = _start(test_engine, rows, locations, committed_snapshot_ids())
+        user_id, game_id = _start(test_engine, rows, locations, committed_snapshot_ids)
         try:
             yield user_id, game_id
         finally:

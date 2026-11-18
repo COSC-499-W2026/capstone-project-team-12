@@ -418,7 +418,7 @@ def open_game(make_game_session: Callable[..., GameSession]) -> Callable[..., Ga
 
 @pytest.fixture
 def make_session_location(
-    db: Session, snapshot_ids: Callable[[GameSession], Any]
+    db: Session, snapshot_ids: Callable[..., Any]
 ) -> Callable[..., SessionLocation]:
     """A pending location in the game with a valid content snapshot (IDs from snapshot_ids)."""
 
@@ -426,7 +426,7 @@ def make_session_location(
         values: dict[str, Any] = {
             "session_id": game.id,
             "position": position,
-            **snapshot_ids(game)._asdict(),
+            **snapshot_ids(game, fields.get("location_id"))._asdict(),
             "accepted_answers_snapshot": ["SCI333"],
             "gps_points_snapshot": [{"lat": 49.9394, "lng": -119.3948}],
             "radius_snapshot": 30,
