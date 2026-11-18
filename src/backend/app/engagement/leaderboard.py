@@ -19,14 +19,16 @@ class LeaderboardEntry:
     """One student in a class leaderboard."""
 
     rank: int
-    student_id: UUID
     username: str
     total_points: int
+    is_me: bool
 
 
 def get_class_leaderboard(
     class_id: UUID,
     db: Session,
+    *,
+    viewer_id: UUID | None = None,
 ) -> list[LeaderboardEntry]:
     """Return active students ranked by points earned in this class.
 
@@ -36,6 +38,7 @@ def get_class_leaderboard(
     Equal scores share a rank. Results are ordered by descending
     points, then username and student ID for deterministic ties.
 
+    Only the viewer's entry is marked as their own. Entries expose usernames.
     The caller must validate class access and leaderboard settings.
     """
     totals = (
@@ -86,9 +89,9 @@ def get_class_leaderboard(
         entries.append(
             LeaderboardEntry(
                 rank=current_rank,
-                student_id=student_id,
                 username=username,
                 total_points=score,
+                is_me=student_id == viewer_id,
             )
         )
         previous_points = score

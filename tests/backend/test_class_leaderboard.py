@@ -1,7 +1,7 @@
 """Tests for A14 class leaderboard scoring (Issue #88)."""
 
 from collections.abc import Callable
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, asdict
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -54,10 +54,12 @@ def test_leaderboard_ranks_students_by_class_points(
     add_points(db, bob, 500, school_class.id)
     add_points(db, carol, 150, school_class.id)
 
-    assert get_class_leaderboard(school_class.id, db) == [
-        LeaderboardEntry(1, bob.id, "Bob", 500),
-        LeaderboardEntry(2, alice.id, "Alice", 300),
-        LeaderboardEntry(3, carol.id, "Carol", 150),
+    entries = get_class_leaderboard(school_class.id, db, viewer_id=alice.id)
+
+    assert [asdict(entry) for entry in entries] == [
+        {"rank": 1, "username": "Bob", "total_points": 500, "is_me": False},
+        {"rank": 2, "username": "Alice", "total_points": 300, "is_me": True},
+        {"rank": 3, "username": "Carol", "total_points": 150, "is_me": False},
     ]
 
 
@@ -113,9 +115,10 @@ def test_zero_point_students_are_included(
     entries = get_class_leaderboard(school_class.id, db)
 
     assert len(entries) == 1
-    assert entries[0].student_id == student.id
+    assert entries[0].username == student.username
     assert entries[0].rank == 1
     assert entries[0].total_points == 0
+    assert entries[0].is_me is False
 
 
 def test_tied_students_share_rank(
@@ -169,7 +172,7 @@ def test_inactive_enrollments_are_excluded(
     entries = get_class_leaderboard(school_class.id, db)
 
     assert len(entries) == 1
-    assert entries[0].student_id == active_student.id
+    assert entries[0].username == active_student.username
 
 
 def test_unenrolled_students_are_excluded(
@@ -189,7 +192,7 @@ def test_unenrolled_students_are_excluded(
     entries = get_class_leaderboard(school_class.id, db)
 
     assert len(entries) == 1
-    assert entries[0].student_id == enrolled.id
+    assert entries[0].username == enrolled.username
 
 
 def test_empty_class_has_empty_leaderboard(
@@ -202,7 +205,7 @@ def test_empty_class_has_empty_leaderboard(
 
 
 def test_leaderboard_entry_is_immutable() -> None:
-    entry = LeaderboardEntry(1, uuid4(), "Alice", 100)
+    entry = LeaderboardEntry(1, "Alice", 100, False)
 
     with pytest.raises(FrozenInstanceError):
         entry.total_points = 200  # type: ignore[misc]
