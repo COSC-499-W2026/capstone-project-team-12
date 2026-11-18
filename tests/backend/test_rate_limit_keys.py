@@ -14,8 +14,8 @@ from app.errors import ErrorCode
 from app.models.accounts import User
 
 LIMIT = 3
-# fails before touching the database, so each request is cheap
-URL = "/api/v1/auth/refresh"
+URL = "/api/v1/me"
+AUTH_URL = "/api/v1/auth/refresh"
 
 
 @pytest.fixture(autouse=True)
@@ -25,10 +25,10 @@ def small_limit(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def send(client: TestClient) -> Callable[..., Response]:
-    def post(headers: dict[str, str] | None = None) -> Response:
-        return client.post(URL, headers=headers or {})
+    def get(headers: dict[str, str] | None = None) -> Response:
+        return client.get(URL, headers=headers or {})
 
-    return post
+    return get
 
 
 def use_up(send: Callable[..., Response], headers: dict[str, str] | None = None) -> None:
@@ -66,6 +66,17 @@ def test_an_anonymous_client_is_limited_by_ip(
 
     assert is_limited(send())
     assert not is_limited(send(auth_headers(make_user())))
+
+
+def test_the_auth_routes_count_against_the_ip(
+    client: TestClient,
+    make_user: Callable[..., User],
+    auth_headers: Callable[[User], dict[str, str]],
+) -> None:
+    for _ in range(LIMIT):
+        assert client.post(AUTH_URL).status_code != 429
+
+    assert is_limited(client.post(AUTH_URL, headers=auth_headers(make_user())))
 
 
 def expired_token() -> str:
