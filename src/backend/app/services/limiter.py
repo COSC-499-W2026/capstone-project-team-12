@@ -7,7 +7,6 @@ dependencies in app.api.rate_limit.
 import math
 import time
 
-from fastapi import Request
 from limits import parse
 from limits.storage import MemoryStorage
 from limits.strategies import FixedWindowRateLimiter
@@ -30,10 +29,6 @@ def count_request(name: str, per_minute: int, key: str) -> None:
         "Too many requests. Try again later.",
         headers={"Retry-After": str(retry_after)},
     )
-
-
-def client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
 
 
 def reset_counts() -> None:
