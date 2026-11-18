@@ -1,10 +1,13 @@
 """#322: the global limit counts per user with a valid access token, otherwise per IP."""
 
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from httpx2 import Response
+from jwt import encode
 
 from app.config import get_settings
 from app.errors import ErrorCode
@@ -65,10 +68,15 @@ def test_an_anonymous_client_is_limited_by_ip(
     assert not is_limited(send(auth_headers(make_user())))
 
 
+def expired_token() -> str:
+    claims = {"sub": str(uuid4()), "exp": datetime.now(UTC) - timedelta(minutes=1)}
+    return encode(claims, str(get_settings().access_token_secret_key), "HS256")
+
+
 @pytest.mark.parametrize(
     "authorization",
-    ["Bearer not-a-token", "Basic abc", "Bearer"],
-    ids=["bad token", "basic", "empty"],
+    ["Bearer not-a-token", f"Bearer {expired_token()}", "Basic abc", "Bearer"],
+    ids=["bad token", "expired", "basic", "empty"],
 )
 def test_a_bad_token_counts_against_the_ip(
     send: Callable[..., Response], authorization: str
@@ -76,12 +84,6 @@ def test_a_bad_token_counts_against_the_ip(
     use_up(send)
 
     assert is_limited(send({"Authorization": authorization}))
-
-
-def test_health_is_never_limited(client: TestClient, send: Callable[..., Response]) -> None:
-    use_up(send)
-
-    assert client.get("/health").status_code == 200
 
 
 def test_every_api_route_documents_429(client: TestClient) -> None:

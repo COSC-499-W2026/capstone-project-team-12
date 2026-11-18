@@ -13,6 +13,8 @@ from app.errors import AppError, ErrorCode
 from app.services.limiter import limiter
 
 
+# An app dependency, not slowapi's middleware: the middleware can't find the endpoints of
+# included routers in FastAPI 0.142, so it never limited any /api/v1 route
 def global_rate_limit(request: Request) -> None:
     """Counts per user with a valid access token, otherwise per IP, so a client can't pick or
     make up another user's bucket."""
