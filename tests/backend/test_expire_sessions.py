@@ -12,6 +12,7 @@ from sqlalchemy import Engine, delete, select, text
 from sqlalchemy.orm import Session
 
 import app.cli
+from app.config import get_settings
 from app.game.interface import expire_idle_sessions
 from app.game.sessions import session_idle_limit
 from app.models.accounts import User
@@ -208,12 +209,43 @@ def test_the_command_runs_until_every_idle_game_is_expired(
     with caplog.at_level(logging.INFO, logger="app.cli"):
         assert run_job() == 0
 
-    # batches of 2, 2 and 1, each committed
+    # batches of 2, 2 and 1, each committed and logged
     assert transaction_calls.count("commit") == 3
     for game in games:
         db.refresh(game)
         assert game.end_reason == SessionEndReason.EXPIRED
-    assert "expired 5 games" in caplog.text
+    for line in [
+        "batch 1 expired 2, 2 in total",
+        "batch 2 expired 2, 4 in total",
+        "batch 3 expired 1, 5 in total",
+        "expired 5 games",
+    ]:
+        assert line in caplog.text
+    assert "stopped after" not in caplog.text
+
+
+def test_the_command_stops_at_the_batch_cap(
+    db: Session,
+    make_game_session: Callable[..., GameSession],
+    run_job: Callable[[], int],
+    transaction_calls: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(app.cli, "EXPIRE_BATCH_SIZE", 2)
+    monkeypatch.setattr(get_settings(), "expire_sessions_max_batches", 2)
+    games = [make_game_session(last_activity_at=_idle_since()) for _ in range(5)]
+    transaction_calls.clear()
+
+    with caplog.at_level(logging.INFO, logger="app.cli"):
+        assert run_job() == 0
+
+    assert transaction_calls.count("commit") == 2
+    for game in games:
+        db.refresh(game)
+    assert sum(game.end_reason == SessionEndReason.EXPIRED for game in games) == 4
+    assert "stopped after 2 full batches" in caplog.text
+    assert "expired 4 games" in caplog.text
 
 
 def test_the_command_logs_nothing_when_no_game_is_idle(
