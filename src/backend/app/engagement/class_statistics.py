@@ -1,16 +1,15 @@
 """Read-only classroom analytics services (A16)."""
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import datetime
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
-from sqlalchemy import Date, cast, extract, func, select
+from sqlalchemy import extract, func, select
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
+from app.engagement.streaks import app_calendar_date, visible_streak
 from app.models.accounts import User
-from app.models.engagement import ClassEnrollment, PointsLedger
+from app.models.engagement import ClassEnrollment, PointsLedger, UserStats
 from app.models.enums import ArrivalOverride, LocationStatus
 from app.models.game import GameSession, SessionLocation
 
@@ -134,8 +133,9 @@ def get_class_student_analytics(
 ) -> list[StudentAnalytics]:
     """Return student progress for one classroom, excluding Practice sessions."""
     enrollments = db.execute(
-        select(ClassEnrollment, User)
+        select(ClassEnrollment, User, UserStats)
         .join(User, User.id == ClassEnrollment.student_id)
+        .outerjoin(UserStats, UserStats.user_id == User.id)
         .where(ClassEnrollment.class_id == class_id)
         .order_by(User.username, User.id)
     ).all()
@@ -150,66 +150,48 @@ def get_class_student_analytics(
         .all()
     )
 
-    zone = get_settings().app_timezone
-    today = datetime.now(UTC).astimezone(ZoneInfo(zone)).date()
-    local_day = cast(func.timezone(zone, SessionLocation.completed_at), Date)
-    enrolled = select(ClassEnrollment.student_id).where(ClassEnrollment.class_id == class_id)
-    active_days = db.execute(
-        select(GameSession.student_id, local_day.label("day"))
-        .join(SessionLocation, SessionLocation.session_id == GameSession.id)
+    games = {
+        student_id: (count, last_activity)
+        for student_id, count, last_activity in db.execute(
+            select(GameSession.student_id, func.count(), func.max(GameSession.last_activity_at))
+            .where(GameSession.class_id == class_id)
+            .group_by(GameSession.student_id)
+        )
+    }
+
+    location = SessionLocation
+    finished_locations = (
+        select(GameSession.student_id)
+        .join(location, GameSession.id == location.session_id)
         .where(
-            GameSession.student_id.in_(enrolled),
-            SessionLocation.status == LocationStatus.COMPLETED,
-            SessionLocation.completed_at.is_not(None),
-            local_day <= today,
+            GameSession.class_id == class_id,
+            location.status.in_((LocationStatus.COMPLETED, LocationStatus.FAILED)),
         )
-        .distinct()
-        .order_by(GameSession.student_id, local_day.desc())
     )
-    streaks: dict[UUID, int] = {}
-    latest_days: dict[UUID, date] = {}
-    for student_id, day in active_days:
-        latest = latest_days.setdefault(student_id, day)
-        length = streaks.get(student_id, 0)
-        if latest >= today - timedelta(days=1) and day == latest - timedelta(days=length):
-            streaks[student_id] = length + 1
-
-    games = db.scalars(select(GameSession).where(GameSession.class_id == class_id)).all()
-
-    games_by_student: dict[UUID, list[GameSession]] = {}
-    for game in games:
-        games_by_student.setdefault(game.student_id, []).append(game)
-
-    locations = db.execute(
-        select(SessionLocation, GameSession.student_id)
-        .join(GameSession, GameSession.id == SessionLocation.session_id)
-        .where(GameSession.class_id == class_id)
-    ).all()
-
-    outcomes: dict[UUID, dict[str, int]] = {}
-    flags: dict[UUID, set[str]] = {}
-    for location, student_id in locations:
-        flags.setdefault(student_id, set()).update(location.flags)
-        counts = outcomes.setdefault(student_id, {"completed": 0, "failed": 0})
-
-        if location.status == LocationStatus.COMPLETED:
-            counts["completed"] += 1
-        elif location.status == LocationStatus.FAILED:
-            counts["failed"] += 1
-
-    results: list[StudentAnalytics] = []
-
-    for enrollment, student in enrollments:
-        student_games = games_by_student.get(student.id, [])
-        counts = outcomes.get(student.id, {"completed": 0, "failed": 0})
-
-        finished = counts["completed"] + counts["failed"]
-        success_rate = round(counts["completed"] / finished * 100, 2) if finished else 0.0
-
-        last_activity = max(
-            (game.last_activity_at for game in student_games),
-            default=None,
+    outcomes = {
+        student_id: (completed, failed)
+        for student_id, completed, failed in db.execute(
+            finished_locations.add_columns(
+                func.count().filter(location.status == LocationStatus.COMPLETED),
+                func.count().filter(location.status == LocationStatus.FAILED),
+            ).group_by(GameSession.student_id)
         )
+    }
+    flags: dict[UUID, set[str]] = {}
+    for student_id, location_flags in db.execute(
+        finished_locations.add_columns(location.flags).where(
+            func.jsonb_array_length(location.flags) > 0
+        )
+    ):
+        flags.setdefault(student_id, set()).update(location_flags)
+
+    today = app_calendar_date()
+    results: list[StudentAnalytics] = []
+    for enrollment, student, stats in enrollments:
+        sessions, last_activity = games.get(student.id, (0, None))
+        completed, failed = outcomes.get(student.id, (0, 0))
+        finished = completed + failed
+        success_rate = round(completed / finished * 100, 2) if finished else 0.0
 
         results.append(
             StudentAnalytics(
@@ -218,13 +200,13 @@ def get_class_student_analytics(
                 is_active_enrollment=enrollment.is_active,
                 joined_at=enrollment.joined_at,
                 left_at=enrollment.left_at,
-                sessions=len(student_games),
-                completed_locations=counts["completed"],
-                failed_locations=counts["failed"],
+                sessions=sessions,
+                completed_locations=completed,
+                failed_locations=failed,
                 classroom_points=points.get(student.id, 0),
                 success_rate=success_rate,
                 last_activity_at=last_activity,
-                streak_days=streaks.get(student.id, 0),
+                streak_days=visible_streak(stats, today=today),
                 flags=sorted(flags.get(student.id, set())),
             )
         )

@@ -2,13 +2,14 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.engagement.interface import get_class_student_analytics
 from app.models.accounts import User
-from app.models.engagement import Class, ClassEnrollment, PointsLedger
+from app.models.engagement import Class, ClassEnrollment, PointsLedger, UserStats
 from app.models.enums import ClassStaffRole, LocationStatus, SessionState, UserRole
 
 
@@ -22,12 +23,19 @@ def test_student_statistics_exclude_practice_and_other_classes(
     freeze_clock: Callable[..., None],
 ) -> None:
     now = datetime(2026, 7, 10, 20, tzinfo=UTC)
-    freeze_clock(now, "app.engagement.class_statistics")
+    freeze_clock(now, "app.engagement.streaks")
     student = make_user()
     school_class = make_class()
     other_class = make_class()
 
     make_enrollment(student, school_class)
+    stats = UserStats(
+        user_id=student.id,
+        current_streak_days=7,
+        best_streak_days=7,
+        last_active_date=now.date() - timedelta(days=1),
+    )
+    db.add(stats)
 
     game = make_game_session(
         student=student,
@@ -84,6 +92,7 @@ def test_student_statistics_exclude_practice_and_other_classes(
         game,
         3,
         status=LocationStatus.PENDING,
+        flags=["speed_anomaly"],
     )
     make_session_location(
         practice,
@@ -113,10 +122,14 @@ def test_student_statistics_exclude_practice_and_other_classes(
     assert result.completed_locations == 1
     assert result.failed_locations == 1
     assert result.classroom_points == 250
-    assert result.streak_days == 3
+    assert result.streak_days == 7
     assert result.flags == ["similar_photo"]
     assert result.success_rate == 50.0
     assert result.last_activity_at is not None
+
+    freeze_clock(now + timedelta(days=1), "app.engagement.streaks")
+    assert get_class_student_analytics(school_class.id, db)[0].streak_days == 0
+    assert stats.current_streak_days == 7
 
 
 def test_students_without_games_remain_visible(
@@ -294,3 +307,11 @@ def test_former_student_remains_visible_in_archived_class(
     assert result.left_at is not None
     assert result.sessions == 0
     assert result.classroom_points == 0
+
+
+def test_unknown_class_returns_404(client, auth_headers, make_user) -> None:
+    teacher = make_user(role=UserRole.STAFF)
+    response = client.get(
+        f"/api/v1/teacher/classes/{uuid4()}/students", headers=auth_headers(teacher)
+    )
+    assert response.status_code == 404
