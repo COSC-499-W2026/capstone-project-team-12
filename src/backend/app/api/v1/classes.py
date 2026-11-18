@@ -5,28 +5,32 @@ from http import HTTPStatus
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import get_current_user
+from app.accounts.interface import get_current_user, is_class_staff
 from app.db import get_db
 from app.engagement.interface import (
     create_class,
     deactivate_access_code,
     generate_access_code,
     get_class_language,
+    get_class_leaderboard,
     leave_class,
     list_staff_classes,
+    require_active_enrolment,
     update_class_settings,
     validate_code_and_enrol,
 )
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.interface import end_open_sessions
 from app.models.accounts import User
+from app.models.engagement import Class
 from app.models.enums import ClassStaffRole, Language
 
 classes_router = APIRouter(prefix="/me/classes", tags=["classes"])
+leaderboard_router = APIRouter(prefix="/classes", tags=["classes"])
 teacher_classes_router = APIRouter(
     prefix="/teacher/classes",
     tags=["classes"],
@@ -35,6 +39,86 @@ teacher_access_codes_router = APIRouter(
     prefix="/teacher/access-codes",
     tags=["classes"],
 )
+
+
+class LeaderboardItem(BaseModel):
+    """One student's position in the classroom leaderboard."""
+
+    rank: int
+    username: str
+    total_points: int
+    is_me: bool = Field(description="Whether this entry belongs to the signed-in user.")
+
+
+class ClassLeaderboardResponse(BaseModel):
+    """Paginated classroom leaderboard."""
+
+    items: list[LeaderboardItem]
+    page: int
+    page_size: int
+    total: int
+    has_next_page: bool
+
+
+@leaderboard_router.get(
+    "/{class_id}/leaderboard",
+    response_model=ClassLeaderboardResponse,
+    operation_id="getClassLeaderboard",
+    summary="Get classroom leaderboard",
+    description=(
+        "Rank students by points earned in this class, using active enrolments for open classes. "
+        "Practice points and points from other classes are excluded. "
+        "Students may view their own class leaderboard; class owners and "
+        "teaching assistants may view classes they manage, including final standings for "
+        "archived classes. Returns 403 LEADERBOARD_DISABLED when the leaderboard is turned off. "
+        "Students whose enrolment ended when the class was archived receive 409 CLASS_ARCHIVED."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.CONFLICT,
+    ),
+)
+def get_class_leaderboard_endpoint(
+    class_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> ClassLeaderboardResponse:
+    """Return class rankings to enrolled students and assigned staff."""
+    staff = is_class_staff(user.id, class_id, db)
+    if not staff:
+        require_active_enrolment(user.id, class_id, db)
+
+    school_class = db.get_one(Class, class_id)
+    if not school_class.leaderboard_enabled:
+        raise AppError(ErrorCode.LEADERBOARD_DISABLED)
+
+    entries = get_class_leaderboard(
+        class_id,
+        db,
+        viewer_id=user.id,
+        include_archived_enrolments=staff and school_class.archived_at is not None,
+    )
+    total = len(entries)
+    start = (page - 1) * page_size
+    return ClassLeaderboardResponse(
+        items=[
+            LeaderboardItem(
+                rank=entry.rank,
+                username=entry.username,
+                total_points=entry.total_points,
+                is_me=entry.is_me,
+            )
+            for entry in entries[start : start + page_size]
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+        has_next_page=start + page_size < total,
+    )
 
 
 class JoinClassRequest(BaseModel):

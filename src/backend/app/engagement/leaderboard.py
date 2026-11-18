@@ -7,11 +7,12 @@ leaderboard-enabled checks belong to the API layer.
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.accounts import User
 from app.models.engagement import ClassEnrollment, PointsLedger
+from app.models.enums import EnrollmentEndReason
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ def get_class_leaderboard(
     db: Session,
     *,
     viewer_id: UUID | None = None,
+    include_archived_enrolments: bool = False,
 ) -> list[LeaderboardEntry]:
     """Return active students ranked by points earned in this class.
 
@@ -39,6 +41,7 @@ def get_class_leaderboard(
     points, then username and student ID for deterministic ties.
 
     Only the viewer's entry is marked as their own. Entries expose usernames.
+    For authorised staff viewing an archived class, include enrolments ended by archival.
     The caller must validate class access and leaderboard settings.
     """
     totals = (
@@ -53,6 +56,10 @@ def get_class_leaderboard(
 
     points = func.coalesce(totals.c.total_points, 0)
 
+    eligible: ColumnElement[bool] = ClassEnrollment.is_active.is_(True)
+    if include_archived_enrolments:
+        eligible = or_(eligible, ClassEnrollment.end_reason == EnrollmentEndReason.ARCHIVED)
+
     statement = (
         select(User.id, User.username, points)
         .join(
@@ -65,7 +72,7 @@ def get_class_leaderboard(
         )
         .where(
             ClassEnrollment.class_id == class_id,
-            ClassEnrollment.is_active.is_(True),
+            eligible,
         )
         .order_by(
             points.desc(),
