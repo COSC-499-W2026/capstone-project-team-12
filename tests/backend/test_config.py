@@ -58,10 +58,16 @@ def test_import_limits_default_to_1000_rows_and_512_kb(monkeypatch: pytest.Monke
     assert (settings.max_import_rows, settings.max_import_file_kb) == (50, 64)
 
 
-def test_import_file_limit_defaults_to_600(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert Settings(_env_file=None).max_import_files == 600
+def test_import_file_limit_defaults_to_100(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert Settings(_env_file=None).max_import_files == 100
     monkeypatch.setenv("MAX_IMPORT_FILES", "50")
     assert Settings(_env_file=None).max_import_files == 50
+
+
+def test_photo_pixel_limit_defaults_to_25_megapixels(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert Settings(_env_file=None).max_photo_megapixels == 25
+    monkeypatch.setenv("MAX_PHOTO_MEGAPIXELS", "12")
+    assert Settings(_env_file=None).max_photo_megapixels == 12
 
 
 @pytest.mark.parametrize(
@@ -72,6 +78,7 @@ def test_import_file_limit_defaults_to_600(monkeypatch: pytest.MonkeyPatch) -> N
         "MAX_IMPORT_ROWS",
         "MAX_IMPORT_FILE_KB",
         "MAX_IMPORT_FILES",
+        "MAX_PHOTO_MEGAPIXELS",
     ],
 )
 def test_upload_limits_must_be_positive(monkeypatch: pytest.MonkeyPatch, variable: str) -> None:
