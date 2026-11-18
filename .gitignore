@@ -20,6 +20,6 @@ htmlcov/
 node_modules/
 dist/
 
-# Generated in CI and published to GitHub Pages (.github/workflows/pages.yml)
+# Generated in CI and published to Netlify (.github/workflows/pages.yml)
 docs/api/openapi.json
 docs/architecture/dependency-graph.md
