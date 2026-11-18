@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.engagement.daily_challenges import ensure_daily_challenges
 from app.models.engagement import PointsLedger, UserLanguageStats
-from app.models.enums import DailyChallengeType, Difficulty, Language, PointsSourceType
+from app.models.enums import DailyChallengeType, Language, PointsSourceType
 
 
 def record_challenge_progress(
@@ -38,10 +38,14 @@ def record_challenge_progress(
 
         qualifies = challenge.challenge_type == DailyChallengeType.COMPLETION or (
             challenge.challenge_type == DailyChallengeType.DIFFICULTY
-            and difficulty == Difficulty.CHALLENGING
+            and difficulty == challenge.params.get("difficulty")
         )
         if not qualifies:
             continue
+
+        count = challenge.params.get("count")
+        if type(count) is int and count > 0:
+            challenge.progress_required = max(count, challenge.progress_current)
 
         challenge.progress_current = min(
             challenge.progress_current + 1,
