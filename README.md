@@ -72,6 +72,18 @@ docker compose up --build
 
 Database migrations run automatically when the api container starts.
 
+### Behind a reverse proxy
+
+Uvicorn takes the client IP from `X-Forwarded-For` only when the request comes from an address in `FORWARDED_ALLOW_IPS` (default `127.0.0.1`). Logins, sign-ups and requests without a token are rate limited per IP, so behind nginx:
+
+- set `FORWARDED_ALLOW_IPS` in `.env` to nginx's address or its Docker network, never `*` (anyone could then send a fake IP and get a fresh limit);
+- have nginx pass the client's address:
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
 ## Backend Development
 
 The backend uses Python 3.11 in a virtual environment (venv).
