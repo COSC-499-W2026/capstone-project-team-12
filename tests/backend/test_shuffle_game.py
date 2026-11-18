@@ -9,7 +9,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game import shuffle
 from app.game.control import quit_game
@@ -38,8 +37,8 @@ class _WithoutRecordings(UploadedAudioService):
 
 
 @pytest.fixture
-def eligible(db: Session) -> list[UUID]:
-    return sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
+def eligible(playable_location_ids: Callable[..., list[UUID]]) -> list[UUID]:
+    return playable_location_ids(Language.JA, Difficulty.BASIC)
 
 
 @pytest.fixture
@@ -241,12 +240,11 @@ def test_a_paused_game_is_not_shuffled(
 def test_not_enough_new_locations_leaves_the_game_as_it_is(
     db: Session,
     game_at_three: Callable[..., GameSession],
-    eligible: list[UUID],
-    monkeypatch: pytest.MonkeyPatch,
+    limit_playable_locations: Callable[[int], None],
 ) -> None:
     game = game_at_three()
     # the game's five plus two new ones, and the shuffle needs three
-    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: frozenset(eligible[:7]))
+    limit_playable_locations(7)
 
     with pytest.raises(AppError) as error:
         shuffle_game(game.student_id, game.id, 0, db)

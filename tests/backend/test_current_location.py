@@ -1,20 +1,19 @@
 """GET /games/{id}/current-location (A19): the current location, skipping deactivated ones.
 
-Content is still a stub: its eligible locations are active, and any other id (e.g. a random one
-from make_session_location) counts as deactivated.
+Locations come from the content fixtures: `active` are playable ones, and
+deactivated_location_id gives one the game must skip.
 """
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game.current_location import CurrentLocation, Stage, get_current_location
 from app.game.progress import current_row, move_on
@@ -30,8 +29,8 @@ NOW = datetime(2026, 10, 29, 20, 0, tzinfo=UTC)
 
 
 @pytest.fixture
-def active(db: Session) -> list[UUID]:
-    return sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
+def active(playable_location_ids: Callable[..., list[UUID]]) -> list[UUID]:
+    return playable_location_ids(Language.JA, Difficulty.BASIC)
 
 
 @pytest.fixture
@@ -94,9 +93,12 @@ def test_stage_1(
     assert game.last_activity_at == NOW - timedelta(hours=1)
 
 
-def test_stage_2_even_if_deactivated(db: Session, game_with: Callable[..., Any]) -> None:
+def test_stage_2_even_if_deactivated(
+    db: Session, game_with: Callable[..., Any], deactivated_location_id: Callable[[], UUID]
+) -> None:
     # a location already reached isn't skipped: the student can finish the photo
-    game, rows = game_with([(V, uuid4()), (P, uuid4())])
+    gone = deactivated_location_id
+    game, rows = game_with([(V, gone()), (P, gone())])
     rows[0].attempts_used = 2
     db.flush()
 
@@ -131,13 +133,16 @@ def test_a_row_replaced_by_a_shuffle_is_ignored(
 
 
 def test_move_on_ignores_rows_a_shuffle_replaced(
-    db: Session, game_with: Callable[..., Any], active: list[UUID]
+    db: Session,
+    game_with: Callable[..., Any],
+    active: list[UUID],
+    deactivated_location_id: Callable[[], UUID],
 ) -> None:
     game, rows = game_with([(N, active[0]), (P, active[1]), (LocationStatus.COMPLETED, active[2])])
     replaced, later = rows[:2], rows[2]
     shuffle_game(game.student_id, game.id, 0, db)
     current = current_row(game, db)
-    current.location_id = uuid4()
+    current.location_id = deactivated_location_id()
     db.flush()
 
     found = get_current_location(game.student_id, game.id, db)
@@ -161,9 +166,13 @@ def test_move_on_ignores_rows_a_shuffle_replaced(
 
 
 def test_deactivated_locations_are_skipped_until_an_active_one(
-    db: Session, game_with: Callable[..., Any], active: list[UUID]
+    db: Session,
+    game_with: Callable[..., Any],
+    active: list[UUID],
+    deactivated_location_id: Callable[[], UUID],
 ) -> None:
-    game, rows = game_with([(N, uuid4()), (P, uuid4()), (P, active[0]), (P, uuid4())])
+    gone = deactivated_location_id
+    game, rows = game_with([(N, gone()), (P, gone()), (P, active[0]), (P, gone())])
 
     found = get_current_location(game.student_id, game.id, db)
 
@@ -180,12 +189,15 @@ def test_deactivated_locations_are_skipped_until_an_active_one(
 
 
 def test_a_paused_game_skips_a_deactivated_location_and_keeps_its_activity(
-    db: Session, game_with: Callable[..., Any], active: list[UUID]
+    db: Session,
+    game_with: Callable[..., Any],
+    active: list[UUID],
+    deactivated_location_id: Callable[[], UUID],
 ) -> None:
     # the fixture already set last_activity_at an hour ago; a pause must leave it there
     played = NOW - timedelta(hours=1)
     game, rows = game_with(
-        [(N, uuid4()), (P, active[0])],
+        [(N, deactivated_location_id()), (P, active[0])],
         state=SessionState.PAUSED,
         paused_at=played,
     )
@@ -206,10 +218,13 @@ def test_a_paused_game_skips_a_deactivated_location_and_keeps_its_activity(
 
 
 def test_a_deactivated_last_location_completes_a_paused_game(
-    db: Session, game_with: Callable[..., Any], active: list[UUID]
+    db: Session,
+    game_with: Callable[..., Any],
+    active: list[UUID],
+    deactivated_location_id: Callable[[], UUID],
 ) -> None:
     game, rows = game_with(
-        [(LocationStatus.COMPLETED, active[0]), (N, uuid4())],
+        [(LocationStatus.COMPLETED, active[0]), (N, deactivated_location_id())],
         current=2,
         state=SessionState.PAUSED,
         paused_at=NOW,
@@ -276,9 +291,10 @@ def test_the_route_returns_the_summary_when_the_game_completes(
     auth_headers: Callable[[User], dict[str, str]],
     make_user: Callable[..., User],
     game_with: Callable[..., Any],
+    deactivated_location_id: Callable[[], UUID],
 ) -> None:
     student = make_user()
-    game, _ = game_with([(N, uuid4())], student=student)
+    game, _ = game_with([(N, deactivated_location_id())], student=student)
 
     response = client.get(
         f"/api/v1/games/{game.id}/current-location", headers=auth_headers(student)

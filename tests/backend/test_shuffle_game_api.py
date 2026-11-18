@@ -7,7 +7,7 @@ the response body and that the route commits, also when an idle game is expired 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,7 +15,6 @@ from httpx2 import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.content import interface as content
 from app.errors import ErrorCode
 from app.game import shuffle
 from app.game.sessions import session_idle_limit
@@ -63,15 +62,16 @@ def post(client: TestClient, auth_headers: Callable[[User], dict[str, str]]) -> 
 
 @pytest.fixture
 def playing(
-    db: Session,
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
+    playable_location_ids: Callable[..., list[UUID]],
 ) -> Callable[..., tuple[User, GameSession]]:
-    """A student's game at position 2 (1 completed), with real locations so it can be shuffled."""
+    """A student's game at position 2 (1 completed), at the first two playable ja/basic
+    locations, so it can be shuffled."""
 
     def make(**fields: Any) -> tuple[User, GameSession]:
-        eligible = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
+        eligible = playable_location_ids(Language.JA, Difficulty.BASIC)
         student = make_user()
         game = make_game_session(student, current_position=2, total_score=100, **fields)
         make_session_location(
@@ -244,20 +244,15 @@ def test_not_enough_content_is_409_and_changes_nothing(
     post: Callable[..., Response],
     playing: Callable[..., tuple[User, GameSession]],
     assert_error: Callable[..., None],
-    monkeypatch: pytest.MonkeyPatch,
+    limit_playable_locations: Callable[[int], None],
     transaction_calls: list[str],
 ) -> None:
     student, game = playing()
     # saved already, so a rolled-back refusal does not remove the game
     db.commit()
     before = _location_rows(db, game)
-    # every eligible location is already in the game, so the draw fails before any write
-    in_game = set(
-        db.scalars(select(SessionLocation.location_id).where(SessionLocation.session_id == game.id))
-    )
-    monkeypatch.setattr(
-        content, "eligible_location_ids", lambda *_args, **_kwargs: frozenset(in_game)
-    )
+    # only the game's two locations are playable, so the draw fails before any write
+    limit_playable_locations(2)
     transaction_calls.clear()
 
     assert_error(post(student, game.id), 409, ErrorCode.NOT_ENOUGH_CONTENT)

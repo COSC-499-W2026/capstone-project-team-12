@@ -5,14 +5,13 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any
-from uuid import uuid4
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game.arrival import Arrival, confirm_arrival
 from app.game.current_location import Stage
@@ -39,17 +38,17 @@ _Split = Callable[[str], tuple[str, int, str]]
 
 
 @pytest.fixture
-def playing(db: Session, navigating_game: Callable[..., Any]) -> Callable[..., Any]:
+def playing(
+    navigating_game: Callable[..., Any], playable_location_ids: Callable[..., list[UUID]]
+) -> Callable[..., Any]:
     """An active game at its first location, started a minute ago, pinged 5 s ago from 10 m.
 
-    The location is eligible, so it counts as active. Pass location_id for a deactivated one.
+    The location is playable, so it counts as active. Pass location_id for a deactivated one.
     """
-    active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
-    assert active, "needs an active ja/basic location"
     recent = {
         "last_ping_at": NOW - timedelta(seconds=5),
         "last_distance_m": 10,
-        "location_id": active[0],
+        "location_id": playable_location_ids(Language.JA, Difficulty.BASIC)[0],
     }
     return partial(navigating_game, NOW, "app.game.arrival", "app.game.navigation", **recent)
 
@@ -186,9 +185,9 @@ def test_weak_pings_allow_the_override_until_a_good_one(
 
 
 def test_a_deactivated_location_is_409_and_changes_nothing(
-    db: Session, playing: Callable[..., Any]
+    db: Session, playing: Callable[..., Any], deactivated_location_id: Callable[[], UUID]
 ) -> None:
-    game, row = playing(location_id=uuid4())
+    game, row = playing(location_id=deactivated_location_id())
 
     assert refused(game, db) == ErrorCode.STATE_CHANGED
     assert (row.status, row.arrived_at, game.last_activity_at) == (
@@ -230,9 +229,12 @@ def _stored(game: GameSession, row: Any) -> tuple[object, ...]:
     ],
 )
 def test_a_finished_deactivated_row_is_invalid_stage(
-    db: Session, playing: Callable[..., Any], fields: dict[str, Any]
+    db: Session,
+    playing: Callable[..., Any],
+    deactivated_location_id: Callable[[], UUID],
+    fields: dict[str, Any],
 ) -> None:
-    game, row = playing(location_id=uuid4(), **fields)
+    game, row = playing(location_id=deactivated_location_id(), **fields)
     before = _stored(game, row)
 
     assert refused(game, db) == ErrorCode.INVALID_STAGE
@@ -240,10 +242,14 @@ def test_a_finished_deactivated_row_is_invalid_stage(
 
 
 def test_a_verifying_deactivated_row_repeats_without_writes(
-    db: Session, playing: Callable[..., Any], split_media_url: _Split
+    db: Session,
+    playing: Callable[..., Any],
+    deactivated_location_id: Callable[[], UUID],
+    split_media_url: _Split,
 ) -> None:
     arrived = NOW - timedelta(minutes=1)
-    game, row = playing(location_id=uuid4(), status=LocationStatus.VERIFYING, arrived_at=arrived)
+    gone = deactivated_location_id()
+    game, row = playing(location_id=gone, status=LocationStatus.VERIFYING, arrived_at=arrived)
     before = _stored(game, row)
 
     first = confirm(game, db)
