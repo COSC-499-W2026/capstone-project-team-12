@@ -15,12 +15,13 @@ from app.config import get_settings
 from app.db import get_db
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
-from app.models.engagement import Class
+from app.models.engagement import AccessCode, Class
 from app.models.enums import ClassStaffRole, UserRole
 
 __all__ = [
     "get_current_user",
     "require_class_role",
+    "require_code_class_role",
     "is_class_staff",
     "can_manage_content",
     "require_admin",
@@ -64,16 +65,37 @@ def require_class_role(*allowed_roles: ClassStaffRole) -> Callable[..., None]:
     ) -> None:
         if db.get(Class, class_id) is None:
             raise AppError(ErrorCode.NOT_FOUND)
-        role = db.execute(
-            select(ClassStaff.role)
-            .where(ClassStaff.user_id == user.id, ClassStaff.class_id == class_id)
-            .limit(1)
-        ).scalar_one_or_none()
-
-        if role not in allowed_roles:
-            raise AppError(ErrorCode.FORBIDDEN_ROLE)
+        _check_class_role(user.id, class_id, allowed_roles, db)
 
     return role_checker
+
+
+def require_code_class_role(*allowed_roles: ClassStaffRole) -> Callable[..., None]:
+    """As require_class_role, for the class of the access code in the path."""
+
+    def role_checker(
+        user: Annotated[User, Depends(get_current_user)],
+        code_id: Annotated[UUID, Path()],
+        db: Annotated[Session, Depends(get_db)],
+    ) -> None:
+        access_code = db.get(AccessCode, code_id)
+        if access_code is None:
+            raise AppError(ErrorCode.NOT_FOUND)
+        _check_class_role(user.id, access_code.class_id, allowed_roles, db)
+
+    return role_checker
+
+
+def _check_class_role(
+    user_id: UUID, class_id: UUID, allowed_roles: tuple[ClassStaffRole, ...], db: Session
+) -> None:
+    role = db.scalar(
+        select(ClassStaff.role).where(
+            ClassStaff.user_id == user_id, ClassStaff.class_id == class_id
+        )
+    )
+    if role not in allowed_roles:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE)
 
 
 def require_admin(user: Annotated[User, Depends(get_current_user)]) -> None:
