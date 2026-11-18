@@ -118,11 +118,17 @@ def test_a_row_replaced_by_a_shuffle_is_ignored(
     game_with: Callable[..., Any],
     make_session_location: Callable[..., SessionLocation],
     active: list[UUID],
+    deactivated_location_id: Callable[[], UUID],
 ) -> None:
     game, rows = game_with([(N, active[0])])
     # an inactive location that was shuffled away at the same position
     make_session_location(
-        game, 1, status=LocationStatus.SKIPPED, skip_reason=SkipReason.SHUFFLED, attempts_used=3
+        game,
+        1,
+        location_id=deactivated_location_id(),
+        status=LocationStatus.SKIPPED,
+        skip_reason=SkipReason.SHUFFLED,
+        attempts_used=3,
     )
 
     found = get_current_location(game.student_id, game.id, db)

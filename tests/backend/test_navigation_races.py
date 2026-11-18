@@ -7,12 +7,11 @@ so the row locks overlap. A job given HOLD as its delay starts after the first o
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import pytest
-from content_fixtures import SnapshotIds
 from sqlalchemy import Engine, delete, select, text
 from sqlalchemy.orm import Session
 
@@ -34,6 +33,9 @@ from app.models.enums import (
 )
 from app.models.game import GameSession, SessionLocation
 
+if TYPE_CHECKING:  # pytest_plugins in conftest imports it at run time, so pytest rewrites it
+    from content_fixtures import SnapshotIds
+
 LAT, LNG = 49.9394, -119.3948
 FAR_LAT = 50.0  # well outside every stub entrance
 # delay before the later job, and how long the first job keeps its lock afterwards.
@@ -43,7 +45,7 @@ GPS = ArrivalOverride.GPS_UNAVAILABLE
 
 
 def _start(
-    engine: Engine, rows: list[dict[str, Any]], locations: list[UUID], snapshot: SnapshotIds
+    engine: Engine, rows: list[dict[str, Any]], locations: list[UUID], snapshot: "SnapshotIds"
 ) -> tuple[UUID, UUID]:
     with Session(engine) as session:
         user = User(
@@ -93,7 +95,7 @@ def _cleanup(engine: Engine, user_id: UUID) -> None:
 def playing(
     test_engine: Engine,
     committed_location_ids: Callable[..., list[UUID]],
-    committed_snapshot_ids: Callable[[], SnapshotIds],
+    committed_snapshot_ids: Callable[[], "SnapshotIds"],
 ) -> Callable[..., Any]:
     """playing(rows): a committed ja/basic game with one location per row, as a context manager
     giving (student id, game id), deleted afterwards. A row without a location_id is at a

@@ -244,6 +244,7 @@ def test_not_enough_content_is_409_and_changes_nothing(
     post: Callable[..., Response],
     playing: Callable[..., tuple[User, GameSession]],
     assert_error: Callable[..., None],
+    playable_location_ids: Callable[..., list[UUID]],
     limit_playable_locations: Callable[[int], None],
     transaction_calls: list[str],
 ) -> None:
@@ -251,7 +252,11 @@ def test_not_enough_content_is_409_and_changes_nothing(
     # saved already, so a rolled-back refusal does not remove the game
     db.commit()
     before = _location_rows(db, game)
-    # only the game's two locations are playable, so the draw fails before any write
+    # only the game's two locations stay playable, so the draw fails before any write
+    in_game = db.scalars(
+        select(SessionLocation.location_id).where(SessionLocation.session_id == game.id)
+    )
+    assert set(in_game) == set(playable_location_ids(count=2))
     limit_playable_locations(2)
     transaction_calls.clear()
 

@@ -14,7 +14,6 @@ from uuid import UUID, uuid4
 
 import av
 import pytest
-from content_fixtures import SnapshotIds
 from fastapi.testclient import TestClient
 from gps_replay import Api, Step, replay
 from httpx2 import Response
@@ -45,7 +44,7 @@ from app.models.game import GameSession, SessionLocation
 from app.services.limiter import limiter
 from app.services.storage import MEDIA_URL_PREFIX, get_storage_service
 
-# playable content for game tests (content_fixtures.py)
+# playable content for game tests; importing content_fixtures here would skip assert rewriting
 pytest_plugins = ["content_fixtures"]
 
 
@@ -419,7 +418,7 @@ def open_game(make_game_session: Callable[..., GameSession]) -> Callable[..., Ga
 
 @pytest.fixture
 def make_session_location(
-    db: Session, snapshot_ids: Callable[[], SnapshotIds]
+    db: Session, snapshot_ids: Callable[[], Any]
 ) -> Callable[..., SessionLocation]:
     """A pending location in the game with a valid content snapshot (IDs from snapshot_ids)."""
 
