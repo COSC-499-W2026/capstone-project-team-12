@@ -5,11 +5,12 @@ from http import HTTPStatus
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user, is_class_staff
+from app.api.pagination import Page, PageParams, page_params
 from app.db import get_db
 from app.engagement.interface import (
     create_class,
@@ -50,14 +51,8 @@ class LeaderboardItem(BaseModel):
     is_me: bool = Field(description="Whether this entry belongs to the signed-in user.")
 
 
-class ClassLeaderboardResponse(BaseModel):
+class ClassLeaderboardResponse(Page[LeaderboardItem]):
     """Paginated classroom leaderboard."""
-
-    items: list[LeaderboardItem]
-    page: int
-    page_size: int
-    total: int
-    has_next_page: bool
 
 
 @leaderboard_router.get(
@@ -84,8 +79,7 @@ def get_class_leaderboard_endpoint(
     class_id: UUID,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-    page: Annotated[int, Query(ge=1)] = 1,
-    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    params: Annotated[PageParams, Depends(page_params)],
 ) -> ClassLeaderboardResponse:
     """Return class rankings to enrolled students and assigned staff."""
     staff = is_class_staff(user.id, class_id, db)
@@ -102,23 +96,16 @@ def get_class_leaderboard_endpoint(
         viewer_id=user.id,
         include_archived_enrolments=staff and school_class.archived_at is not None,
     )
-    total = len(entries)
-    start = (page - 1) * page_size
-    return ClassLeaderboardResponse(
-        items=[
-            LeaderboardItem(
-                rank=entry.rank,
-                username=entry.username,
-                total_points=entry.total_points,
-                is_me=entry.is_me,
-            )
-            for entry in entries[start : start + page_size]
-        ],
-        page=page,
-        page_size=page_size,
-        total=total,
-        has_next_page=start + page_size < total,
-    )
+    items = [
+        LeaderboardItem(
+            rank=entry.rank,
+            username=entry.username,
+            total_points=entry.total_points,
+            is_me=entry.is_me,
+        )
+        for entry in entries[params.offset : params.offset + params.page_size]
+    ]
+    return ClassLeaderboardResponse.of(items, params, len(entries))
 
 
 class JoinClassRequest(BaseModel):

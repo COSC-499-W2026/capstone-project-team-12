@@ -5,12 +5,13 @@ from http import HTTPStatus
 from typing import Annotated, Self
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
 from app.accounts.profile import current_class_id, select_class, set_practice_language
+from app.api.pagination import Page, PageParams, page_params
 from app.db import get_db
 from app.engagement.interface import (
     app_calendar_date,
@@ -398,14 +399,8 @@ class GameHistoryItemResponse(BaseModel):
     locations_completed: int
 
 
-class GameHistoryResponse(BaseModel):
-    """A page of finished games (docs/api-conventions.md, Pagination)."""
-
-    items: list[GameHistoryItemResponse]
-    page: int
-    page_size: int
-    total: int
-    has_next_page: bool
+class GameHistoryResponse(Page[GameHistoryItemResponse]):
+    """A page of finished games."""
 
 
 @me_router.get(
@@ -426,22 +421,15 @@ class GameHistoryResponse(BaseModel):
 def list_my_games(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
+    params: Annotated[PageParams, Depends(page_params)],
     language: Language | None = None,
-    page: Annotated[int, Query(ge=1)] = 1,
-    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> GameHistoryResponse:
     """Read one page of the history; an expiry done while reading is committed."""
     if user.role == UserRole.ADMIN:
         raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
-    history = list_history(user.id, language, page, page_size, db)
+    history = list_history(user.id, language, params.page, params.page_size, db)
     db.commit()
-    return GameHistoryResponse(
-        items=[
-            GameHistoryItemResponse.model_validate(item, from_attributes=True)
-            for item in history.items
-        ],
-        page=page,
-        page_size=page_size,
-        total=history.total,
-        has_next_page=page * page_size < history.total,
-    )
+    items = [
+        GameHistoryItemResponse.model_validate(item, from_attributes=True) for item in history.items
+    ]
+    return GameHistoryResponse.of(items, params, history.total)
