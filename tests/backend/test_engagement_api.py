@@ -1,13 +1,17 @@
-"""Tests for GET /api/v1/me/engagement (A12)."""
+"""Tests for GET /api/v1/me/engagement (A12/A13)."""
 
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
+from app.engagement.interface import app_calendar_date
 from app.models.accounts import User
-from app.models.engagement import Achievement, UserAchievement, UserLanguageStats
+from app.models.engagement import Achievement, UserAchievement, UserLanguageStats, UserStats
 from app.models.enums import AchievementCategory, Language, UserRole
 
 URL = "/api/v1/me/engagement"
@@ -27,12 +31,27 @@ def test_new_student_starts_at_zero(
     )
 
     assert response.status_code == 200, response.text
-    assert response.json() == {
+    data = response.json()
+    daily = data.pop("daily_challenges")
+    midnight = datetime.fromisoformat(daily["expires_at"]).astimezone(
+        ZoneInfo(get_settings().app_timezone)
+    )
+    assert midnight.date() == date.fromisoformat(daily["challenge_date"]) + timedelta(days=1)
+    assert (midnight.hour, midnight.minute, midnight.second) == (0, 0, 0)
+    assert [challenge["params"] for challenge in daily["challenges"]] == [
+        {"count": 1},
+        {"count": 3},
+        {"count": 1, "difficulty": 3},
+    ]
+    assert data == {
         "language": Language.JA.value,
         "total_points": 0,
         "level": 1,
         "points_to_next_level": 500,
         "recent_badges": [],
+        "current_streak_days": 0,
+        "best_streak_days": 0,
+        "streak_broken": False,
     }
 
 
@@ -81,6 +100,7 @@ def test_points_are_separate_by_language(
     assert chinese.json()["total_points"] == 1700
     assert chinese.json()["level"] == 3
     assert chinese.json()["points_to_next_level"] == 1300
+    assert chinese.json()["daily_challenges"] == japanese.json()["daily_challenges"]
 
 
 def test_students_cannot_read_another_students_points(
@@ -292,3 +312,40 @@ def test_recent_badges_do_not_include_other_users_unlocks(
 
     assert response.status_code == 200, response.text
     assert response.json()["recent_badges"] == []
+
+
+@pytest.mark.parametrize(("days_ago", "current"), [(0, 4), (1, 4), (2, 0)])
+def test_current_and_best_streak_are_returned(
+    days_ago: int,
+    current: int,
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    auth_headers: Callable[[User], dict[str, str]],
+) -> None:
+    student = make_user(role=UserRole.STUDENT)
+    today = app_calendar_date()
+    db.add(
+        UserStats(
+            user_id=student.id,
+            current_streak_days=4,
+            best_streak_days=9,
+            last_active_date=today - timedelta(days=days_ago),
+        )
+    )
+    db.flush()
+
+    response = client.get(
+        URL,
+        params={"language": Language.JA.value},
+        headers=auth_headers(student),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["current_streak_days"] == current
+    assert response.json()["best_streak_days"] == 9
+    assert response.json()["streak_broken"] is (days_ago == 2)
+    if days_ago == 2:
+        again = client.get(URL, params={"language": "fr"}, headers=auth_headers(student))
+        assert again.status_code == 200, again.text
+        assert again.json()["streak_broken"] is False

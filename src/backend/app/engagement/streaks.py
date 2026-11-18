@@ -4,7 +4,7 @@ The caller must lock the student before invoking these functions.
 The caller owns the database transaction.
 """
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -30,6 +30,22 @@ def app_calendar_date(now: datetime | None = None) -> date:
         raise ValueError("A timezone-aware datetime is required")
 
     return now.astimezone(ZoneInfo(get_settings().app_timezone)).date()
+
+
+def visible_streak(stats: UserStats | None, *, today: date | None = None) -> int:
+    """Return the streak visible today without changing its stored history."""
+    local_day = today or app_calendar_date()
+    if stats is None or stats.last_active_date is None:
+        return 0
+    return (
+        stats.current_streak_days if stats.last_active_date >= local_day - timedelta(days=1) else 0
+    )
+
+
+def challenge_expiry(challenge_date: date) -> datetime:
+    """Return the UTC instant when this local challenge day ends."""
+    zone = ZoneInfo(get_settings().app_timezone)
+    return datetime.combine(challenge_date + timedelta(days=1), time.min, zone).astimezone(UTC)
 
 
 def record_active_day(

@@ -249,6 +249,7 @@ class UserStats(Base):
         server_default=text("0"),
     )
     last_active_date: Mapped[date | None]
+    reported_break_date: Mapped[date | None]
     updated_at: Mapped[datetime] = updated_at()
 
 
