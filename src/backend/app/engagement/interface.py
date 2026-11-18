@@ -24,12 +24,14 @@ responsible for committing or rolling back the entire operation.
 """
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.engagement.badges import (
     UnlockedAchievement,
     list_unlocked_achievements,
@@ -44,6 +46,7 @@ from app.engagement.classes import (
     list_staff_classes,
     update_class_settings,
 )
+from app.engagement.daily_challenges import ensure_daily_challenges as ensure_daily_challenges
 from app.engagement.stats import (
     GameEngagement,
     LanguageEngagementStats,
@@ -53,8 +56,8 @@ from app.engagement.stats import (
 from app.engagement.stats import (
     level_for_points as _level_for_points,
 )
+from app.engagement.streaks import app_calendar_date as app_calendar_date
 from app.engagement.streaks import (
-    app_calendar_date,
     award_streak_milestones,
     record_active_day,
 )
@@ -77,6 +80,23 @@ from app.models.enums import (
 )
 from app.models.game import GameSession, SessionLocation
 from app.services.locks import lock_user
+
+
+def visible_streak(stats: UserStats | None, *, today: date | None = None) -> int:
+    """Return the streak visible today without changing its stored history."""
+    local_day = today or app_calendar_date()
+    if stats is None or stats.last_active_date is None:
+        return 0
+    return (
+        stats.current_streak_days if stats.last_active_date >= local_day - timedelta(days=1) else 0
+    )
+
+
+def challenge_expiry(challenge_date: date) -> datetime:
+    """Return the UTC instant when this local challenge day ends."""
+    zone = ZoneInfo(get_settings().app_timezone)
+    return datetime.combine(challenge_date + timedelta(days=1), time.min, zone).astimezone(UTC)
+
 
 LOCATION_COMPLETION_POINTS = 100
 
@@ -393,15 +413,7 @@ def apply_location_result(
             sorted((*achievements_unlocked, *unlock_streak_badges(student_id, streak_days, db)))
         )
     else:
-        global_stats = db.get(UserStats, student_id)
-        today = app_calendar_date()
-        streak_days = (
-            global_stats.current_streak_days
-            if global_stats is not None
-            and global_stats.last_active_date is not None
-            and global_stats.last_active_date >= today - timedelta(days=1)
-            else 0
-        )
+        streak_days = visible_streak(db.get(UserStats, student_id))
 
     total_points = stats.total_points if stats is not None else 0
     level = _level_for_points(total_points)
