@@ -58,7 +58,7 @@ def test_location_statistics_and_time_cap(
         started_at=started,
     )
 
-    results = get_class_location_analytics(school_class.id, db)
+    results = get_class_location_analytics(school_class.id, db).locations
 
     assert len(results) == 1
     result = results[0]
@@ -125,7 +125,7 @@ def test_excludes_practice_other_classes_and_unfinished(
         status=LocationStatus.FAILED,
     )
 
-    results = get_class_location_analytics(school_class.id, db)
+    results = get_class_location_analytics(school_class.id, db).locations
 
     assert len(results) == 1
     assert results[0].location_id == location_id
@@ -144,7 +144,10 @@ def test_empty_class_returns_no_location_statistics(
     school_class = make_class()
     make_class_staff(school_class, teacher)
 
-    assert get_class_location_analytics(school_class.id, db) == []
+    analytics = get_class_location_analytics(school_class.id, db)
+    assert analytics.locations == []
+    assert analytics.class_stats.finished == 0
+    assert analytics.class_stats.average_time_seconds is None
 
 
 def test_teacher_analytics_endpoint(
@@ -170,15 +173,22 @@ def test_teacher_analytics_endpoint(
         completed_at=datetime(2026, 11, 1, 12, tzinfo=UTC),
     )
 
+    make_session_location(game, 2, status=LocationStatus.FAILED, attempts_used=2)
+
     response = client.get(
         f"/api/v1/teacher/classes/{school_class.id}/analytics",
         headers=auth_headers(teacher),
     )
 
     assert response.status_code == 200, response.text
-    assert len(response.json()) == 1
-    assert response.json()[0]["success_rate"] == 100.0
-    assert response.json()[0]["photo_attempts"] == 1
+    data = response.json()
+    assert data["class_stats"]["finished"] == 2
+    assert data["class_stats"]["success_rate"] == 50.0
+    assert data["class_stats"]["photo_attempts"] == 3
+    assert [item["label"] for item in data["locations"]] == ["Location 1", "Location 2"]
+    assert all(
+        {"room_number", "name", "location_name"}.isdisjoint(item) for item in data["locations"]
+    )
 
 
 @pytest.mark.parametrize("role", [UserRole.STAFF, UserRole.STUDENT])
@@ -219,7 +229,7 @@ def test_assistant_can_view_analytics(
     )
 
     assert response.status_code == 200, response.text
-    assert response.json() == []
+    assert response.json()["locations"] == []
 
 
 def test_unknown_class_cannot_be_read(

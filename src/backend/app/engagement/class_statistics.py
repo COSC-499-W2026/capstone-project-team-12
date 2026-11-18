@@ -1,24 +1,19 @@
 """Read-only classroom analytics services (A16)."""
 
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import extract, func, select
 from sqlalchemy.orm import Session
 
-from app.models.enums import (
-    ArrivalOverride,
-    LocationStatus,
-)
+from app.models.enums import ArrivalOverride, LocationStatus
 from app.models.game import GameSession, SessionLocation
 
 
 @dataclass(frozen=True)
-class LocationAnalytics:
-    """Aggregated outcomes for one classroom location."""
+class AnalyticsTotals:
+    """Aggregated outcomes across a class or location."""
 
-    location_id: UUID
     finished: int
     completed: int
     failed: int
@@ -29,99 +24,78 @@ class LocationAnalytics:
     gps_overrides: int
 
 
-def get_class_location_analytics(
-    class_id: UUID,
-    db: Session,
-) -> list[LocationAnalytics]:
-    """Return per-location statistics for a classroom.
+@dataclass(frozen=True)
+class LocationAnalytics(AnalyticsTotals):
+    location_id: UUID
+    label: str
 
-    Only completed and failed locations contribute to success rates.
-    Practice games, unfinished locations, and skipped locations are excluded.
-    Each completed location's elapsed time is capped at 30 minutes.
 
-    This operation is read-only and does not commit or flush.
-    """
-    rows = db.scalars(
-        select(SessionLocation)
-        .join(
-            GameSession,
-            GameSession.id == SessionLocation.session_id,
+@dataclass(frozen=True)
+class ClassAnalytics:
+    class_stats: AnalyticsTotals
+    locations: list[LocationAnalytics]
+
+
+def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
+    """Aggregate finished classroom locations; completed times are capped at 30 minutes."""
+    location = SessionLocation
+    completed_filter = location.status == LocationStatus.COMPLETED
+    elapsed = extract("epoch", location.completed_at - location.started_at)
+    average = func.avg(func.least(func.greatest(elapsed, 0), 1800)).filter(
+        completed_filter, location.started_at.is_not(None), location.completed_at.is_not(None)
+    )
+    rows = db.execute(
+        select(
+            location.location_id,
+            func.count(),
+            func.count().filter(completed_filter),
+            func.coalesce(func.sum(location.attempts_used), 0),
+            average,
+            func.count().filter(func.jsonb_array_length(location.flags) > 0),
+            func.count().filter(location.arrival_override == ArrivalOverride.GPS_UNAVAILABLE),
         )
+        .join(GameSession, GameSession.id == location.session_id)
         .where(
             GameSession.class_id == class_id,
-            SessionLocation.status.in_(
-                (
-                    LocationStatus.COMPLETED,
-                    LocationStatus.FAILED,
-                )
-            ),
+            location.status.in_((LocationStatus.COMPLETED, LocationStatus.FAILED)),
         )
+        .group_by(func.rollup(location.location_id))
+        .order_by(location.location_id.asc().nulls_first())
+    ).all()
+
+    # ROLLUP includes a class summary even when no location results match.
+    _, finished, completed, attempts, seconds, flagged, overrides = rows[0]
+    class_stats = AnalyticsTotals(
+        finished,
+        completed,
+        finished - completed,
+        round(completed / finished * 100, 2) if finished else 0.0,
+        attempts,
+        round(float(seconds), 2) if seconds is not None else None,
+        flagged,
+        overrides,
     )
-
-    totals: dict[UUID, dict[str, Any]] = {}
-
-    for location in rows:
-        entry = totals.setdefault(
-            location.location_id,
-            {
-                "finished": 0,
-                "completed": 0,
-                "failed": 0,
-                "photo_attempts": 0,
-                "times": [],
-                "flagged_results": 0,
-                "gps_overrides": 0,
-            },
+    locations = [
+        LocationAnalytics(
+            finished,
+            completed,
+            finished - completed,
+            round(completed / finished * 100, 2),
+            attempts,
+            round(float(seconds), 2) if seconds is not None else None,
+            flagged,
+            overrides,
+            location_id,
+            f"Location {position}",
         )
-
-        entry["finished"] += 1
-        entry["photo_attempts"] += location.attempts_used
-
-        if location.flags:
-            entry["flagged_results"] += 1
-
-        if location.arrival_override == ArrivalOverride.GPS_UNAVAILABLE:
-            entry["gps_overrides"] += 1
-
-        if location.status == LocationStatus.COMPLETED:
-            entry["completed"] += 1
-
-            if location.started_at is not None and location.completed_at is not None:
-                elapsed_seconds = max(
-                    0.0,
-                    (location.completed_at - location.started_at).total_seconds(),
-                )
-
-                capped_seconds = min(elapsed_seconds, 1800.0)
-                entry["times"].append(capped_seconds)
-
-        elif location.status == LocationStatus.FAILED:
-            entry["failed"] += 1
-
-    results: list[LocationAnalytics] = []
-
-    for location_id, entry in sorted(totals.items()):
-        times = entry["times"]
-
-        success_rate = round(
-            entry["completed"] / entry["finished"] * 100,
-            2,
-        )
-
-        average_time_seconds = round(sum(times) / len(times), 2) if times else None
-
-        results.append(
-            LocationAnalytics(
-                location_id=location_id,
-                finished=entry["finished"],
-                completed=entry["completed"],
-                failed=entry["failed"],
-                success_rate=success_rate,
-                photo_attempts=entry["photo_attempts"],
-                average_time_seconds=average_time_seconds,
-                flagged_results=entry["flagged_results"],
-                gps_overrides=entry["gps_overrides"],
-            )
-        )
-
-    return results
+        for position, (
+            location_id,
+            finished,
+            completed,
+            attempts,
+            seconds,
+            flagged,
+            overrides,
+        ) in enumerate(rows[1:], start=1)
+    ]
+    return ClassAnalytics(class_stats, locations)

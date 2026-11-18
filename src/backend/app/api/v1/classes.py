@@ -286,10 +286,11 @@ def create_class_access_code(
         raise
 
 
-class LocationAnalyticsResponse(BaseModel):
-    """Statistics for one location in a classroom."""
+class AnalyticsTotalsResponse(BaseModel):
+    """Statistics for finished classroom results."""
 
-    location_id: UUID
+    model_config = ConfigDict(from_attributes=True)
+
     finished: int
     completed: int
     failed: int
@@ -300,13 +301,25 @@ class LocationAnalyticsResponse(BaseModel):
     gps_overrides: int
 
 
+class LocationAnalyticsResponse(AnalyticsTotalsResponse):
+    location_id: UUID
+    label: str
+
+
+class ClassAnalyticsResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    class_stats: AnalyticsTotalsResponse
+    locations: list[LocationAnalyticsResponse]
+
+
 @teacher_classes_router.get(
     "/{class_id}/analytics",
-    response_model=list[LocationAnalyticsResponse],
+    response_model=ClassAnalyticsResponse,
     operation_id="getClassLocationAnalytics",
     summary="Get classroom location analytics",
     description=(
-        "Return per-location success rates, photo attempts, completion "
+        "Return class totals and per-location success rates, photo attempts, completion "
         "times, flags, and GPS overrides. Only completed and failed "
         "classroom location results are included. Practice sessions "
         "are excluded. Class owners and assigned teaching assistants "
@@ -322,24 +335,9 @@ class LocationAnalyticsResponse(BaseModel):
 def get_class_analytics_endpoint(
     class_id: UUID,
     db: Annotated[Session, Depends(get_db)],
-) -> list[LocationAnalyticsResponse]:
+) -> ClassAnalyticsResponse:
     """Return classroom location analytics without modifying data."""
-    statistics = get_class_location_analytics(class_id, db)
-
-    return [
-        LocationAnalyticsResponse(
-            location_id=item.location_id,
-            finished=item.finished,
-            completed=item.completed,
-            failed=item.failed,
-            success_rate=item.success_rate,
-            photo_attempts=item.photo_attempts,
-            average_time_seconds=item.average_time_seconds,
-            flagged_results=item.flagged_results,
-            gps_overrides=item.gps_overrides,
-        )
-        for item in statistics
-    ]
+    return ClassAnalyticsResponse.model_validate(get_class_location_analytics(class_id, db))
 
 
 class ClassListItem(BaseModel):
