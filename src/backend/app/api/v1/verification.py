@@ -131,7 +131,8 @@ def _check_photo(student_id: UUID, game_id: UUID, photo: UploadFile, db: Session
     progress = finish_photo_location(student_id, game_id, location.id, matched, db)
     # The game and the location stay locked from the first call to this one, so the location is
     # still in Stage 2: finish returns None only when another request changed it meanwhile.
-    assert progress is not None
+    if progress is None:  # pragma: no cover (unreachable while the rows are locked)
+        raise RuntimeError("The location left Stage 2 while it was locked")
     summary = None
     if progress.game_state == SessionState.COMPLETED:
         # the last location is finished, so the game is over: its summary, in this transaction

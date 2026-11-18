@@ -1,8 +1,5 @@
 """POST /games/{id}/verification/photo over HTTP (A10 TC1 and TC2, the refusals, no answer leaks).
 
-The access checks (401, another student's 404, an admin's 403) are shared with every game route
-through `play` and `lock_photo_location`; their route tests come in a follow-up.
-
 OCR is replaced by a fake `read_text` that returns fixed text boxes, so no model is loaded. The
 game rows are committed before each request, so a refusal's rollback only undoes the request.
 """
@@ -210,6 +207,14 @@ def test_an_unclear_photo_uses_an_attempt(
     assert (first.status, first.attempts_used) == (LocationStatus.VERIFYING, 1)
 
 
+@pytest.mark.parametrize(
+    ("sign", "attempts_used", "phrase", "status", "points"),
+    [
+        ("SCI 333", 0, "VERIFY_SUCCESS", "completed", 100),
+        ("LIB 312", 5, "VERIFY_EXHAUSTED", "failed", 0),
+    ],
+    ids=["match", "6th miss"],
+)
 def test_the_last_location_completes_the_game(
     db: Session,
     client: TestClient,
@@ -217,16 +222,21 @@ def test_the_last_location_completes_the_game(
     upload: Callable[..., Response],
     verifying_game: Callable[..., GameSession],
     ocr_reads: Callable[..., list[int]],
+    sign: str,
+    attempts_used: int,
+    phrase: str,
+    status: str,
+    points: int,
 ) -> None:
-    game = verifying_game(locations=1)
-    ocr_reads(("SCI 333", 0.92))
+    game = verifying_game(locations=1, attempts_used=attempts_used)
+    ocr_reads((sign, 0.92))
 
     body = upload(game).json()
 
-    assert codes(body) == ["VERIFY_SUCCESS", "SESSION_COMPLETE"]
-    assert body["location_result"] == {"status": "completed", "points_awarded": 100}
+    assert codes(body) == [phrase, "SESSION_COMPLETE"]
+    assert body["location_result"] == {"status": status, "points_awarded": points}
     assert body["next"] is None
-    assert (body["summary"]["state"], body["summary"]["total_score"]) == ("completed", 100)
+    assert (body["summary"]["state"], body["summary"]["total_score"]) == ("completed", points)
     student = db.get(User, game.student_id)
     assert student is not None
     summary = client.get(f"/api/v1/games/{game.id}/summary", headers=auth_headers(student))
