@@ -1,8 +1,7 @@
-from collections.abc import Callable
 from dataclasses import asdict
 from datetime import datetime
 from http import HTTPStatus
-from typing import Annotated, Self, TypeVar
+from typing import Annotated, Self
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -10,33 +9,28 @@ from pydantic import BaseModel, Field, PositiveInt, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
-from app.api.v1.me import RecentBadgeResponse
+from app.api.v1.game_actions import play
+from app.api.v1.game_responses import (
+    CurrentLocationResponse,
+    FeedbackResponse,
+    GameStatusResponse,
+    GameSummaryResponse,
+    summary_response,
+)
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.arrival import confirm_arrival
 from app.game.control import pause_game, quit_game, reset_game, resume_game
-from app.game.current_location import CurrentLocation, Stage, get_current_location
+from app.game.current_location import CurrentLocation, get_current_location
 from app.game.navigation import Ping, Trend, process_ping
 from app.game.shuffle import shuffle_game
 from app.game.start import start_game
 from app.game.status import GameStatus, find_current_game, get_game
 from app.game.summary import GameSummary, get_summary
 from app.models.accounts import User
-from app.models.enums import (
-    ArrivalOverride,
-    Difficulty,
-    FeedbackCode,
-    Language,
-    LocationStatus,
-    SessionEndReason,
-    SessionState,
-    SkipReason,
-    UserRole,
-)
+from app.models.enums import ArrivalOverride, Difficulty, Language, SessionState, UserRole
 
 games_router = APIRouter(prefix="/games", tags=["games"])
-
-T = TypeVar("T")
 
 
 class StartGameRequest(BaseModel):
@@ -98,32 +92,6 @@ def start_new_game(
     return StartGameResponse.model_validate(started, from_attributes=True)
 
 
-class LocationProgressResponse(BaseModel):
-    position: int
-    status: LocationStatus
-    skip_reason: SkipReason | None
-    attempts_used: int
-    points_awarded: int
-
-
-class GameStatusResponse(BaseModel):
-    """A game's state and how each location went. Never a location's name, room or
-    coordinates."""
-
-    session_id: UUID
-    state: SessionState
-    end_reason: SessionEndReason | None
-    class_id: UUID | None
-    language: Language
-    difficulty: Difficulty
-    current_position: int
-    shuffles_used: int
-    total_score: int
-    started_at: datetime
-    paused_at: datetime | None
-    locations: list[LocationProgressResponse]
-
-
 # before /{game_id}, so "current" isn't read as an id
 @games_router.get(
     "/current",
@@ -175,38 +143,6 @@ def game_status(
     return GameStatusResponse.model_validate(status, from_attributes=True)
 
 
-class GameEngagementResponse(BaseModel):
-    """What the game added to the student's engagement. A streak field comes with A13 (#87)."""
-
-    level: int = Field(
-        ge=1, le=5, description="The level in the game's language as of the game's last points."
-    )
-    level_up: bool = Field(description="Whether the game's points raised the level.")
-    new_badges: list[RecentBadgeResponse] = Field(
-        description="Badges the game's locations unlocked, global ones included, oldest first."
-    )
-
-
-class GameSummaryResponse(GameStatusResponse):
-    """A game's status, when it ended and what it added to the student's engagement."""
-
-    ended_at: datetime | None = Field(
-        description=(
-            "When the game was completed, quit or reset; for an expired or class-closed game, "
-            "its last action. Null while it is open."
-        )
-    )
-    engagement: GameEngagementResponse
-
-
-def _summary_response(summary: GameSummary) -> GameSummaryResponse:
-    return GameSummaryResponse(
-        **asdict(summary.status),
-        ended_at=summary.ended_at,
-        engagement=GameEngagementResponse.model_validate(summary.engagement, from_attributes=True),
-    )
-
-
 @games_router.get(
     "/{game_id}/summary",
     operation_id="getGameSummary",
@@ -231,23 +167,7 @@ def game_summary(
         raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
     summary = get_summary(user.id, game_id, db)
     db.commit()
-    return _summary_response(summary)
-
-
-class CurrentLocationResponse(BaseModel):
-    """The current location of a game. Never its name, room number, coordinates or answers."""
-
-    session_id: UUID
-    state: SessionState
-    position: int
-    stage: Stage
-    # the clue of this location, for both stages
-    clue_audio_url: str
-    attempts_used: int
-    attempts_left: int
-    # Stage 1 only: when "Continue without GPS" is allowed. Compare it with the current time;
-    # don't count down from it, since it can move (see the route description)
-    gps_override_available_at: datetime | None
+    return summary_response(summary)
 
 
 @games_router.get(
@@ -287,9 +207,9 @@ def current_location(
         # the last location was skipped, so the game is over: its summary, in this transaction
         return get_summary(user.id, game_id, db) if isinstance(found, GameStatus) else found
 
-    result = _play(current_or_summary, user, db)
+    result = play(current_or_summary, user, db)
     if isinstance(result, GameSummary):
-        return _summary_response(result)
+        return summary_response(result)
     return CurrentLocationResponse.model_validate(result, from_attributes=True)
 
 
@@ -298,11 +218,6 @@ class PingRequest(BaseModel):
     lng: float = Field(ge=-180, le=180, allow_inf_nan=False)
     # the browser's accuracy radius in metres
     accuracy_m: float = Field(ge=0, allow_inf_nan=False)
-
-
-class FeedbackResponse(BaseModel):
-    code: FeedbackCode
-    audio_url: str
 
 
 class PingResponse(BaseModel):
@@ -355,7 +270,7 @@ def navigation_ping(
     for a disabled account.
     """
     ping = Ping(request.lat, request.lng, request.accuracy_m)
-    outcome = _play(lambda: process_ping(user.id, game_id, ping, db), user, db)
+    outcome = play(lambda: process_ping(user.id, game_id, ping, db), user, db)
     return PingResponse(
         trend=outcome.trend,
         can_confirm=outcome.can_confirm,
@@ -403,7 +318,7 @@ def navigation_confirm_arrival(
     keeps the position; the new row has no ping (409 STALE_POSITION). 404 for another student's
     game or no recording. 403 FORBIDDEN_ROLE or ACCOUNT_DISABLED.
     """
-    arrival = _play(
+    arrival = play(
         lambda: confirm_arrival(user.id, game_id, request.override_reason, request.position, db),
         user,
         db,
@@ -439,7 +354,7 @@ def pause(
     expiry limit, which is expired. 404 NOT_FOUND for another student's game. 403 FORBIDDEN_ROLE
     for an admin, ACCOUNT_DISABLED for a disabled account.
     """
-    paused = _play(lambda: pause_game(user.id, game_id, db), user, db)
+    paused = play(lambda: pause_game(user.id, game_id, db), user, db)
     return PausedGameResponse(**asdict(paused.status), expires_at=paused.expires_at)
 
 
@@ -463,7 +378,7 @@ def resume(
     SESSION_NOT_ACTIVE, the same as a completed or abandoned game. 404 NOT_FOUND for another
     student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.
     """
-    status = _play(lambda: resume_game(user.id, game_id, db), user, db)
+    status = play(lambda: resume_game(user.id, game_id, db), user, db)
     return GameStatusResponse.model_validate(status, from_attributes=True)
 
 
@@ -495,7 +410,7 @@ def quit_the_game(
         quit_game(user.id, game_id, db)
         return get_summary(user.id, game_id, db)
 
-    return _summary_response(_play(quit_and_summarize, user, db))
+    return summary_response(play(quit_and_summarize, user, db))
 
 
 @games_router.post(
@@ -524,7 +439,7 @@ def reset(
     clue has no recording. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
     account.
     """
-    started = _play(lambda: reset_game(user.id, game_id, db), user, db)
+    started = play(lambda: reset_game(user.id, game_id, db), user, db)
     return StartGameResponse.model_validate(started, from_attributes=True)
 
 
@@ -566,26 +481,5 @@ def shuffle(
     NOT_FOUND for another student's game, or if the new clue has no recording. 403
     FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.
     """
-    shuffled = _play(lambda: shuffle_game(user.id, game_id, request.shuffles_used, db), user, db)
+    shuffled = play(lambda: shuffle_game(user.id, game_id, request.shuffles_used, db), user, db)
     return ShuffledGameResponse(**asdict(shuffled.status), clue_audio_url=shuffled.clue_audio_url)
-
-
-def _play(action: Callable[[], T], user: User, db: Session) -> T:
-    """Run a game action and commit it.
-
-    A 409 SESSION_NOT_ACTIVE is committed too, so an idle game expired inside the action stays
-    expired. Any other refusal is rolled back, then re-raised.
-    """
-    if user.role == UserRole.ADMIN:
-        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
-    try:
-        result = action()
-    except AppError as error:
-        # an expiry is the one refusal that writes; everything else must not stick
-        if error.code == ErrorCode.SESSION_NOT_ACTIVE:
-            db.commit()
-        else:
-            db.rollback()
-        raise
-    db.commit()
-    return result
