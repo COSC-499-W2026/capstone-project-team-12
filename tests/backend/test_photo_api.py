@@ -46,6 +46,7 @@ def verifying_game(
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
+    fixed_daily_challenge_targets: None,
 ) -> Callable[..., GameSession]:
     """A saved game with `locations` active (stub) locations, at the first one, which is in Stage
     2 (or `status`) with the answer SCI333; the others are pending. The last game action was an
@@ -144,7 +145,7 @@ def test_a_photo_of_the_right_sign_completes_the_location(
     assert (body["result"], body["attempt"], body["attempts_remaining"]) == ("match", 1, 5)
     assert codes(body) == ["VERIFY_SUCCESS"]
     assert body["location_result"] == {"status": "completed", "points_awarded": 100}
-    assert body["engagement"]["total_points"] == 100
+    assert body["engagement"]["total_points"] == 150  # the location's 100 + the challenge's 50
     assert body["next"]["position"] == 2 and body["next"]["stage"] == "navigation"
     assert body["next"]["clue_audio_url"] and body["summary"] is None
     assert "SCI333" not in response.text and "SCI 333" not in response.text
