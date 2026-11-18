@@ -2,9 +2,10 @@
 
 from fastapi import Depends, FastAPI
 
+from app.api.rate_limit import global_rate_limit
 from app.api.v1 import api_router
 from app.errors import add_error_handlers
-from app.services.limiter import global_rate_limit, limiter
+from app.services.limiter import limiter
 
 
 def create_app() -> FastAPI:
