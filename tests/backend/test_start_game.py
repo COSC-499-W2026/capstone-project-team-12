@@ -117,11 +117,9 @@ def test_staff_can_play_practice(db: Session, make_user: Callable[..., User]) ->
 def test_not_enough_content(
     db: Session,
     make_user: Callable[..., User],
-    playable_location_ids: Callable[..., list[UUID]],
-    monkeypatch: pytest.MonkeyPatch,
+    limit_playable_locations: Callable[[int], None],
 ) -> None:
-    four = frozenset(playable_location_ids(count=4))
-    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: four)
+    limit_playable_locations(4)
 
     student = make_user()
 

@@ -59,6 +59,21 @@ def playable_location_ids(db: Session) -> Callable[..., list[UUID]]:
 
 
 @pytest.fixture
+def limit_playable_locations(
+    playable_location_ids: Callable[..., list[UUID]], monkeypatch: pytest.MonkeyPatch
+) -> Callable[[int], None]:
+    """limit(count): from now on a game in any language and difficulty can draw only the first
+    `count` playable ja/basic locations, for a test of too little content. For now this patches
+    the content stub; once the fixtures create rows, it will hide the rest instead."""
+
+    def limit(count: int) -> None:
+        playable = frozenset(playable_location_ids(count=count))
+        monkeypatch.setattr(content, "eligible_location_ids", lambda *_: playable)
+
+    return limit
+
+
+@pytest.fixture
 def ja_basic_content(playable_location_ids: Callable[..., list[UUID]]) -> None:
     """Content for ja/basic games. A file whose games are mostly ja/basic uses it for every
     test (`pytestmark = pytest.mark.usefixtures("ja_basic_content")`); a test in another mode

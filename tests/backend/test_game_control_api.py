@@ -16,7 +16,6 @@ from httpx2 import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.content import interface as content
 from app.engagement.interface import apply_location_result
 from app.errors import AppError, ErrorCode
 from app.game.sessions import session_idle_limit
@@ -326,15 +325,13 @@ def test_not_enough_content_returns_409(
     post: Callable[..., Response],
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
-    playable_location_ids: Callable[..., list[UUID]],
-    monkeypatch: pytest.MonkeyPatch,
+    limit_playable_locations: Callable[[int], None],
     assert_error: Callable[..., None],
 ) -> None:
-    four = frozenset(playable_location_ids(count=4))
+    limit_playable_locations(4)
     student = make_user()
     game = make_game_session(student)
     db.commit()
-    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: four)
 
     assert_error(post(student, game.id, "reset"), 409, ErrorCode.NOT_ENOUGH_CONTENT)
     db.refresh(game)

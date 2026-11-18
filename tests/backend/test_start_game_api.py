@@ -15,7 +15,6 @@ from httpx2 import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.content import interface as content
 from app.errors import ErrorCode
 from app.models.accounts import User
 from app.models.engagement import Class, ClassEnrollment
@@ -140,11 +139,9 @@ def test_idle_open_game_is_expired_and_the_new_game_starts(
 def test_not_enough_content_returns_409(
     start: StartGame,
     make_user: Callable[..., User],
-    playable_location_ids: Callable[..., list[UUID]],
-    monkeypatch: pytest.MonkeyPatch,
+    limit_playable_locations: Callable[[int], None],
 ) -> None:
-    four = frozenset(playable_location_ids(count=4))
-    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: four)
+    limit_playable_locations(4)
 
     response = start(make_user(), difficulty=1, language="ja")
 

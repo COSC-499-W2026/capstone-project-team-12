@@ -16,7 +16,6 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game import control
 from app.game.control import reset_game
@@ -300,13 +299,12 @@ def test_not_enough_content_leaves_the_game_as_it_is(
     db: Session,
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
-    monkeypatch: pytest.MonkeyPatch,
+    limit_playable_locations: Callable[[int], None],
 ) -> None:
     student = make_user()
     played_at = datetime.now(UTC) - timedelta(hours=1)
     game = make_game_session(student, last_activity_at=played_at)
-    four = frozenset(uuid4() for _ in range(4))
-    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: four)
+    limit_playable_locations(4)
 
     with pytest.raises(AppError) as error:
         reset_game(student.id, game.id, db)
