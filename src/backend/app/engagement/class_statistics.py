@@ -5,13 +5,14 @@ from datetime import date, datetime, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import extract, func, select, tuple_
+from sqlalchemy import Date, cast, extract, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.engagement.streaks import app_calendar_date, visible_streak
+from app.errors import AppError, ErrorCode
 from app.models.accounts import User
-from app.models.engagement import ClassEnrollment, PointsLedger, UserStats
+from app.models.engagement import ClassEnrollment, PointsLedger, UserAchievement, UserStats
 from app.models.enums import ArrivalOverride, Difficulty, DifficultySuggestion, LocationStatus
 from app.models.game import GameSession, SessionLocation
 
@@ -284,6 +285,10 @@ class StudentParticipation:
     distinct_completed_locations: int
     target_locations: int
     participation_percent: int
+    sessions: int
+    active_days: int
+    points: int
+    badges: int
 
 
 def get_class_participation(
@@ -302,9 +307,9 @@ def get_class_participation(
     The service is read-only and does not commit or flush.
     """
     if start_date > end_date:
-        raise ValueError("start_date must not be after end_date")
+        raise AppError(ErrorCode.VALIDATION_ERROR, "start_date must not be after end_date")
     if target_locations < 1:
-        raise ValueError("target_locations must be positive")
+        raise AppError(ErrorCode.VALIDATION_ERROR, "target_locations must be positive")
 
     timezone = ZoneInfo(get_settings().app_timezone)
     period_start = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone)
@@ -320,9 +325,15 @@ def get_class_participation(
     ).all()
 
     pair = tuple_(SessionLocation.location_id, GameSession.difficulty)
-    counts = dict(
-        db.execute(
-            select(GameSession.student_id, func.count(pair.distinct()))
+    active_date = cast(func.timezone(timezone.key, SessionLocation.completed_at), Date)
+    completions = {
+        student_id: (count, active_days)
+        for student_id, count, active_days in db.execute(
+            select(
+                GameSession.student_id,
+                func.count(pair.distinct()),
+                func.count(active_date.distinct()),
+            )
             .join(SessionLocation, SessionLocation.session_id == GameSession.id)
             .where(
                 GameSession.class_id == class_id,
@@ -332,13 +343,53 @@ def get_class_participation(
             )
             .group_by(GameSession.student_id)
         )
+    }
+    sessions = dict(
+        db.execute(
+            select(GameSession.student_id, func.count())
+            .where(
+                GameSession.class_id == class_id,
+                GameSession.started_at >= period_start,
+                GameSession.started_at < period_end,
+            )
+            .group_by(GameSession.student_id)
+        )
+        .tuples()
+        .all()
+    )
+    ledger = select(PointsLedger.user_id).where(
+        PointsLedger.class_id == class_id,
+        PointsLedger.created_at >= period_start,
+        PointsLedger.created_at < period_end,
+    )
+    points: dict[UUID, int] = dict(
+        db.execute(ledger.add_columns(func.sum(PointsLedger.points)).group_by(PointsLedger.user_id))
+        .tuples()
+        .all()
+    )
+    # Badge unlocks and their scoring ledger entries share the transaction timestamp.
+    badges = dict(
+        db.execute(
+            select(UserAchievement.user_id, func.count())
+            .where(
+                ledger.where(
+                    PointsLedger.user_id == UserAchievement.user_id,
+                    PointsLedger.created_at == UserAchievement.unlocked_at,
+                    or_(
+                        UserAchievement.language.is_(None),
+                        PointsLedger.language == UserAchievement.language,
+                    ),
+                ).exists()
+            )
+            .group_by(UserAchievement.user_id)
+        )
         .tuples()
         .all()
     )
 
     results: list[StudentParticipation] = []
     for enrollment, student in enrollments:
-        count = counts.get(student.id, 0)
+        count, active_days = completions.get(student.id, (0, 0))
         status = "active" if enrollment.is_active else str(enrollment.end_reason)
         results.append(
             StudentParticipation(
@@ -348,6 +399,10 @@ def get_class_participation(
                 enrollment_status=status,
                 distinct_completed_locations=count,
                 target_locations=target_locations,
+                sessions=sessions.get(student.id, 0),
+                active_days=active_days,
+                points=points.get(student.id, 0),
+                badges=badges.get(student.id, 0),
                 participation_percent=min(
                     100, (200 * count + target_locations) // (2 * target_locations)
                 ),

@@ -1,11 +1,15 @@
 """Classroom endpoints for joining and managing classes."""
 
-from datetime import datetime
+import csv
+from dataclasses import asdict
+from datetime import date, datetime
 from http import HTTPStatus
+from io import StringIO
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -18,6 +22,7 @@ from app.engagement.interface import (
     get_class_language,
     get_class_leaderboard,
     get_class_location_analytics,
+    get_class_participation,
     get_class_student_analytics,
     leave_class,
     list_staff_classes,
@@ -404,6 +409,68 @@ def get_class_students_endpoint(
     statistics = get_class_student_analytics(class_id, db)
 
     return [StudentAnalyticsResponse.model_validate(item) for item in statistics]
+
+
+@teacher_classes_router.get(
+    "/{class_id}/participation.csv",
+    operation_id="exportClassParticipation",
+    response_class=Response,
+    summary="Export classroom participation marks",
+    description=(
+        "Download a CSV of participation marks for all current and former enrollees, including "
+        "students with zero activity, over an inclusive date range. "
+        "Participation counts distinct completed (location, difficulty) pairs in classroom games; "
+        "replays of the same pair and Practice games do not increase the mark. "
+        "The percentage is capped at 100. Class owners and assigned teaching assistants may export "
+        "marks, including for archived classrooms. The export includes sessions, active days, "
+        "class points and badge unlocks for the selected period."
+    ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT))],
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.UNPROCESSABLE_ENTITY,
+    )
+    | {200: {"content": {"text/csv": {"schema": {"type": "string"}}}}},
+)
+def export_class_participation_endpoint(
+    class_id: UUID,
+    start_date: date,
+    end_date: date,
+    db: Annotated[Session, Depends(get_db)],
+    target_locations: Annotated[int, Query(ge=1)] = 10,
+) -> Response:
+    """Return a CSV export of classroom participation marks."""
+    participation = get_class_participation(
+        class_id=class_id,
+        db=db,
+        start_date=start_date,
+        end_date=end_date,
+        target_locations=target_locations,
+    )
+
+    output = StringIO(newline="")
+    columns = (
+        "student_id username enrollment_status is_active_enrollment distinct_completed_locations "
+        "target_locations participation_percent sessions active_days points badges"
+    )
+    writer = csv.DictWriter(output, fieldnames=columns.split())
+    writer.writeheader()
+    for item in participation:
+        username = item.username
+        if username.lstrip().startswith(("=", "+", "-", "@")) or username.startswith(
+            ("\t", "\r", "\n")
+        ):
+            username = "'" + username
+        writer.writerow(asdict(item) | {"username": username})
+
+    filename = f"class-{class_id}-participation-{start_date}-to-{end_date}.csv"
+    return Response(
+        output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 class ClassListItem(BaseModel):

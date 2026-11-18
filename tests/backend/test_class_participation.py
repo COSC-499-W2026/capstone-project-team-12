@@ -8,6 +8,7 @@ import pytest
 from app.config import get_settings
 from app.engagement import class_statistics
 from app.engagement.class_statistics import get_class_participation
+from app.errors import AppError, ErrorCode
 from app.models.enums import Difficulty, LocationStatus, SessionState, UserRole
 
 
@@ -188,5 +189,6 @@ def test_rejects_invalid_parameters(
     target,
 ):
     _, _, classroom = _setup(make_user, make_class, make_class_staff, make_enrollment)
-    with pytest.raises(ValueError):
+    with pytest.raises(AppError) as exc:
         get_class_participation(classroom.id, db, start, end, target)
+    assert exc.value.code == ErrorCode.VALIDATION_ERROR
