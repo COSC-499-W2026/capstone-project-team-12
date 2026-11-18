@@ -84,11 +84,11 @@ def test_photo_uploads_are_limited_per_user(
     alice, bob = auth_headers(make_user()), auth_headers(make_user())
     url = f"/api/v1/games/{uuid4()}/verification/photo"
     for _ in range(3):
-        assert client.post(url, headers=alice).status_code == 422
+        assert client.post(url, headers=alice).status_code == HTTPStatus.UNPROCESSABLE_ENTITY
 
     response = client.post(url, headers=alice)
 
     assert response.status_code == HTTPStatus.TOO_MANY_REQUESTS
     assert response.json()["error"]["code"] == ErrorCode.RATE_LIMITED
     assert "Retry-After" in response.headers
-    assert client.post(url, headers=bob).status_code == 422
+    assert client.post(url, headers=bob).status_code == HTTPStatus.UNPROCESSABLE_ENTITY
