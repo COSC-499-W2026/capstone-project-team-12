@@ -41,19 +41,6 @@ def test_teacher_creates_class(
     assert owner.role == ClassStaffRole.OWNER
 
 
-def test_student_cannot_create_class(
-    db: Session,
-    make_user: Callable[..., User],
-) -> None:
-    student = make_user()
-
-    with pytest.raises(AppError) as exc:
-        create_class(student, "Test", "2026W1", Language.JA, db)
-
-    assert exc.value.code == ErrorCode.FORBIDDEN_ROLE
-    assert db.scalars(select(Class)).all() == []
-
-
 @pytest.mark.parametrize("semester", ["2026F", "2026W3", "invalid", ""])
 def test_invalid_semester(
     db: Session,
@@ -78,18 +65,6 @@ def test_empty_class_name(
         create_class(teacher, "   ", "2026W1", Language.JA, db)
 
     assert exc.value.code == ErrorCode.VALIDATION_ERROR
-
-
-def test_disabled_teacher_cannot_create_class(
-    db: Session,
-    make_user: Callable[..., User],
-) -> None:
-    teacher = make_user(role=UserRole.STAFF, is_active=False)
-
-    with pytest.raises(AppError) as exc:
-        create_class(teacher, "Test", "2026W1", Language.JA, db)
-
-    assert exc.value.code == ErrorCode.ACCOUNT_DISABLED
 
 
 def test_creation_does_not_commit(

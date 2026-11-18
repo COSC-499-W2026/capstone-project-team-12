@@ -4,10 +4,12 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.engagement.interface import deactivate_access_code
+from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.engagement import AccessCode, Class
 from app.models.enums import ClassStaffRole, UserRole
@@ -213,23 +215,25 @@ def test_unauthenticated_request_is_rejected(
 def test_service_does_not_commit(
     db: Session,
     transaction_calls: list[str],
-    make_user: Callable[..., User],
     make_class: Callable[..., Class],
-    make_class_staff: Callable[..., object],
     make_access_code: Callable[..., AccessCode],
 ) -> None:
-    owner = make_user(role=UserRole.STAFF)
-    school_class = make_class()
-    make_class_staff(school_class, owner)
-    code = make_access_code(school_class)
+    code = make_access_code(make_class())
 
     transaction_calls.clear()
-    result = deactivate_access_code(code.id, owner, db)
+    result = deactivate_access_code(code.id, db)
 
     assert result.id == code.id
     assert result.is_active is False
     assert "commit" not in transaction_calls
     assert "rollback" not in transaction_calls
+
+
+def test_service_returns_not_found_for_a_missing_code(db: Session) -> None:
+    with pytest.raises(AppError) as exc:
+        deactivate_access_code(uuid4(), db)
+
+    assert exc.value.code == ErrorCode.NOT_FOUND
 
 
 def test_disabled_owner_cannot_deactivate_code(
