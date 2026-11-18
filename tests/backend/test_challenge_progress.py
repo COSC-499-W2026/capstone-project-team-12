@@ -2,11 +2,13 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.engagement.challenge_progress import record_challenge_progress
 from app.engagement.daily_challenges import ensure_daily_challenges
 from app.engagement.interface import apply_location_result
@@ -168,16 +170,15 @@ def test_three_completions_and_global_progress(
     assert sorted(a.points for a in awards) == [50, 100]
 
 
-def test_vancouver_midnight_creates_fresh_challenges(
+def test_local_midnight_creates_fresh_challenges(
     db: Session,
     make_user: Callable[..., User],
 ) -> None:
     student = make_user()
 
-    # Nov 14, 2026, 06:59 UTC is Nov 13 in Vancouver;
-    # 07:01 UTC is Nov 14 in Vancouver.
-    before = datetime(2026, 11, 14, 6, 59, tzinfo=UTC)
-    after = before + timedelta(minutes=2)
+    zone = ZoneInfo(get_settings().app_timezone)
+    after = datetime(2026, 11, 14, tzinfo=zone).astimezone(UTC)
+    before = after - timedelta(minutes=1)
 
     record_challenge_progress(
         student.id,

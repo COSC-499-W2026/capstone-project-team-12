@@ -434,14 +434,14 @@ def test_unsuccessful_location_awards_zero(
 @pytest.mark.parametrize(
     ("starting_points", "expected_level", "expected_level_up"),
     [
-        (399, 2, True),
-        (400, 2, True),
-        (1399, 3, True),
-        (1400, 3, True),
-        (2899, 4, True),
-        (2900, 4, True),
-        (4899, 5, True),
-        (4900, 5, True),
+        (349, 1, False),
+        (350, 2, True),
+        (1349, 2, False),
+        (1350, 3, True),
+        (2849, 3, False),
+        (2850, 4, True),
+        (4849, 4, False),
+        (4850, 5, True),
     ],
 )
 def test_level_thresholds(
