@@ -47,7 +47,7 @@ def test_login_is_limited_per_ip_across_emails(
     monkeypatch.setattr(get_settings(), "login_attempts_per_ip", 3)
     for i in range(3):
         form = {"username": f"user{i}@example.com", "password": "ValidPassword1"}
-        assert client.post("/api/v1/auth/login", data=form).status_code == 401
+        assert client.post("/api/v1/auth/login", data=form).status_code == HTTPStatus.UNAUTHORIZED
 
     form = {"username": "another@example.com", "password": "ValidPassword1"}
     response = client.post("/api/v1/auth/login", data=form)
