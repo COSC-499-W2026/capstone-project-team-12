@@ -9,12 +9,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: pages
+  group: netlify-docs
   cancel-in-progress: false
 
 jobs:
   build:
     runs-on: [self-hosted, linux, ARM64]
+    env:
+      NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+      NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
 
     steps:
       - name: Checkout repository
@@ -51,21 +54,28 @@ jobs:
           cp .github/pages/*.html site/
           cp docs/api/openapi.json docs/architecture/dependency-graph.md site/
 
-      - name: Upload the site
-        uses: actions/upload-pages-artifact@v5
+      # netlify-cli@27 requires Node 22.13+. The runner image is not assumed to have it.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          path: site
+          node-version: "22"
 
-  deploy:
-    needs: build
-    runs-on: [self-hosted, linux, ARM64]
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
+      - name: Check Netlify secrets
+        if: github.ref == 'refs/heads/main'
+        run: |
+          missing=0
+          if [ -z "$NETLIFY_AUTH_TOKEN" ]; then
+            echo "::error::Missing repository secret NETLIFY_AUTH_TOKEN. Create a Netlify personal access token and add it as an Actions repository secret."
+            missing=1
+          fi
+          if [ -z "$NETLIFY_SITE_ID" ]; then
+            echo "::error::Missing repository secret NETLIFY_SITE_ID. Create a Netlify site and add its site ID as an Actions repository secret."
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Deploy the site to Netlify
+        if: github.ref == 'refs/heads/main'
+        run: npx --yes netlify-cli@27 deploy --dir=site --prod --no-build --message "${{ github.sha }}"
