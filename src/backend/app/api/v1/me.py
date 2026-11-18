@@ -17,14 +17,13 @@ from app.engagement.interface import (
     challenge_expiry,
     ensure_daily_challenges,
     get_active_class_ids,
+    get_and_report_streak,
     get_language_engagement_stats,
     list_unlocked_achievements,
-    visible_streak,
 )
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.history import list_history
 from app.models.accounts import User
-from app.models.engagement import UserStats
 from app.models.enums import (
     DailyChallengeType,
     Difficulty,
@@ -188,8 +187,6 @@ class DailyChallengesResponse(BaseModel):
 class EngagementStatsResponse(BaseModel):
     """The signed-in user's cumulative statistics for one language."""
 
-    daily_challenges: DailyChallengesResponse
-    streak_broken: bool = Field(description="True once when a previously active streak expires.")
     language: Language
     total_points: int = Field(
         ge=0,
@@ -209,12 +206,15 @@ class EngagementStatsResponse(BaseModel):
     )
     current_streak_days: int = Field(
         ge=0,
-        description="Current global streak across languages, using Vancouver calendar dates.",
+        description="Current global streak across languages, using the app's local calendar.",
     )
     best_streak_days: int = Field(
         ge=0,
         description="Longest global streak achieved across languages.",
     )
+
+    streak_broken: bool = Field(description="True once when a previously active streak expires.")
+    daily_challenges: DailyChallengesResponse
 
 
 @me_router.get(
@@ -228,7 +228,7 @@ class EngagementStatsResponse(BaseModel):
         "statistics for the requested target language. Points are tracked separately "
         "for each language, while streaks and global badges are shared across languages. "
         "Includes today’s challenges, their expiry, and a one-time streak expiration flag. "
-        "Students and staff can play and earn points. Streaks use the America/Vancouver calendar."
+        "Students and staff can play and earn points. Streaks follow the app's local calendar."
     ),
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
@@ -247,18 +247,9 @@ def get_my_engagement(
     now = datetime.now(UTC)
     daily_challenges = _daily_challenges_response(user.id, db, now)
     stats = get_language_engagement_stats(user.id, language, db)
-    global_stats = db.get(UserStats, user.id, populate_existing=True)
-    current_streak = visible_streak(global_stats, today=daily_challenges.challenge_date)
-    streak_broken = False
-    if (
-        global_stats is not None
-        and global_stats.last_active_date is not None
-        and global_stats.current_streak_days > 0
-        and current_streak == 0
-        and global_stats.last_active_date != global_stats.reported_break_date
-    ):
-        global_stats.reported_break_date = global_stats.last_active_date
-        streak_broken = True
+    current_streak, best_streak, streak_broken = get_and_report_streak(
+        user.id, db, today=daily_challenges.challenge_date
+    )
 
     response = EngagementStatsResponse(
         daily_challenges=daily_challenges,
@@ -277,37 +268,8 @@ def get_my_engagement(
             for badge in stats.recent_badges
         ],
         current_streak_days=current_streak,
-        best_streak_days=global_stats.best_streak_days if global_stats else 0,
+        best_streak_days=best_streak,
     )
-    db.commit()
-    return response
-
-
-@me_router.get(
-    "/daily-challenges",
-    response_model=DailyChallengesResponse,
-    operation_id="getMyDailyChallenges",
-    summary="Get my daily challenges",
-    description=(
-        "Return exactly three daily challenges for the authenticated user. "
-        "Challenges follow the America/Vancouver calendar and reset at local midnight. "
-        "The first request of each local day generates the challenges. Subsequent requests "
-        "return the existing challenges and preserve their progress."
-    ),
-    responses=error_responses(
-        HTTPStatus.UNAUTHORIZED,
-        HTTPStatus.FORBIDDEN,
-    ),
-)
-def get_my_daily_challenges(
-    user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> DailyChallengesResponse:
-    """Return today's challenges, generating them if necessary."""
-    if user.role == UserRole.ADMIN:
-        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
-
-    response = _daily_challenges_response(user.id, db, datetime.now(UTC))
     db.commit()
     return response
 
