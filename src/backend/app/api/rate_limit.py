@@ -12,12 +12,14 @@ from app.config import get_settings
 from app.errors import AppError, ErrorCode
 from app.services.limiter import limiter
 
+AUTH_PATH = "/api/v1/auth/"
+
 
 # An app dependency, not slowapi's middleware: the middleware can't find the endpoints of
 # included routers in FastAPI 0.142, so it never limited any /api/v1 route
 def global_rate_limit(request: Request) -> None:
     """Counts per user with a valid access token, otherwise per IP, so a client can't pick or
-    make up another user's bucket."""
+    make up another user's bucket. The auth routes always count per IP."""
     key = _caller_key(request)
     global_limit = parse(f"{get_settings().global_rate_limit}/minute")
     if not limiter.limiter.hit(global_limit, "global", key):
@@ -31,9 +33,12 @@ def global_rate_limit(request: Request) -> None:
 
 
 def _caller_key(request: Request) -> str:
+    ip_key = f"ip:{get_remote_address(request)}"
+    if request.url.path.startswith(AUTH_PATH):
+        return ip_key
     scheme, _, token = request.headers.get("Authorization", "").partition(" ")
     if scheme.lower() == "bearer":
         user_id = user_id_from_token(token)
         if user_id is not None:
             return f"user:{user_id}"
-    return f"ip:{get_remote_address(request)}"
+    return ip_key
