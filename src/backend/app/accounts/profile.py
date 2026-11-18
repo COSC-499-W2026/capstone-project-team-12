@@ -11,17 +11,19 @@ from app.models.enums import Language
 from app.services.locks import lock_user
 
 
-def current_class_id(user: User, db: Session) -> UUID | None:
+def current_class_id(user: User, db: Session, active: list[UUID] | None = None) -> UUID | None:
     """The class the student's app follows, or None for Practice.
 
     The stored class stays while the enrolment is active. If it is not (left, removed, archived),
     it is the most recently joined active class, or None. A stored None stays None: the student
     chose Practice, or has no class. This only reads, so a read can't overwrite a class chosen at
     the same time; the stored value is replaced the next time the student selects a class.
+    Pass `active` (from engagement.get_active_class_ids) to reuse a list the caller already has.
     """
     if user.current_class_id is None:
         return None
-    active = engagement.get_active_class_ids(user.id, db)
+    if active is None:
+        active = engagement.get_active_class_ids(user.id, db)
     if user.current_class_id in active:
         return user.current_class_id
     return active[0] if active else None

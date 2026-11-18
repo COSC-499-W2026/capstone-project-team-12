@@ -12,7 +12,11 @@ from sqlalchemy.orm import Session
 from app.accounts.interface import get_current_user
 from app.accounts.profile import current_class_id, select_class, set_practice_language
 from app.db import get_db
-from app.engagement.interface import get_language_engagement_stats, list_unlocked_achievements
+from app.engagement.interface import (
+    get_active_class_ids,
+    get_language_engagement_stats,
+    list_unlocked_achievements,
+)
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.history import list_history
 from app.models.accounts import User
@@ -26,7 +30,15 @@ class ProfileResponse(BaseModel):
 
     id: UUID
     username: str
+    email: str
     role: UserRole
+    classes: list[UUID] = Field(
+        description=(
+            "The classes the student is actively enrolled in, newest first by the date they first "
+            "joined each one. A class they left and rejoined keeps its original join date. Always "
+            "empty for staff and admins: classes a teacher teaches aren't listed here."
+        )
+    )
     current_class_id: UUID | None = Field(
         description="The class the app follows. Null means Practice (or no active class)."
     )
@@ -56,11 +68,15 @@ class UpdateProfileRequest(BaseModel):
 
 
 def _profile(user: User, db: Session) -> ProfileResponse:
+    # one read, so current_class_id is always one of classes
+    active = get_active_class_ids(user.id, db)
     return ProfileResponse(
         id=user.id,
         username=user.username,
+        email=user.email,
         role=user.role,
-        current_class_id=current_class_id(user, db),
+        classes=active,
+        current_class_id=current_class_id(user, db, active),
         preferred_language=user.preferred_language,
     )
 
@@ -102,6 +118,26 @@ def update_profile(
     response = _profile(user, db)
     db.commit()
     return response
+
+
+@me_router.get(
+    "/profile",
+    response_model=ProfileResponse,
+    operation_id="getProfile",
+    summary="Get the current user's profile details.",
+    description=(
+        "The signed-in user's account details, their active classes and the settings of their "
+        "app. Staff and admins have no enrolments, so their classes list is empty. Admins get "
+        "their profile here, but they don't play, so PATCH /me/profile refuses them with 403 "
+        "FORBIDDEN_ROLE."
+    ),
+    responses=error_responses(HTTPStatus.UNAUTHORIZED),
+)
+def get_profile(
+    user: Annotated[User, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]
+) -> ProfileResponse:
+    """Return the signed-in user's profile."""
+    return _profile(user, db)
 
 
 class RecentBadgeResponse(BaseModel):
