@@ -53,7 +53,7 @@ def verified_password_hash(email: str, password: str, db: Session) -> str | None
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     password_bytes = password.encode()
     # bcrypt raises past 72 bytes, and registration caps passwords at 70, so longer is never right
-    if user is None or len(password_bytes) > 72:
+    if user is None or user.password_hash is None or len(password_bytes) > 72:
         checkpw(password_bytes[:72], _DUMMY_HASH)  # Dummy check so timing does not reveal why
         return None
     stored = str(user.password_hash)
