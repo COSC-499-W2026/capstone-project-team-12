@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     ocr_match_confidence: Confidence = 0.60
     ocr_unclear_confidence: Confidence = 0.45
     session_idle_expiry_hours: PositiveInt = 24
+    # full batches one expire-sessions run commits before leaving the rest to the next run
+    expire_sessions_max_batches: PositiveInt = 20
     # Stage 1 navigation (spec, Stage 1: Navigation)
     gps_trend_interval_seconds: PositiveInt = 25  # compare with a reference about this old
     gps_trend_reset_seconds: PositiveInt = 60  # an older reference is reset, no trend that ping
