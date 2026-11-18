@@ -1,11 +1,12 @@
 """Tests for A13 daily streak tracking."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
 
+from app.config import get_settings
 from app.engagement.streaks import record_active_day, vancouver_date
 from app.models.engagement import UserStats
 
@@ -18,6 +19,12 @@ def test_vancouver_date_before_midnight() -> None:
 def test_vancouver_date_after_midnight() -> None:
     now = datetime(2026, 11, 15, 8, 0, tzinfo=UTC)
     assert vancouver_date(now).isoformat() == "2026-11-15"
+
+
+def test_calendar_date_uses_configured_timezone(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(get_settings(), "app_timezone", "UTC")
+    now = datetime(2026, 11, 15, 6, 59, tzinfo=UTC)
+    assert vancouver_date(now) == date(2026, 11, 15)
 
 
 def test_vancouver_date_rejects_naive_datetime() -> None:
@@ -84,6 +91,7 @@ def test_consecutive_day_extends_streak() -> None:
 
     assert streak == 2
     assert stats.best_streak_days == 2
+    assert stats.last_active_date == date(2026, 11, 15)
     db.flush.assert_called_once()
 
 
