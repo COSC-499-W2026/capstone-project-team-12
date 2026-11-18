@@ -9,7 +9,13 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import get_current_user, is_class_staff
+from app.accounts.interface import (
+    get_current_user,
+    is_class_staff,
+    require_class_role,
+    require_code_class_role,
+    require_staff,
+)
 from app.db import get_db
 from app.engagement.interface import (
     create_class,
@@ -252,6 +258,7 @@ class CreateAccessCodeResponse(BaseModel):
         HTTPStatus.CONFLICT,
         HTTPStatus.UNPROCESSABLE_ENTITY,
     ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT))],
 )
 def create_class_access_code(
     class_id: UUID,
@@ -346,6 +353,7 @@ def list_teacher_classes(
         HTTPStatus.UNAUTHORIZED,
         HTTPStatus.FORBIDDEN,
     ),
+    dependencies=[Depends(require_staff)],
 )
 def create_class_endpoint(
     request: CreateClassRequest,
@@ -404,18 +412,17 @@ def create_class_endpoint(
         HTTPStatus.CONFLICT,
         HTTPStatus.UNPROCESSABLE_ENTITY,
     ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER))],
 )
 def update_class_endpoint(
     class_id: UUID,
     request: UpdateClassRequest,
-    user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> UpdateClassResponse:
     """Update owner-editable classroom settings in one transaction."""
     try:
         school_class = update_class_settings(
             class_id=class_id,
-            actor=user,
             db=db,
             name=request.name,
             leaderboard_enabled=request.leaderboard_enabled,
@@ -453,19 +460,15 @@ def update_class_endpoint(
         HTTPStatus.NOT_FOUND,
         HTTPStatus.CONFLICT,
     ),
+    dependencies=[Depends(require_code_class_role(ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT))],
 )
 def deactivate_class_access_code(
     code_id: UUID,
-    user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """Deactivate an access code in the caller-owned transaction."""
     try:
-        deactivate_access_code(
-            code_id=code_id,
-            actor=user,
-            db=db,
-        )
+        deactivate_access_code(code_id=code_id, db=db)
         db.commit()
     except Exception:
         db.rollback()
