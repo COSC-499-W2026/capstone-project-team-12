@@ -44,6 +44,11 @@ class Difficulty(IntEnum):
     CHALLENGING = 3  # description only
 
 
+class DifficultySuggestion(StrEnum):
+    EASIER = "suggest_easier"
+    HARDER = "suggest_harder"
+
+
 class FeedbackCode(StrEnum):
     NAV_START = "NAV_START"
     NAV_GETTING_CLOSER = "NAV_GETTING_CLOSER"
