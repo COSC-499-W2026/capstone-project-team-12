@@ -13,7 +13,14 @@ from sqlalchemy.orm import Session
 
 from app.models.accounts import User
 from app.models.engagement import Achievement, Class, ClassEnrollment, PointsLedger, UserAchievement
-from app.models.enums import AchievementCategory, Difficulty, LocationStatus, SessionState, UserRole
+from app.models.enums import (
+    AchievementCategory,
+    Difficulty,
+    EnrollmentEndReason,
+    LocationStatus,
+    SessionState,
+    UserRole,
+)
 
 
 def _create_completed_location(
@@ -52,9 +59,7 @@ def _create_completed_location(
     return location
 
 
-@pytest.mark.parametrize("prefix", ["=", "+", "-", "@"])
 def test_export_contains_correct_participation_marks(
-    prefix: str,
     db: Session,
     client: TestClient,
     auth_headers: Callable[[User], dict[str, str]],
@@ -67,7 +72,7 @@ def test_export_contains_correct_participation_marks(
     make_session_location: Callable,
 ) -> None:
     teacher = make_user(role=UserRole.STAFF)
-    student = make_user(username=f"{prefix}student")
+    student = make_user()
     inactive_student = make_user()
     classroom = make_class()
 
@@ -133,7 +138,7 @@ def test_export_contains_correct_participation_marks(
     student_row = next(row for row in rows if row["student_id"] == str(student.id))
     inactive_row = next(row for row in rows if row["username"] == inactive_student.username)
 
-    assert student_row["username"] == f"'{student.username}"
+    assert student_row["username"] == student.username
     assert student_row["enrollment_status"] == "active"
     assert student_row["is_active_enrollment"] == "True"
     assert student_row["distinct_completed_locations"] == "5"
@@ -150,6 +155,69 @@ def test_export_contains_correct_participation_marks(
     assert inactive_row["enrollment_status"] == "left"
     assert inactive_row["distinct_completed_locations"] == "0"
     assert inactive_row["participation_percent"] == "0"
+
+
+@pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t"])
+def test_export_escapes_formula_like_usernames(
+    prefix: str,
+    client: TestClient,
+    auth_headers: Callable[[User], dict[str, str]],
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., object],
+    make_enrollment: Callable[..., ClassEnrollment],
+) -> None:
+    teacher = make_user(role=UserRole.STAFF)
+    classroom = make_class()
+    make_class_staff(classroom, teacher)
+    student = make_user(username=f"{prefix}student")
+    make_enrollment(student, classroom)
+
+    response = client.get(
+        f"/api/v1/teacher/classes/{classroom.id}/participation.csv",
+        params={"start_date": "2026-11-14", "end_date": "2026-11-14"},
+        headers=auth_headers(teacher),
+    )
+
+    assert response.status_code == 200, response.text
+    assert next(csv.DictReader(StringIO(response.text)))["username"] == f"'{student.username}"
+
+
+def test_export_preserves_enrollment_status_after_archiving(
+    db: Session,
+    client: TestClient,
+    auth_headers: Callable[[User], dict[str, str]],
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., object],
+    make_enrollment: Callable[..., ClassEnrollment],
+    end_enrolment: Callable[..., None],
+) -> None:
+    teacher = make_user(role=UserRole.STAFF)
+    classroom = make_class()
+    make_class_staff(classroom, teacher)
+
+    expected = {}
+    for reason in (
+        EnrollmentEndReason.LEFT,
+        EnrollmentEndReason.REMOVED,
+        EnrollmentEndReason.ARCHIVED,
+    ):
+        student = make_user()
+        end_enrolment(make_enrollment(student, classroom), reason)
+        expected[str(student.id)] = reason.value
+    classroom.archived_at = datetime.now(UTC)
+    db.flush()
+
+    response = client.get(
+        f"/api/v1/teacher/classes/{classroom.id}/participation.csv",
+        params={"start_date": "2026-11-14", "end_date": "2026-11-14"},
+        headers=auth_headers(teacher),
+    )
+
+    assert response.status_code == 200, response.text
+    rows = csv.DictReader(StringIO(response.text))
+    assert {row["student_id"]: row["enrollment_status"] for row in rows} == expected
 
 
 def test_export_does_not_count_repeated_pairs_or_practice(

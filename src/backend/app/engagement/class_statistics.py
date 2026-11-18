@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.engagement.streaks import app_calendar_date, visible_streak
+from app.errors import AppError, ErrorCode
 from app.models.accounts import User
-from app.models.engagement import Class, ClassEnrollment, PointsLedger, UserAchievement, UserStats
+from app.models.engagement import ClassEnrollment, PointsLedger, UserAchievement, UserStats
 from app.models.enums import ArrivalOverride, Difficulty, DifficultySuggestion, LocationStatus
 from app.models.game import GameSession, SessionLocation
 
@@ -306,9 +307,9 @@ def get_class_participation(
     The service is read-only and does not commit or flush.
     """
     if start_date > end_date:
-        raise ValueError("start_date must not be after end_date")
+        raise AppError(ErrorCode.VALIDATION_ERROR, "start_date must not be after end_date")
     if target_locations < 1:
-        raise ValueError("target_locations must be positive")
+        raise AppError(ErrorCode.VALIDATION_ERROR, "target_locations must be positive")
 
     timezone = ZoneInfo(get_settings().app_timezone)
     period_start = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone)
@@ -317,9 +318,8 @@ def get_class_participation(
     )
 
     enrollments = db.execute(
-        select(ClassEnrollment, User, Class.archived_at)
+        select(ClassEnrollment, User)
         .join(User, User.id == ClassEnrollment.student_id)
-        .join(Class, Class.id == ClassEnrollment.class_id)
         .where(ClassEnrollment.class_id == class_id)
         .order_by(User.username, User.id)
     ).all()
@@ -388,7 +388,7 @@ def get_class_participation(
     )
 
     results: list[StudentParticipation] = []
-    for enrollment, student, archived_at in enrollments:
+    for enrollment, student in enrollments:
         count, active_days = completions.get(student.id, (0, 0))
         status = "active" if enrollment.is_active else str(enrollment.end_reason)
         results.append(
@@ -396,7 +396,7 @@ def get_class_participation(
                 student_id=student.id,
                 username=student.username,
                 is_active_enrollment=enrollment.is_active,
-                enrollment_status="archived" if archived_at else status,
+                enrollment_status=status,
                 distinct_completed_locations=count,
                 target_locations=target_locations,
                 sessions=sessions.get(student.id, 0),

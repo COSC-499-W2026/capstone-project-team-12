@@ -9,7 +9,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -414,10 +414,11 @@ def get_class_students_endpoint(
 @teacher_classes_router.get(
     "/{class_id}/participation.csv",
     operation_id="exportClassParticipation",
-    response_class=StreamingResponse,
+    response_class=Response,
     summary="Export classroom participation marks",
     description=(
-        "Download a CSV of participation marks for enrolled students over an inclusive date range. "
+        "Download a CSV of participation marks for all current and former enrollees, including "
+        "students with zero activity, over an inclusive date range. "
         "Participation counts distinct completed (location, difficulty) pairs in classroom games; "
         "replays of the same pair and Practice games do not increase the mark. "
         "The percentage is capped at 100. Class owners and assigned teaching assistants may export "
@@ -439,11 +440,8 @@ def export_class_participation_endpoint(
     end_date: date,
     db: Annotated[Session, Depends(get_db)],
     target_locations: Annotated[int, Query(ge=1)] = 10,
-) -> StreamingResponse:
+) -> Response:
     """Return a CSV export of classroom participation marks."""
-    if start_date > end_date:
-        raise AppError(ErrorCode.VALIDATION_ERROR, "start_date must not be after end_date")
-
     participation = get_class_participation(
         class_id=class_id,
         db=db,
@@ -468,8 +466,8 @@ def export_class_participation_endpoint(
         writer.writerow(asdict(item) | {"username": username})
 
     filename = f"class-{class_id}-participation-{start_date}-to-{end_date}.csv"
-    return StreamingResponse(
-        iter([output.getvalue()]),
+    return Response(
+        output.getvalue(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
