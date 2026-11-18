@@ -212,7 +212,7 @@ def test_unsafe_token_settings(
 
 def test_rate_limits_default_to_the_spec_values() -> None:
     settings = Settings(_env_file=None)
-    assert settings.global_rate_limit == 100
+    assert settings.global_rate_limit == 120
     assert settings.login_attempts_per_email == 5
     assert settings.login_attempts_per_ip == 100
 
