@@ -13,6 +13,8 @@ Implemented in part:
   Streaks, daily challenges, and advanced achievements are pending.
 - Issue #86: Points, levels, and completion badge unlocking.
   Student engagement, achievements, and statistics API endpoints are pending.
+- Issue #47 (A23): what one game added (level as of the game, level_up, its badges),
+  for the game summary (get_game_engagement).
 
 Callers must check class existence and archived status before enrolment
 so archived classes produce CLASS_ARCHIVED rather than an enrolment error.
@@ -28,13 +30,26 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.engagement.badges import unlock_completion_badges
+from app.engagement.badges import (
+    UnlockedAchievement,
+    list_unlocked_achievements,
+    unlock_completion_badges,
+)
 from app.engagement.classes import (
     create_class,
     deactivate_access_code,
     generate_access_code,
     list_staff_classes,
     update_class_settings,
+)
+from app.engagement.stats import (
+    GameEngagement,
+    LanguageEngagementStats,
+    get_game_engagement,
+    get_language_engagement_stats,
+)
+from app.engagement.stats import (
+    level_for_points as _level_for_points,
 )
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff
@@ -72,6 +87,12 @@ __all__ = [
     "require_active_enrolment",
     "update_class_settings",
     "validate_code_and_enrol",
+    "LanguageEngagementStats",
+    "get_language_engagement_stats",
+    "GameEngagement",
+    "get_game_engagement",
+    "UnlockedAchievement",
+    "list_unlocked_achievements",
 ]
 
 
@@ -109,19 +130,6 @@ class EngagementResult:
     streak_days: int
     challenges_completed: tuple[str, ...]
     achievements_unlocked: tuple[str, ...]
-
-
-def _level_for_points(total_points: int) -> int:
-    """Derive the language level from cumulative points."""
-    if total_points >= 5000:
-        return 5
-    if total_points >= 3000:
-        return 4
-    if total_points >= 1500:
-        return 3
-    if total_points >= 500:
-        return 2
-    return 1
 
 
 def apply_location_result(

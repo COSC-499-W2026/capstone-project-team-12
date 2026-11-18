@@ -117,6 +117,37 @@ class LocationOut(BaseModel):
     is_active: bool
 
 
+class ClueText(BaseModel):
+    """A clue's transcript. Required, as a PUT replaces it: send null or blank to clear it."""
+
+    text: str | None
+
+
+class ClueOut(BaseModel):
+    """A clue as content managers see it. Students only ever hear it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    location_id: UUID
+    difficulty: Difficulty
+    language: Language
+    text: str | None
+
+
+class ClueRecordingOut(BaseModel):
+    """A stored clue recording. Its storage key is left out: it is random, and files are only
+    served through signed media links."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    clue_id: UUID
+    is_primary: bool  # the recording new games draw
+    duration_seconds: float  # of the re-encoded file
+    file_size_kb: int
+
+
 class CombinationCoverage(BaseModel):
     """One language and difficulty of a location in the coverage report."""
 
@@ -198,7 +229,7 @@ class RejectedFile(BaseModel):
 
 
 class AudioImportReport(BaseModel):
-    """Every file of an audio zip, in the zip's order, imported or rejected."""
+    """Every file of an audio zip, imported or rejected; each list in the zip's order."""
 
     imported: list[ImportedFile] = Field(default_factory=list)
     rejected: list[RejectedFile] = Field(default_factory=list)

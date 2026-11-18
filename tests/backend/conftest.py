@@ -2,6 +2,8 @@
 
 import io
 import random
+import threading
+import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta, tzinfo
 from itertools import count
@@ -13,15 +15,17 @@ from uuid import uuid4
 import av
 import pytest
 from fastapi.testclient import TestClient
+from gps_replay import Api, Step, replay
 from httpx2 import Response
 from jwt import encode
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.content import interface as content
 from app.content.clue_audio import UPLOAD_PROVIDER
 from app.db import DB_CONNECT_ARGS, get_db
-from app.errors import ErrorCode
+from app.errors import AppError, ErrorCode
 from app.main import create_app
 from app.models.accounts import ClassStaff, User
 from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
@@ -32,10 +36,13 @@ from app.models.enums import (
     EnrollmentEndReason,
     FeedbackCode,
     Language,
+    LocationStatus,
     SessionState,
     UserRole,
 )
 from app.models.game import GameSession, SessionLocation
+from app.services.audio import UploadedAudioService
+from app.services.limiter import limiter
 from app.services.storage import MEDIA_URL_PREFIX, get_storage_service
 
 
@@ -140,6 +147,63 @@ def split_media_url() -> Callable[[str], tuple[str, int, str]]:
         return key, int(query["expires"][0]), query["sig"][0]
 
     return split
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits() -> None:
+    """Every test client sends from the same IP, so counts from one test must not reach the next."""
+    limiter.reset()
+
+
+@pytest.fixture
+def run_together(test_engine: Engine) -> Callable[..., list[Any]]:
+    """Run jobs at the same moment on real Postgres, each in its own thread, session and
+    committed transaction (the savepoint `db` can't run two at once).
+
+    A job is a function of its session, or (function, delay) to start it `delay` s after the
+    jobs meet, so an earlier one takes its lock first. Each transaction stays open `hold` s
+    after its job, so the locks overlap, then commits. Returns each job's result, or the
+    AppError it raised, in order; any other exception is raised again. A stuck job fails.
+    """
+
+    def run(
+        *jobs: Callable[[Session], Any] | tuple[Callable[[Session], Any], float], hold: float = 0
+    ) -> list[Any]:
+        timed = [job if isinstance(job, tuple) else (job, 0.0) for job in jobs]
+        start = threading.Barrier(len(timed), timeout=10)
+        results: list[Any] = [None] * len(timed)
+        errors: list[BaseException] = []  # a thread's exception is otherwise only printed
+
+        def one(index: int, job: Callable[[Session], Any], delay: float) -> None:
+            try:
+                with Session(test_engine) as session:
+                    # a stuck lock fails the job instead of hanging pytest
+                    session.execute(text("SET lock_timeout = '10s'"))
+                    start.wait()
+                    time.sleep(delay)
+                    try:
+                        results[index] = job(session)
+                    except AppError as error:
+                        results[index] = error
+                    time.sleep(hold)
+                    session.commit()
+            except BaseException as error:
+                errors.append(error)
+
+        threads = [
+            threading.Thread(target=one, args=(index, job, delay))
+            for index, (job, delay) in enumerate(timed)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+        assert not any(thread.is_alive() for thread in threads), "a job is stuck"
+        if errors:
+            raise errors[0]
+        return results
+
+    return run
 
 
 @pytest.fixture
@@ -360,7 +424,7 @@ def make_session_location(db: Session) -> Callable[..., SessionLocation]:
             "location_id": uuid4(),
             "position": position,
             "clue_id": uuid4(),
-            "audio_asset_id": uuid4(),
+            "audio_asset_id": UploadedAudioService().clue_audio_asset_id(uuid4(), db),
             "accepted_answers_snapshot": ["SCI333"],
             "gps_points_snapshot": [{"lat": 49.9394, "lng": -119.3948}],
             "radius_snapshot": 30,
@@ -372,6 +436,105 @@ def make_session_location(db: Session) -> Callable[..., SessionLocation]:
 
 # Unique test room numbers: "TST 1000", "TST 1001", ... (4 digits match the room number format).
 _room_numbers = count(1000)
+
+
+@pytest.fixture
+def navigating_game(
+    db: Session,
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    freeze_clock: Callable[..., None],
+) -> Callable[..., tuple[GameSession, SessionLocation]]:
+    """An active game at its first location, navigating since a minute before `now`; the last
+    game action was an hour before. `game` holds fields for the game, the other keywords are
+    for the location. The clock is frozen at `now` in app.game.control, app.game.status and
+    the modules given."""
+
+    def make(
+        now: datetime, *clock: str, game: dict[str, Any] | None = None, **fields: Any
+    ) -> tuple[GameSession, SessionLocation]:
+        freeze_clock(now, "app.game.control", "app.game.status", *clock)
+        played = make_game_session(
+            current_position=1, last_activity_at=now - timedelta(hours=1), **(game or {})
+        )
+        values = {"status": LocationStatus.NAVIGATING, "started_at": now - timedelta(minutes=1)}
+        row = make_session_location(played, 1, **(values | fields))
+        db.flush()
+        return played, row
+
+    return make
+
+
+# the modules whose clock the GPS replay moves, besides the two navigating_game freezes
+_REPLAY_CLOCKS = (
+    "app.game.navigation",
+    "app.game.arrival",
+    "app.game.current_location",
+    "app.game.sessions",
+)
+
+
+@pytest.fixture
+def replay_route(
+    db: Session,
+    client: TestClient,
+    auth_headers: Callable[[User], dict[str, str]],
+    navigating_game: Callable[..., tuple[GameSession, SessionLocation]],
+    freeze_clock: Callable[..., None],
+) -> Callable[..., tuple[int, list[str], SessionLocation]]:
+    """Plays a route with utils/gps_replay.py against a new game through the API: the game is at
+    an active ja/basic location (entrance and radius of make_session_location), in Stage 1 since
+    a minute before `now`. Each wait of the replay moves the frozen clock instead of sleeping, so
+    a route of minutes runs at once. Returns the exit code, the printed lines and the location row.
+    """
+
+    def run(
+        steps: list[Step],
+        *,
+        now: datetime,
+        after_ping: Callable[[TestClient, str, str], None] | None = None,
+        **kwargs: Any,
+    ) -> tuple[int, list[str], SessionLocation]:
+        active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
+        assert active, "needs an active ja/basic location"
+        game, row = navigating_game(now, *_REPLAY_CLOCKS, location_id=active[0])
+        db.commit()  # so an error the route rolls back keeps the game
+        student = db.get(User, game.student_id)
+        assert student is not None
+        token = auth_headers(student)["Authorization"].removeprefix("Bearer ")
+        clock = [now]
+        elapsed = {"s": 0.0}
+
+        def send(method: str, path: str, *, token: str | None = None, **body: Any) -> Any:
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            json_body, form = body.get("json_body"), body.get("form")
+            response = client.request(method, path, json=json_body, data=form, headers=headers)
+            if after_ping is not None and path.endswith("/navigation/ping"):
+                game_id = path.split("/")[4]
+                after_ping(client, token or "", game_id)
+            return response.status_code, response.json()
+
+        def sleep(seconds: float) -> None:
+            elapsed["s"] += seconds
+            clock[0] += timedelta(seconds=seconds)
+            freeze_clock(clock[0], "app.game.control", "app.game.status", *_REPLAY_CLOCKS)
+
+        lines: list[str] = []
+        api = Api(send, token)
+        # the replay clock only moves in sleep, so a request's wall time does not shrink the gap
+        code = replay(
+            steps,
+            api,
+            str(game.id),
+            sleep=sleep,
+            now=lambda: elapsed["s"],
+            out=lines.append,
+            **kwargs,
+        )
+        db.refresh(row)
+        return code, lines, row
+
+    return run
 
 
 @pytest.fixture

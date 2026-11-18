@@ -58,10 +58,16 @@ def test_import_limits_default_to_1000_rows_and_512_kb(monkeypatch: pytest.Monke
     assert (settings.max_import_rows, settings.max_import_file_kb) == (50, 64)
 
 
-def test_import_file_limit_defaults_to_600(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert Settings(_env_file=None).max_import_files == 600
+def test_import_file_limit_defaults_to_100(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert Settings(_env_file=None).max_import_files == 100
     monkeypatch.setenv("MAX_IMPORT_FILES", "50")
     assert Settings(_env_file=None).max_import_files == 50
+
+
+def test_photo_pixel_limit_defaults_to_25_megapixels(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert Settings(_env_file=None).max_photo_megapixels == 25
+    monkeypatch.setenv("MAX_PHOTO_MEGAPIXELS", "12")
+    assert Settings(_env_file=None).max_photo_megapixels == 12
 
 
 @pytest.mark.parametrize(
@@ -72,6 +78,7 @@ def test_import_file_limit_defaults_to_600(monkeypatch: pytest.MonkeyPatch) -> N
         "MAX_IMPORT_ROWS",
         "MAX_IMPORT_FILE_KB",
         "MAX_IMPORT_FILES",
+        "MAX_PHOTO_MEGAPIXELS",
     ],
 )
 def test_upload_limits_must_be_positive(monkeypatch: pytest.MonkeyPatch, variable: str) -> None:
@@ -85,6 +92,43 @@ def test_upload_limits_must_be_positive(monkeypatch: pytest.MonkeyPatch, variabl
 def test_app_timezone_must_exist(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
     monkeypatch.setenv("APP_TIMEZONE", name)
     with pytest.raises(ValidationError, match="app_timezone"):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize(("reset", "interval"), [("20", "25"), ("25", "25")])
+def test_trend_reset_must_exceed_the_interval(
+    monkeypatch: pytest.MonkeyPatch, reset: str, interval: str
+) -> None:
+    monkeypatch.setenv("GPS_TREND_RESET_SECONDS", reset)
+    monkeypatch.setenv("GPS_TREND_INTERVAL_SECONDS", interval)
+    with pytest.raises(ValidationError, match="gps_trend_reset_seconds"):
+        Settings(_env_file=None)
+
+
+def test_ocr_confidences_default_to_the_spec_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(_env_file=None)
+    assert (settings.ocr_match_confidence, settings.ocr_unclear_confidence) == (0.60, 0.45)
+    monkeypatch.setenv("OCR_MATCH_CONFIDENCE", "0.7")
+    monkeypatch.setenv("OCR_UNCLEAR_CONFIDENCE", "0.7")  # equal is allowed: no UNCLEAR band
+    settings = Settings(_env_file=None)
+    assert (settings.ocr_match_confidence, settings.ocr_unclear_confidence) == (0.7, 0.7)
+
+
+@pytest.mark.parametrize("name", ["OCR_MATCH_CONFIDENCE", "OCR_UNCLEAR_CONFIDENCE"])
+@pytest.mark.parametrize("value", ["-0.1", "1.1"])
+def test_ocr_confidences_must_be_between_0_and_1(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError, match=name.lower()):
+        Settings(_env_file=None)
+
+
+def test_ocr_unclear_confidence_must_not_exceed_the_match_confidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OCR_UNCLEAR_CONFIDENCE", "0.65")
+    with pytest.raises(ValidationError, match="ocr_unclear_confidence"):
         Settings(_env_file=None)
 
 
@@ -115,6 +159,29 @@ def test_unsafe_email_settings(
 
 
 @pytest.mark.parametrize(
+    ("app_env", "cookie_secure", "expected"),
+    [
+        ("development", None, False),
+        ("production", None, True),
+        ("production", "false", False),  # staging or test server on plain http
+        ("development", "true", True),
+    ],
+)
+def test_refresh_cookie_secure(
+    monkeypatch: pytest.MonkeyPatch, app_env: str, cookie_secure: str | None, expected: bool
+) -> None:
+    monkeypatch.setenv("APP_ENV", app_env)
+    monkeypatch.setenv("ACCESS_TOKEN_SECRET_KEY", "a-valid-secret-key-123")
+    monkeypatch.setenv("APP_BASE_URL", "https://hunt.example.ca")
+    monkeypatch.setenv("MAIL_FROM", "Hunt <no-reply@hunt.example.ca>")
+    if cookie_secure is None:
+        monkeypatch.delenv("COOKIE_SECURE", raising=False)
+    else:
+        monkeypatch.setenv("COOKIE_SECURE", cookie_secure)
+    assert Settings(_env_file=None).refresh_cookie_secure is expected
+
+
+@pytest.mark.parametrize(
     ("variable", "value", "message"),
     [
         (
@@ -140,4 +207,23 @@ def test_unsafe_token_settings(
     assert Settings(_env_file=None).app_env == "production"  # fine until one value is unsafe
     monkeypatch.setenv(variable, value)
     with pytest.raises(ValidationError, match=message):
+        Settings(_env_file=None)
+
+
+def test_rate_limits_default_to_the_spec_values() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.global_rate_limit == 100
+    assert settings.login_attempts_per_email == 5
+    assert settings.login_attempts_per_ip == 100
+
+
+@pytest.mark.parametrize(
+    "name", ["GLOBAL_RATE_LIMIT", "LOGIN_ATTEMPTS_PER_EMAIL", "LOGIN_ATTEMPTS_PER_IP"]
+)
+@pytest.mark.parametrize("value", ["0", "-5"])
+def test_rate_limits_must_be_positive(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError, match=name.lower()):
         Settings(_env_file=None)

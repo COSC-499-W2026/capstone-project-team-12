@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    SmallInteger,
     UniqueConstraint,
     func,
     text,
@@ -156,6 +157,7 @@ class SessionLocation(Base):
         CheckConstraint("last_lat BETWEEN -90 AND 90", name="last_lat"),
         CheckConstraint("last_lng BETWEEN -180 AND 180", name="last_lng"),
         CheckConstraint("last_accuracy_m >= 0", name="last_accuracy_m"),
+        CheckConstraint("weak_pings_in_row >= 0", name="weak_pings_in_row"),
     )
 
     id: Mapped[UUID] = uuid_pk()
@@ -182,6 +184,10 @@ class SessionLocation(Base):
     ref_at: Mapped[datetime | None]
     last_feedback_code: Mapped[str | None]
     last_spoken_at: Mapped[datetime | None]
+    # weak GPS fixes in a row; 3 allow the GPS override early (spec, Arrival). A good fix resets it
+    weak_pings_in_row: Mapped[int] = mapped_column(
+        SmallInteger, default=0, server_default=text("0")
+    )
 
     attempts_used: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     # copy of the points_ledger row, written in the same transaction

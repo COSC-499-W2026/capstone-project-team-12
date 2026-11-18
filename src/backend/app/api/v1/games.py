@@ -6,19 +6,26 @@ from typing import Annotated, Self, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PositiveInt, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
+from app.api.v1.me import RecentBadgeResponse
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
+from app.game.arrival import confirm_arrival
 from app.game.control import pause_game, quit_game, reset_game, resume_game
+from app.game.current_location import CurrentLocation, Stage, get_current_location
+from app.game.navigation import Ping, Trend, process_ping
 from app.game.shuffle import shuffle_game
 from app.game.start import start_game
-from app.game.status import find_current_game, get_game
+from app.game.status import GameStatus, find_current_game, get_game
+from app.game.summary import GameSummary, get_summary
 from app.models.accounts import User
 from app.models.enums import (
+    ArrivalOverride,
     Difficulty,
+    FeedbackCode,
     Language,
     LocationStatus,
     SessionEndReason,
@@ -168,6 +175,244 @@ def game_status(
     return GameStatusResponse.model_validate(status, from_attributes=True)
 
 
+class GameEngagementResponse(BaseModel):
+    """What the game added to the student's engagement. A streak field comes with A13 (#87)."""
+
+    level: int = Field(
+        ge=1, le=5, description="The level in the game's language as of the game's last points."
+    )
+    level_up: bool = Field(description="Whether the game's points raised the level.")
+    new_badges: list[RecentBadgeResponse] = Field(
+        description="Badges the game's locations unlocked, global ones included, oldest first."
+    )
+
+
+class GameSummaryResponse(GameStatusResponse):
+    """A game's status, when it ended and what it added to the student's engagement."""
+
+    ended_at: datetime | None = Field(
+        description=(
+            "When the game was completed, quit or reset; for an expired or class-closed game, "
+            "its last action. Null while it is open."
+        )
+    )
+    engagement: GameEngagementResponse
+
+
+def _summary_response(summary: GameSummary) -> GameSummaryResponse:
+    return GameSummaryResponse(
+        **asdict(summary.status),
+        ended_at=summary.ended_at,
+        engagement=GameEngagementResponse.model_validate(summary.engagement, from_attributes=True),
+    )
+
+
+@games_router.get(
+    "/{game_id}/summary",
+    operation_id="getGameSummary",
+    response_model=GameSummaryResponse,
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND),
+)
+def game_summary(
+    game_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> GameSummaryResponse:
+    """The summary of one of the student's games: the game status (each location's result and
+    the session points), when it ended, and the level, level-up and new badges it brought.
+
+    An open game can be read too and shows its results so far (`ended_at` null). The level is
+    the one the game reached, not today's. 404 NOT_FOUND for another student's game, the same as
+    for an id that doesn't exist. An open game idle for the expiry limit (24 hours by default) is
+    expired when it is read. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
+    account.
+    """
+    if user.role == UserRole.ADMIN:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
+    summary = get_summary(user.id, game_id, db)
+    db.commit()
+    return _summary_response(summary)
+
+
+class CurrentLocationResponse(BaseModel):
+    """The current location of a game. Never its name, room number, coordinates or answers."""
+
+    session_id: UUID
+    state: SessionState
+    position: int
+    stage: Stage
+    # the clue of this location, for both stages
+    clue_audio_url: str
+    attempts_used: int
+    attempts_left: int
+    # Stage 1 only: when "Continue without GPS" is allowed. Compare it with the current time;
+    # don't count down from it, since it can move (see the route description)
+    gps_override_available_at: datetime | None
+
+
+@games_router.get(
+    "/{game_id}/current-location",
+    operation_id="getCurrentLocation",
+    response_model=CurrentLocationResponse | GameSummaryResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def current_location(
+    game_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> CurrentLocationResponse | GameSummaryResponse:
+    """The current location of the student's game: position, stage (`navigation` or
+    `verification`), clue audio link and attempts. A paused game can be read too.
+
+    `gps_override_available_at` (Stage 1 only) is when the student may confirm arrival without
+    GPS: 3 minutes after the location became current (paused time counts), or straight away once
+    the last 3 pings all had poor accuracy, when it is the latest ping's time. It moves with each
+    further weak ping and goes back to the 3-minute time after a good one, so only compare it
+    with the current time; don't use it as the start of a countdown.
+
+    If a content manager deactivated the location before the student reached it, it is skipped
+    (0 points) and the next location comes back. If that was the last one, the game is completed
+    and the response is the game summary (the same body as GET /games/{id}/summary) instead.
+    409 SESSION_NOT_ACTIVE for a game that has ended, or one that has been idle for the expiry
+    limit (24 hours by default), which is expired. 409 INVALID_STAGE if the game has no location
+    to play at its position (out of step). 404 NOT_FOUND for another student's game, or if the
+    clue has no recording. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
+    account.
+    """
+
+    def current_or_summary() -> CurrentLocation | GameSummary:
+        found = get_current_location(user.id, game_id, db)
+        # the last location was skipped, so the game is over: its summary, in this transaction
+        return get_summary(user.id, game_id, db) if isinstance(found, GameStatus) else found
+
+    result = _play(current_or_summary, user, db)
+    if isinstance(result, GameSummary):
+        return _summary_response(result)
+    return CurrentLocationResponse.model_validate(result, from_attributes=True)
+
+
+class PingRequest(BaseModel):
+    lat: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    lng: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    # the browser's accuracy radius in metres
+    accuracy_m: float = Field(ge=0, allow_inf_nan=False)
+
+
+class FeedbackResponse(BaseModel):
+    code: FeedbackCode
+    audio_url: str
+
+
+class PingResponse(BaseModel):
+    # closer / farther / steady, or null when no trend was evaluated on this ping
+    trend: Trend | None
+    can_confirm: bool
+    # play the feedback only when true
+    speak: bool
+    feedback: FeedbackResponse
+    # when "Continue without GPS" is allowed; compare with the current time, don't count down
+    gps_override_available_at: datetime
+
+
+@games_router.post(
+    "/{game_id}/navigation/ping",
+    operation_id="sendNavigationPing",
+    response_model=PingResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.CONFLICT,
+        HTTPStatus.TOO_MANY_REQUESTS,
+    ),
+)
+def navigation_ping(
+    game_id: UUID,
+    request: PingRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> PingResponse:
+    """Send the student's position in Stage 1, about every 5 seconds.
+
+    Returns one feedback code with its audio link. Play it only when `speak` is true: a phrase is
+    spoken when a trend is evaluated (about every 25 s), NAV_START on the first good fix,
+    NAV_ARRIVED once on entering the radius, and NAV_GPS_WEAK on the first weak fix (accuracy over
+    50 m), then at most every 25 s. Other pings return the last spoken code with `speak` false
+    and `trend` null. `can_confirm` is true within the radius only when this fix is not weak
+    (accuracy ≤ 50 m); a weak fix is never confirmable. A good ping after a weak signal, before
+    the next trend, shows NAV_KEEP_GOING (NAV_VERY_CLOSE when near) with `speak` false. No
+    direction or target position is ever returned. `gps_override_available_at` is as in GET
+    .../current-location: 3 weak pings in a row make it the latest ping's time (already passed),
+    and a good ping moves it back to 3 minutes after the location became current.
+    409 SESSION_NOT_ACTIVE for a paused game (resume first), a game that has ended, or one idle
+    for the expiry limit (24 hours by default), which is expired. 409 INVALID_STAGE unless the
+    current location is in Stage 1. 409 STATE_CHANGED if that location was deactivated; nothing
+    is written, and the next GET /games/{id}/current-location skips it. 429 RATE_LIMITED for a
+    ping less than 2 s after the last one.
+    404 NOT_FOUND for another student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED
+    for a disabled account.
+    """
+    ping = Ping(request.lat, request.lng, request.accuracy_m)
+    outcome = _play(lambda: process_ping(user.id, game_id, ping, db), user, db)
+    return PingResponse(
+        trend=outcome.trend,
+        can_confirm=outcome.can_confirm,
+        speak=outcome.speak,
+        feedback=FeedbackResponse(code=outcome.feedback, audio_url=outcome.feedback_audio_url),
+        gps_override_available_at=outcome.gps_override_available_at,
+    )
+
+
+class ArrivalRequest(BaseModel):
+    # "gps_unavailable": "Continue without GPS", allowed from gps_override_available_at on
+    override_reason: ArrivalOverride | None = None
+    # required: the position the app is confirming. A different current position is 409
+    # STATE_CHANGED
+    position: PositiveInt
+
+
+class ArrivalResponse(CurrentLocationResponse):
+    # VERIFY_START, to play now (the same list shape as the photo response)
+    feedback: list[FeedbackResponse]
+
+
+@games_router.post(
+    "/{game_id}/navigation/confirm-arrival",
+    operation_id="confirmArrival",
+    response_model=ArrivalResponse,
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def navigation_confirm_arrival(
+    game_id: UUID,
+    request: ArrivalRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ArrivalResponse:
+    """Confirm arrival and start Stage 2, plus VERIFY_START.
+
+    No override: ping under 30 s and in the radius, else 409 STALE_POSITION or NOT_WITHIN_RADIUS
+    (`details` reason `gps_weak` if accuracy is over 50 m). `gps_unavailable` works from
+    `gps_override_available_at` (3 min, or 3 weak pings), else 409 GPS_OVERRIDE_NOT_ALLOWED.
+    `position` is required. Stage 2 repeats with no writes, even paused. 409
+    SESSION_NOT_ACTIVE if paused in Stage 1, ended or expired; STATE_CHANGED for a stale
+    `position` or a deactivated location; INVALID_STAGE if the row is not navigating. A shuffle
+    keeps the position; the new row has no ping (409 STALE_POSITION). 404 for another student's
+    game or no recording. 403 FORBIDDEN_ROLE or ACCOUNT_DISABLED.
+    """
+    arrival = _play(
+        lambda: confirm_arrival(user.id, game_id, request.override_reason, request.position, db),
+        user,
+        db,
+    )
+    feedback = FeedbackResponse(code=arrival.feedback, audio_url=arrival.feedback_audio_url)
+    location = CurrentLocationResponse.model_validate(arrival.location, from_attributes=True)
+    return ArrivalResponse(**location.model_dump(), feedback=[feedback])
+
+
 class PausedGameResponse(GameStatusResponse):
     # when the game expires if nothing else happens
     expires_at: datetime
@@ -225,7 +470,7 @@ def resume(
 @games_router.post(
     "/{game_id}/quit",
     operation_id="quitGame",
-    response_model=GameStatusResponse,
+    response_model=GameSummaryResponse,
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
     ),
@@ -234,19 +479,23 @@ def quit_the_game(
     game_id: UUID,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-) -> GameStatusResponse:
+) -> GameSummaryResponse:
     """End the student's game (abandoned, end reason quit). A paused game can be quit too.
 
     Points already earned stay. The unplayed locations are skipped and come first in the next
-    game started today in the same mode, language and difficulty. Returns the game status for
-    now; once GET /games/{id}/summary exists, it returns the summary instead. 409
+    game started today in the same mode, language and difficulty. Returns the game summary (the
+    same body as GET /games/{id}/summary). 409
     SESSION_NOT_ACTIVE for a game that has already ended (so quitting twice is a 409), or one that
     has been idle for the expiry limit (24 hours by default), which is expired. 404 NOT_FOUND for
     another student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
     account.
     """
-    status = _play(lambda: quit_game(user.id, game_id, db), user, db)
-    return GameStatusResponse.model_validate(status, from_attributes=True)
+
+    def quit_and_summarize() -> GameSummary:
+        quit_game(user.id, game_id, db)
+        return get_summary(user.id, game_id, db)
+
+    return _summary_response(_play(quit_and_summarize, user, db))
 
 
 @games_router.post(
