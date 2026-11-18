@@ -1,5 +1,6 @@
 from time import time
 from typing import Annotated
+from uuid import uuid4
 
 import pytest
 from fastapi import APIRouter, Depends, FastAPI
@@ -171,6 +172,15 @@ def test_teacher_cannot_access_another_class(
     fake_client.headers = {"Authorization": f"Bearer {jwt}"}
     response = fake_client.post(f"{PREFIX}/teacher/{accessed_class_id}")
     assert response.status_code == 403
+
+
+def test_unknown_class_is_not_found(fake_client: TestClient, make_user: User):
+    user = make_user()
+    jwt = encode({"sub": f"{user.id}", "exp": int(time()) + (60 * 60)}, str(KEY), ALGORITHM)
+    fake_client.headers = {"Authorization": f"Bearer {jwt}"}
+    response = fake_client.post(f"{PREFIX}/teacher/{uuid4()}")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
 
 
 def test_can_manage_content(fake_client: TestClient, make_user: User):
