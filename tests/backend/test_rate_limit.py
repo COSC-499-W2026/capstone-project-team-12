@@ -54,3 +54,17 @@ def test_login_is_limited_per_ip_across_emails(
 
     assert response.status_code == HTTPStatus.TOO_MANY_REQUESTS
     assert "Retry-After" in response.headers
+
+
+def test_register_is_limited_per_ip(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(get_settings(), "register_attempts_per_ip", 3)
+    other_ip = TestClient(client.app, client=("10.0.0.2", 50000))
+    for _i in range(3):
+        assert client.post("/api/v1/auth/register", json={}).status_code == 422
+
+    response = client.post("/api/v1/auth/register", json={})
+
+    assert response.status_code == HTTPStatus.TOO_MANY_REQUESTS
+    assert response.json()["error"]["code"] == ErrorCode.RATE_LIMITED
+    assert "Retry-After" in response.headers
+    assert other_ip.post("/api/v1/auth/register", json={}).status_code == 422
