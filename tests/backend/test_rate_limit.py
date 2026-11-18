@@ -83,13 +83,12 @@ def test_photo_uploads_are_limited_per_user(
     monkeypatch.setattr(get_settings(), "photo_uploads_per_user", 3)
     alice, bob = auth_headers(make_user()), auth_headers(make_user())
     url = f"/api/v1/games/{uuid4()}/verification/photo"
-    photo = {"photo": ("sign.jpg", b"not checked", "image/jpeg")}
     for _ in range(3):
-        assert client.post(url, files=photo, headers=alice).status_code == 404
+        assert client.post(url, headers=alice).status_code == 422
 
-    response = client.post(url, files=photo, headers=alice)
+    response = client.post(url, headers=alice)
 
     assert response.status_code == HTTPStatus.TOO_MANY_REQUESTS
     assert response.json()["error"]["code"] == ErrorCode.RATE_LIMITED
     assert "Retry-After" in response.headers
-    assert client.post(url, files=photo, headers=bob).status_code == 404
+    assert client.post(url, headers=bob).status_code == 422
