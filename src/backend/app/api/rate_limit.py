@@ -25,7 +25,7 @@ def global_rate_limit(request: Request) -> None:
 
 
 def register_rate_limit(request: Request) -> None:
-    count_request("register", get_settings().register_attempts_per_ip, client_ip(request))
+    count_request("register", get_settings().register_attempts_per_ip, _client_ip(request))
 
 
 def login_rate_limit(
