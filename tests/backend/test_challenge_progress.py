@@ -18,6 +18,7 @@ from app.models.enums import Difficulty, Language, LocationStatus
 from app.models.game import GameSession, SessionLocation
 
 
+@pytest.mark.usefixtures("fixed_daily_challenge_targets")
 def test_basic_completion_and_retry(
     db: Session,
     make_user: Callable[..., User],
@@ -71,6 +72,7 @@ def test_basic_completion_and_retry(
     assert bonuses[0].points == 50
 
 
+@pytest.mark.usefixtures("fixed_daily_challenge_targets")
 @pytest.mark.parametrize(
     ("difficulty", "expected_progress", "expected_bonus"),
     [
@@ -107,6 +109,7 @@ def test_difficulty_eligibility(
     assert stats.total_points == expected_bonus
 
 
+@pytest.mark.usefixtures("fixed_daily_challenge_targets")
 def test_progress_uses_configured_difficulty_and_count(
     db: Session, make_user: Callable[..., User]
 ) -> None:
@@ -132,6 +135,7 @@ def test_progress_uses_configured_difficulty_and_count(
         assert (str(challenge.id) in completed) == (expected_progress == 2)
 
 
+@pytest.mark.usefixtures("fixed_daily_challenge_targets")
 def test_three_completions_and_global_progress(
     db: Session,
     make_user: Callable[..., User],
@@ -190,14 +194,23 @@ def test_local_midnight_creates_fresh_challenges(
     )
 
     yesterday = ensure_daily_challenges(student.id, db, now=before)
+    progress_before = [item.progress_current for item in yesterday]
+    record_challenge_progress(
+        student.id,
+        difficulty=Difficulty.BASIC,
+        language=Language.JA,
+        class_id=None,
+        db=db,
+        now=after,
+    )
     today = ensure_daily_challenges(student.id, db, now=after)
 
     assert yesterday[0].challenge_date != today[0].challenge_date
-    assert yesterday[0].progress_current == 1
-    assert all(challenge.progress_current == 0 for challenge in today)
+    assert [item.progress_current for item in yesterday] == progress_before
     assert len({challenge.id for challenge in (*yesterday, *today)}) == 6
 
 
+@pytest.mark.usefixtures("fixed_daily_challenge_targets")
 def test_progress_and_bonus_rollback_together(
     db: Session,
     make_user: Callable[..., User],

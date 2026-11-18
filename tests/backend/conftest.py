@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.content.clue_audio import UPLOAD_PROVIDER
 from app.db import DB_CONNECT_ARGS, get_db
+from app.engagement import daily_challenges
 from app.errors import AppError, ErrorCode
 from app.main import create_app
 from app.models.accounts import ClassStaff, User
@@ -659,3 +660,19 @@ def stored_media_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterato
     # the next caller builds both again from the restored environment
     get_settings.cache_clear()
     get_storage_service.cache_clear()
+
+
+@pytest.fixture
+def fixed_daily_challenge_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use known targets for scoring and API tests that assert exact point totals."""
+
+    fixed_keys = {
+        "complete_1_location",
+        "complete_3_locations",
+        "complete_1_challenging_location",
+    }
+
+    def pick(available: list[daily_challenges.ChallengeTarget]) -> daily_challenges.ChallengeTarget:
+        return next(target for target in available if target.description_key in fixed_keys)
+
+    monkeypatch.setattr(daily_challenges, "_pick_target", pick)

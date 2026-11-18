@@ -16,6 +16,8 @@ from app.models.enums import AchievementCategory, Language, UserRole
 
 URL = "/api/v1/me/engagement"
 
+pytestmark = pytest.mark.usefixtures("fixed_daily_challenge_targets")
+
 
 def test_new_student_starts_at_zero(
     client: TestClient,

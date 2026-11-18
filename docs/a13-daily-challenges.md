@@ -1,8 +1,8 @@
 # A13 daily challenge generation
 
-The initial A13 generator serves three fixed targets per student per local day.
-It assigns one completion, three completions, and one challenging completion.
+The generator draws three distinct targets per student per local day. Each draw
+uses 60% completion and 40% difficulty weighting when both types are available.
+When yesterday has a full set, the new set includes at least one different target.
 
-The final generator specified in the Technical Specification uses 60% completion
-and 40% difficulty weighting, with different targets across days. Weighted
-selection and daily target variety are deferred from PR #357.
+Existing sets keep their IDs and progress. If a set is incomplete, the generator
+fills the missing slots without reusing an assigned target.
