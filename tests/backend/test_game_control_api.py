@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from game_fields import GAME_FIELDS, SUMMARY_FIELDS
 from httpx2 import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -30,21 +31,6 @@ from app.models.game import GameSession, SessionLocation
 
 URL = "/api/v1/games"
 ACTIONS = ["pause", "resume", "quit", "reset"]
-
-GAME_FIELDS = {
-    "session_id",
-    "state",
-    "end_reason",
-    "class_id",
-    "language",
-    "difficulty",
-    "current_position",
-    "shuffles_used",
-    "total_score",
-    "started_at",
-    "paused_at",
-    "locations",
-}
 
 
 @pytest.fixture
@@ -194,7 +180,7 @@ def test_quit(
     assert response.status_code == 200, response.text
     body = response.json()
     # the summary (GET /games/{id}/summary)
-    assert set(body) == GAME_FIELDS | {"ended_at", "engagement"}
+    assert set(body) == SUMMARY_FIELDS
     assert (body["state"], body["end_reason"], body["paused_at"], body["total_score"]) == (
         SessionState.ABANDONED.value,
         SessionEndReason.QUIT.value,
