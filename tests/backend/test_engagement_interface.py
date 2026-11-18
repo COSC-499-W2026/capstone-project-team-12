@@ -31,6 +31,8 @@ from app.models.engagement import (
 from app.models.enums import EnrollmentEndReason, Language, LocationStatus, SessionState, SkipReason
 from app.models.game import GameSession, SessionLocation
 
+pytestmark = pytest.mark.usefixtures("fixed_daily_challenge_targets")
+
 
 def test_get_class_language(db: Session, make_class: Callable[..., Class]) -> None:
     school_class = make_class(target_language=Language.JA)

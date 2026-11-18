@@ -13,6 +13,8 @@ from app.models.engagement import PointsLedger, UserLanguageStats
 from app.models.enums import Language, LocationStatus, SkipReason
 from app.models.game import GameSession, SessionLocation
 
+pytestmark = pytest.mark.usefixtures("fixed_daily_challenge_targets")
+
 
 def test_completed_location_awards_points(
     db: Session,

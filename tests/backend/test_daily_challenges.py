@@ -12,6 +12,7 @@ from sqlalchemy import Engine, delete, func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.engagement import daily_challenges
 from app.engagement.daily_challenges import ensure_daily_challenges
 from app.engagement.streaks import app_calendar_date
 from app.errors import AppError, ErrorCode
@@ -43,6 +44,7 @@ def test_missing_student_raises_not_found(db: Session) -> None:
     assert error.value.code == ErrorCode.NOT_FOUND
 
 
+@pytest.mark.usefixtures("fixed_daily_challenge_targets")
 def test_postgres_persists_exactly_three_challenges(
     db: Session,
     make_user: Callable[..., User],
@@ -260,3 +262,44 @@ def test_concurrent_generation_creates_only_three_challenges(
                 .where(DailyChallenge.user_id == student_id)
             )
             assert count == 3
+
+
+@pytest.mark.parametrize("difficulty_based", [False, True])
+def test_draw_uses_type_weights_and_distinct_targets(
+    db: Session,
+    make_user: Callable[..., User],
+    monkeypatch: pytest.MonkeyPatch,
+    difficulty_based: bool,
+) -> None:
+    draws = []
+
+    def draw(categories: tuple[bool, bool], *, weights: tuple[int, int]) -> list[bool]:
+        assert categories == (False, True)
+        assert weights == (60, 40)
+        draws.append(difficulty_based)
+        return [difficulty_based]
+
+    monkeypatch.setattr(daily_challenges, "choices", draw)
+    assigned = ensure_daily_challenges(make_user().id, db)
+
+    assert len(draws) == 3
+    assert len({(item.progress_required, item.params.get("difficulty")) for item in assigned}) == 3
+    expected_type = "difficulty" if difficulty_based else "completion"
+    assert all(item.challenge_type == expected_type for item in assigned)
+    assert all(item.params["count"] == item.progress_required for item in assigned)
+    assert all(item.reward_points in (50, 100) for item in assigned)
+
+
+def test_new_local_day_has_at_least_one_new_target(
+    db: Session, make_user: Callable[..., User], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Always aim for the first available completion target, including on day two.
+    monkeypatch.setattr(daily_challenges, "choices", lambda *args, **kwargs: [False])
+    monkeypatch.setattr(daily_challenges, "choice", lambda available: available[0])
+    student = make_user()
+    first_day = datetime(2026, 7, 1, 19, tzinfo=UTC)
+    first = ensure_daily_challenges(student.id, db, now=first_day)
+    second = ensure_daily_challenges(student.id, db, now=first_day + timedelta(days=1))
+
+    assert [item.progress_required for item in first] == [1, 2, 3]
+    assert [item.progress_required for item in second] == [1, 2, 5]
