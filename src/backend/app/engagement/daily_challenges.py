@@ -12,7 +12,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.engagement.streaks import vancouver_date
+from app.engagement.streaks import app_calendar_date
 from app.errors import AppError, ErrorCode
 from app.models.engagement import DailyChallenge
 from app.models.enums import DailyChallengeType, Difficulty
@@ -31,7 +31,7 @@ def ensure_daily_challenges(
     A student row lock serializes concurrent generation requests.
     The caller owns the transaction.
     """
-    today = vancouver_date(now)
+    today = app_calendar_date(now)
 
     if lock_user(student_id, db) is None:
         raise AppError(ErrorCode.NOT_FOUND)
