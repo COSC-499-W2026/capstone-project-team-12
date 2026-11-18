@@ -18,6 +18,7 @@ from app.engagement.interface import (
     get_class_language,
     get_class_leaderboard,
     get_class_location_analytics,
+    get_class_student_analytics,
     leave_class,
     list_staff_classes,
     require_active_enrolment,
@@ -338,6 +339,70 @@ def get_class_analytics_endpoint(
 ) -> ClassAnalyticsResponse:
     """Return classroom location analytics without modifying data."""
     return ClassAnalyticsResponse.model_validate(get_class_location_analytics(class_id, db))
+
+
+class StudentAnalyticsResponse(BaseModel):
+    """Classroom-specific progress for an enrolled student."""
+
+    student_id: UUID
+    username: str
+    is_active_enrollment: bool
+    joined_at: datetime
+    left_at: datetime | None
+    sessions: int
+    completed_locations: int
+    failed_locations: int
+    classroom_points: int
+    success_rate: float
+    last_activity_at: datetime | None
+    streak_days: int
+    flags: list[str]
+
+
+@teacher_classes_router.get(
+    "/{class_id}/students",
+    response_model=list[StudentAnalyticsResponse],
+    operation_id="getClassStudentAnalytics",
+    summary="Get individual student statistics for a classroom",
+    description=(
+        "Return classroom-specific progress for current and former students, "
+        "including sessions, completed and failed locations, points, and "
+        "success rates, plus global streaks and classroom flags. "
+        "Class owners and assigned teaching assistants may access these "
+        "statistics, including for archived classrooms."
+    ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT))],
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+    ),
+)
+def get_class_students_endpoint(
+    class_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[StudentAnalyticsResponse]:
+    """Return individual classroom student statistics without modifying data."""
+    statistics = get_class_student_analytics(class_id, db)
+
+    return [
+        StudentAnalyticsResponse(
+            student_id=item.student_id,
+            username=item.username,
+            is_active_enrollment=item.is_active_enrollment,
+            joined_at=item.joined_at,
+            left_at=item.left_at,
+            sessions=item.sessions,
+            completed_locations=item.completed_locations,
+            failed_locations=item.failed_locations,
+            classroom_points=item.classroom_points,
+            success_rate=item.success_rate,
+            last_activity_at=item.last_activity_at,
+            streak_days=item.streak_days,
+            flags=item.flags,
+        )
+        for item in statistics
+    ]
 
 
 class ClassListItem(BaseModel):
