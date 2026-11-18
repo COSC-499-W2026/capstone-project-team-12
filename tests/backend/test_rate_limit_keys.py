@@ -2,8 +2,8 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
 from http import HTTPStatus
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,7 +34,8 @@ def send(client: TestClient) -> Callable[..., Response]:
 
 def use_up(send: Callable[..., Response], headers: dict[str, str] | None = None) -> None:
     for _ in range(LIMIT):
-        assert send(headers).status_code != 429
+        # 200 signed in, 401 otherwise: a 404 would mean URL isn't a route, so nothing is counted
+        assert send(headers).status_code in (HTTPStatus.OK, HTTPStatus.UNAUTHORIZED)
 
 
 def is_limited(response: Response) -> bool:
@@ -109,9 +110,3 @@ def test_every_api_route_documents_429(client: TestClient) -> None:
     ]
 
     assert not missing
-
-
-def use_up(send: Callable[..., Response], headers: dict[str, str] | None = None) -> None:
-    for _ in range(LIMIT):
-        # 200 signed in, 401 otherwise: a 404 would mean URL isn't a route, so nothing is counted
-        assert send(headers).status_code in (HTTPStatus.OK, HTTPStatus.UNAUTHORIZED)
