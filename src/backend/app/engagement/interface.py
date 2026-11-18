@@ -51,6 +51,7 @@ from app.engagement.stats import (
 from app.engagement.stats import (
     level_for_points as _level_for_points,
 )
+from app.engagement.streaks import record_active_day
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff
 from app.models.engagement import (
@@ -59,6 +60,7 @@ from app.models.engagement import (
     ClassEnrollment,
     PointsLedger,
     UserLanguageStats,
+    UserStats,
 )
 from app.models.enums import (
     ClassStaffRole,
@@ -101,8 +103,8 @@ class EngagementResult:
     """Engagement information returned after processing a location result.
 
     Defines the engagement response contract for Issue #15.
-    Completion badges are implemented. Streaks, daily challenges,
-    and advanced achievements are pending implementation.
+    Completion badges and daily streaks are implemented. Daily challenges,
+    streak milestones, and advanced achievements are pending implementation.
 
     Attributes:
         location_points_awarded: New location points awarded by this call.
@@ -282,12 +284,9 @@ def apply_location_result(
         remain consistent within the caller's transaction.
 
     Pending functionality:
-        Streak tracking, daily challenges, streak milestones, and
-        advanced achievement types are not yet implemented.
-
-        Until implemented, streak_days is zero and
-        challenges_completed is empty. Completion badges can be
-        unlocked by successful locations.
+        Daily challenges, streak milestones, and advanced achievement
+        types are not yet implemented. challenges_completed is empty.
+        Completion badges can be unlocked by successful locations.
 
     Args:
         session_location_id: UUID of the finished session location.
@@ -352,6 +351,12 @@ def apply_location_result(
         unlock_completion_badges(student_id, target_language, db) if awarded > 0 else ()
     )
 
+    if awarded > 0:
+        streak_days = record_active_day(student_id, db)
+    else:
+        global_stats = db.get(UserStats, student_id)
+        streak_days = global_stats.current_streak_days if global_stats is not None else 0
+
     total_points = stats.total_points if stats is not None else 0
     level = _level_for_points(total_points)
 
@@ -360,7 +365,7 @@ def apply_location_result(
         total_points=total_points,
         level=level,
         level_up=level > previous_level,
-        streak_days=0,
+        streak_days=streak_days,
         challenges_completed=(),
         achievements_unlocked=achievements_unlocked,
     )

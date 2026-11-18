@@ -278,7 +278,7 @@ def test_apply_location_result_awards_completed_location(
         total_points=100,
         level=1,
         level_up=False,
-        streak_days=0,
+        streak_days=1,
         challenges_completed=(),
         achievements_unlocked=("first_step",),
     )
