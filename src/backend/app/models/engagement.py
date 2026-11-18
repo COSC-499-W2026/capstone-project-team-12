@@ -113,8 +113,8 @@ class ClassEnrollment(Base):
 
     id: Mapped[UUID] = uuid_pk()
     student_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
-    class_id: Mapped[UUID] = mapped_column(index=True)
-    access_code_id: Mapped[UUID]
+    class_id: Mapped[UUID] = mapped_column(index=True)  # class rosters and analytics
+    access_code_id: Mapped[UUID]  # checked by the (access_code_id, class_id) FK above
     language: Mapped[str]
     is_active: Mapped[bool] = mapped_column(default=True, server_default=true())
     end_reason: Mapped[str | None]
@@ -286,10 +286,7 @@ class DailyChallenge(Base):
     )
 
     id: Mapped[UUID] = uuid_pk()
-    user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id"),
-        index=True,
-    )
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
     challenge_date: Mapped[date]
     slot: Mapped[int]
     challenge_type: Mapped[str]

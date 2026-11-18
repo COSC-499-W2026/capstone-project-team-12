@@ -120,20 +120,9 @@ def upgrade() -> None:
         ),
     )
 
-    op.create_index(
-        op.f("ix_daily_challenges_user_id"),
-        "daily_challenges",
-        ["user_id"],
-        unique=False,
-    )
-
 
 def downgrade() -> None:
     """Remove the A13 tables."""
 
-    op.drop_index(
-        op.f("ix_daily_challenges_user_id"),
-        table_name="daily_challenges",
-    )
     op.drop_table("daily_challenges")
     op.drop_table("user_stats")

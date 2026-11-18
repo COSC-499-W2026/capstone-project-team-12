@@ -1,4 +1,4 @@
-"""Global daily streak tracking using the America/Vancouver calendar.
+"""Global daily streak tracking using the configured local calendar.
 
 The caller must lock the student before invoking these functions.
 The caller owns the database transaction.
@@ -10,20 +10,19 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models.engagement import UserStats
-
-VANCOUVER = ZoneInfo("America/Vancouver")
 
 
 def vancouver_date(now: datetime | None = None) -> date:
-    """Return the current calendar date in Vancouver."""
+    """Return the calendar date in the configured app timezone."""
     if now is None:
         now = datetime.now(UTC)
 
     if now.tzinfo is None:
         raise ValueError("A timezone-aware datetime is required")
 
-    return now.astimezone(VANCOUVER).date()
+    return now.astimezone(ZoneInfo(get_settings().app_timezone)).date()
 
 
 def record_active_day(
