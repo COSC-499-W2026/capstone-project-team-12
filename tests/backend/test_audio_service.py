@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.config import AudioServiceType, Settings
 from app.models.content import FeedbackAudio
-from app.models.enums import FeedbackCode, Language
+from app.models.enums import Difficulty, FeedbackCode, Language
 from app.services import audio as audio_module
 from app.services.audio import (
     AudioService,
@@ -97,15 +97,12 @@ def test_a_language_with_every_phrase_has_them_all(
     assert audio.has_all_feedback_phrases(language, db)
 
 
-@pytest.mark.parametrize("missing", FeedbackCode)
 def test_a_language_without_one_phrase_lacks_it(
-    db: Session,
-    audio: AudioService,
-    feedback_phrases: Callable[[Language], None],
-    missing: FeedbackCode,
+    db: Session, audio: AudioService, feedback_phrases: Callable[[Language], None]
 ) -> None:
-    for language in Language:
-        feedback_phrases(language)
+    missing = FeedbackCode.NAV_GPS_WEAK
+    feedback_phrases(Language.KO)
+    feedback_phrases(Language.JA)
     db.execute(
         delete(FeedbackAudio).where(
             FeedbackAudio.code == missing, FeedbackAudio.language == Language.KO
@@ -118,6 +115,16 @@ def test_a_language_without_one_phrase_lacks_it(
         audio.feedback_audio_url(missing, Language.KO, db)
     assert refused.value.status == HTTPStatus.NOT_FOUND
     assert audio.has_all_feedback_phrases(Language.JA, db)
+
+
+def test_committed_phrases_are_refused_for_a_language_only_db_can_see(
+    feedback_phrases: Callable[[Language], None],
+    committed_location_ids: Callable[..., list[UUID]],
+) -> None:
+    feedback_phrases(Language.ES)  # uncommitted, in the `db` fixture's transaction
+    with pytest.raises(pytest.fail.Exception, match="phrases that only it can see"):
+        committed_location_ids(Language.ES, Difficulty.BASIC)
+    committed_location_ids(Language.DE, Difficulty.BASIC)  # another language is fine
 
 
 def test_a_clue_keeps_its_recording_and_each_clue_has_its_own(

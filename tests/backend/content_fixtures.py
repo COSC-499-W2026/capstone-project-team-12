@@ -20,7 +20,7 @@ from typing import NamedTuple
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Engine, delete, select, text, tuple_
+from sqlalchemy import Engine, delete, select, tuple_
 from sqlalchemy.orm import Session
 
 from app.content import interface as content
@@ -109,13 +109,17 @@ def ja_basic_content(playable_location_ids: Callable[..., list[UUID]]) -> None:
 
 
 @pytest.fixture
-def committed_location_ids(test_engine: Engine) -> Iterator[Callable[..., list[UUID]]]:
+def committed_location_ids(
+    test_engine: Engine, request: pytest.FixtureRequest
+) -> Iterator[Callable[..., list[UUID]]]:
     """playable_location_ids for a test whose game runs in its own committed sessions, which
     can't see the rows of the `db` fixture. The test deletes the games it committed itself; this
     commits the feedback phrases the language lacks and deletes them after the test.
 
     Don't use it in a test that also has `db` content in the same language: the committed
-    phrases would wait for the uncommitted ones (lock_timeout turns that into an error)."""
+    phrases would wait for the uncommitted ones, so the test fails with a message naming the
+    language instead."""
+    db = request.getfixturevalue("db") if "db" in request.fixturenames else None
     added: list[tuple[FeedbackCode, Language]] = []
 
     def make(
@@ -124,8 +128,14 @@ def committed_location_ids(test_engine: Engine) -> Iterator[Callable[..., list[U
         count: int = PLAYABLE_LOCATIONS,
     ) -> list[UUID]:
         with Session(test_engine) as session:
-            session.execute(text("SET lock_timeout = '10s'"))
             missing = _missing_phrases(language, session)
+            if db is not None and len(_missing_phrases(language, db)) < len(missing):
+                pytest.fail(
+                    f"the `db` fixture already holds {language} feedback phrases that only it "
+                    "can see, so committing them too would wait on its uncommitted rows. Use "
+                    "another language for the committed content, or don't add the phrases to "
+                    "`db`."
+                )
             session.add_all(
                 FeedbackAudio(code=code, language=language, file_path=f"{uuid4()}.mp3")
                 for code in missing
