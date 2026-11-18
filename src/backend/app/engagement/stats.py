@@ -149,7 +149,7 @@ def get_game_engagement(
 
 
 def _badges(
-    statement: Select[tuple[UserAchievement, Achievement]], db: Session
+    statement: Select[UserAchievement, Achievement], db: Session
 ) -> tuple[RecentBadge, ...]:
     """The badges of the (unlock, achievement) rows the statement selects."""
     return tuple(
