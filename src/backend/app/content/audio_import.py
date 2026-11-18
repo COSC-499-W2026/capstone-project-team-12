@@ -183,7 +183,9 @@ def _import_zip(
             return ImportedFile(file=_path(info))
 
         by_name = sorted(range(len(files)), key=lambda index: _lock_order(files[index][1]))
-        outcomes = {index: import_one(*files[index]) for index in by_name}
+        outcomes: dict[int, _Outcome] = {}
+        for index in by_name:
+            outcomes[index] = import_one(*files[index])
     return _report(outcomes[index] for index in range(len(files)))
 
 
