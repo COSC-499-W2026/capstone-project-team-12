@@ -24,6 +24,10 @@ def global_rate_limit(request: Request) -> None:
     count_request("global", get_settings().global_rate_limit, _caller_key(request))
 
 
+def register_rate_limit(request: Request) -> None:
+    count_request("register", get_settings().register_attempts_per_ip, client_ip(request))
+
+
 def login_rate_limit(
     request: Request, form: Annotated[OAuth2PasswordRequestForm, Depends()]
 ) -> None:
