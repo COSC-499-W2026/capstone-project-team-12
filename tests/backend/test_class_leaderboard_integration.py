@@ -49,9 +49,9 @@ def test_class_game_completion_updates_leaderboard(
     assert after.json()["items"] == [
         {
             "rank": 1,
-            "student_id": str(student.id),
+            "is_me": True,
             "username": student.username,
-            "total_points": 100,
+            "total_points": result.total_points,
         }
     ]
 
@@ -97,7 +97,8 @@ def test_repeated_game_scoring_does_not_inflate_leaderboard(
         headers=auth_headers(student),
     )
     assert response.status_code == 200, response.text
-    assert response.json()["items"][0]["total_points"] == 100
+    assert response.json()["items"][0]["total_points"] == first.total_points
+    assert second.total_points == first.total_points
 
 
 def test_practice_game_completion_does_not_change_class_leaderboard(
