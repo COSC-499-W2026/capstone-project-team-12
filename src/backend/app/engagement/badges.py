@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
 from app.models.engagement import Achievement, PointsLedger, UserAchievement
@@ -172,7 +172,7 @@ def list_unlocked_achievements(
     unlocks = db.scalars(
         select(UserAchievement).where(
             UserAchievement.user_id == student_id,
-            (UserAchievement.language == language) | (UserAchievement.language.is_(None)),
+            in_language_or_global(language),
         )
     ).all()
 
@@ -236,3 +236,8 @@ def list_unlocked_achievements(
     )
 
     return tuple(results)
+
+
+def in_language_or_global(language: Language) -> ColumnElement[bool]:
+    """Unlocks in the language, and global ones."""
+    return (UserAchievement.language == language) | UserAchievement.language.is_(None)

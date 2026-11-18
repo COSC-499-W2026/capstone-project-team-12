@@ -11,7 +11,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.game.status import expire_if_idle
+from app.game.status import expire_open_game
 from app.models.enums import (
     Difficulty,
     Language,
@@ -19,7 +19,7 @@ from app.models.enums import (
     SessionEndReason,
     SessionState,
 )
-from app.models.game import OPEN_SESSION_STATES, GameSession, SessionLocation
+from app.models.game import GameSession, SessionLocation
 
 FINISHED_STATES = (SessionState.COMPLETED, SessionState.ABANDONED)
 
@@ -65,7 +65,7 @@ def list_history(
     checked whenever a game is read), so it shows up here at once. That is an UPDATE; doesn't
     commit. A page past the end has no items.
     """
-    _expire_open_game(student_id, db)
+    expire_open_game(student_id, db)
     finished = [GameSession.student_id == student_id, GameSession.state.in_(FINISHED_STATES)]
     if language is not None:
         finished.append(GameSession.target_language == language)
@@ -107,13 +107,3 @@ def list_history(
         for game, ended_at, locations_completed in rows
     )
     return HistoryPage(items=items, total=total)
-
-
-def _expire_open_game(student_id: UUID, db: Session) -> None:
-    game = db.scalar(
-        select(GameSession).where(
-            GameSession.student_id == student_id, GameSession.state.in_(OPEN_SESSION_STATES)
-        )
-    )
-    if game is not None:
-        expire_if_idle(game, db)
