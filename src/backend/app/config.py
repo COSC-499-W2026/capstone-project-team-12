@@ -91,6 +91,7 @@ class Settings(BaseSettings):
     login_attempts_per_email: PositiveInt = 5  # per (email, IP)
     login_attempts_per_ip: PositiveInt = 100
     register_attempts_per_ip: PositiveInt = 100
+    photo_uploads_per_user: PositiveInt = 10
 
     @property
     def refresh_cookie_secure(self) -> bool:
