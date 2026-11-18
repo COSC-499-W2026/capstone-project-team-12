@@ -1,6 +1,6 @@
-"""How a game route runs its action: one transaction, committed by the route (rule 14).
+"""How a game route runs its action in one transaction.
 
-Shared by the game routes (`games.py`) and, later, the photo route (A10).
+The route owns the transaction and commits it; the game services it calls only flush.
 """
 
 from collections.abc import Callable

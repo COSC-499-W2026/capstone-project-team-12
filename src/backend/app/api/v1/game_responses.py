@@ -1,4 +1,4 @@
-"""Response bodies shared by the game routes (`games.py`) and, later, the photo route (A10).
+"""Response bodies that more than one game route returns.
 
 None of them ever holds a location's name, room number, coordinates or answers.
 """
