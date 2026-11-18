@@ -23,7 +23,7 @@ from app.game.control import lock_open_game, session_not_active
 from app.game.current_location import CurrentLocation, attempts_left, describe
 from app.game.progress import current_row, move_on
 from app.game.scoring import score_finalized_location
-from app.models.enums import LocationStatus, SessionState
+from app.models.enums import Language, LocationStatus, SessionState
 from app.models.game import SessionLocation
 from app.services.locks import lock_user
 
@@ -41,6 +41,7 @@ class PhotoProgress:
     # the new current location after a finished one; None while verifying or once the game ends
     next_location: CurrentLocation | None
     game_state: SessionState
+    language: Language  # the game's, for the feedback phrases
 
 
 def lock_photo_location(student_id: UUID, game_id: UUID, db: Session) -> SessionLocation:
@@ -119,4 +120,5 @@ def finish_photo_location(
         engagement=engagement,
         next_location=upcoming,
         game_state=SessionState(game.state),
+        language=Language(game.target_language),
     )
