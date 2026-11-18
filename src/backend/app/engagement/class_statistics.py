@@ -1,12 +1,14 @@
 """Read-only classroom analytics services (A16)."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import extract, func, select
+from sqlalchemy import extract, func, select, tuple_
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.engagement.streaks import app_calendar_date, visible_streak
 from app.models.accounts import User
 from app.models.engagement import ClassEnrollment, PointsLedger, UserStats
@@ -265,6 +267,90 @@ def get_class_student_analytics(
                     )
                     for difficulty in Difficulty
                 ],
+            )
+        )
+
+    return results
+
+
+@dataclass(frozen=True)
+class StudentParticipation:
+    """Participation grade for one enrolled student in a selected period."""
+
+    student_id: UUID
+    username: str
+    is_active_enrollment: bool
+    enrollment_status: str
+    distinct_completed_locations: int
+    target_locations: int
+    participation_percent: int
+
+
+def get_class_participation(
+    class_id: UUID,
+    db: Session,
+    start_date: date,
+    end_date: date,
+    target_locations: int = 10,
+) -> list[StudentParticipation]:
+    """Calculate classroom participation using unique (location, difficulty) pairs.
+
+    Dates are inclusive in the configured app timezone. Only completed class-game
+    locations count; repeats of the same location at the same difficulty
+    are counted once. Former enrollees remain in the results.
+
+    The service is read-only and does not commit or flush.
+    """
+    if start_date > end_date:
+        raise ValueError("start_date must not be after end_date")
+    if target_locations < 1:
+        raise ValueError("target_locations must be positive")
+
+    timezone = ZoneInfo(get_settings().app_timezone)
+    period_start = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone)
+    period_end = datetime.combine(
+        end_date + timedelta(days=1), datetime.min.time(), tzinfo=timezone
+    )
+
+    enrollments = db.execute(
+        select(ClassEnrollment, User)
+        .join(User, User.id == ClassEnrollment.student_id)
+        .where(ClassEnrollment.class_id == class_id)
+        .order_by(User.username, User.id)
+    ).all()
+
+    pair = tuple_(SessionLocation.location_id, GameSession.difficulty)
+    counts = dict(
+        db.execute(
+            select(GameSession.student_id, func.count(pair.distinct()))
+            .join(SessionLocation, SessionLocation.session_id == GameSession.id)
+            .where(
+                GameSession.class_id == class_id,
+                SessionLocation.status == LocationStatus.COMPLETED,
+                SessionLocation.completed_at >= period_start,
+                SessionLocation.completed_at < period_end,
+            )
+            .group_by(GameSession.student_id)
+        )
+        .tuples()
+        .all()
+    )
+
+    results: list[StudentParticipation] = []
+    for enrollment, student in enrollments:
+        count = counts.get(student.id, 0)
+        status = "active" if enrollment.is_active else str(enrollment.end_reason)
+        results.append(
+            StudentParticipation(
+                student_id=student.id,
+                username=student.username,
+                is_active_enrollment=enrollment.is_active,
+                enrollment_status=status,
+                distinct_completed_locations=count,
+                target_locations=target_locations,
+                participation_percent=min(
+                    100, (200 * count + target_locations) // (2 * target_locations)
+                ),
             )
         )
 
