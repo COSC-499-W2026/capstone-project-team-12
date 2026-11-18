@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.accounts.password import hash_password
 from app.errors import ErrorCode
 from app.models.accounts import User
-from app.models.enums import EmailKind
+from app.models.enums import EmailKind, EmailStatus
 from app.services.email import EmailService
 
 URL = "/api/v1/me/password"
@@ -86,6 +86,31 @@ def test_other_sessions_end_and_this_one_gets_a_new_refresh_token(
     assert refresh(client, new_cookie).status_code == HTTPStatus.OK
 
 
+def test_the_new_cookie_is_the_sign_in_cookie(change: Callable[..., Any], user: User) -> None:
+    [cookie] = change(user).headers.get_list("set-cookie")
+
+    for part in ("path=/api/v1/auth", "httponly", "samesite=strict"):
+        assert part in cookie.lower()
+
+
+def test_a_reset_mail_still_waiting_is_not_sent(
+    db: Session, change: Callable[..., Any], user: User
+) -> None:
+    waiting = EmailService.queue_email(user, EmailKind.RESET_PASSWORD, db)
+
+    assert change(user).status_code == HTTPStatus.OK
+    db.refresh(waiting)
+    assert waiting.status == EmailStatus.FAILED
+
+
+def test_an_account_with_no_password_is_refused(
+    change: Callable[..., Any], make_user: Callable[..., User]
+) -> None:
+    response = change(make_user())  # no password_hash, like an invited user
+
+    assert_error(response, HTTPStatus.UNAUTHORIZED, ErrorCode.INVALID_CREDENTIALS)
+
+
 def test_links_sent_before_the_change_stop_working(
     db: Session, change: Callable[..., Any], make_user: Callable[..., User], user: User
 ) -> None:
@@ -130,7 +155,7 @@ def test_a_password_check_that_finds_no_account_is_refused(
     user: User,
 ) -> None:
     session = login(client, user, OLD).cookies["refresh_token"]
-    monkeypatch.setattr("app.api.v1.me.check_password_hash", lambda *_: False)
+    monkeypatch.setattr("app.api.v1.me.verified_password_hash", lambda *_: None)
 
     response = change(user)
 
