@@ -24,10 +24,10 @@ from typing import NamedTuple
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Engine, delete, func, select, text, tuple_
+from conftest import location_row
+from sqlalchemy import Engine, delete, func, select, tuple_
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
 from app.content import interface as content
 from app.models.content import FeedbackAudio, Location
 from app.models.enums import Difficulty, FeedbackCode, Language
@@ -37,10 +37,9 @@ from app.services.audio import get_audio_service
 # as many as the content stub serves, and the size of the spec's campus set
 PLAYABLE_LOCATIONS = 30
 JA, BASIC = Language.JA, Difficulty.BASIC
-CAMPUS_LAT, CAMPUS_LNG = 49.9394, -119.3948  # UBCO
-# Building codes of the room numbers made here (make_location uses "TST"). Committed rows have
-# their own, so they can't collide with the `db` fixture's rows and the teardown can check that
-# none is left behind.
+# Building codes of the room numbers made here (make_location uses "TST"), and in lowercase the
+# start of the phrases' file names. Committed rows have their own, so they can't collide with the
+# `db` fixture's rows and the teardown can check that none is left behind.
 TEST_BUILDING, COMMITTED_BUILDING = "PLY", "RAC"
 
 
@@ -66,10 +65,8 @@ def _missing_phrases(language: Language, db: Session) -> list[FeedbackCode]:
 
 @contextmanager
 def _committed(engine: Engine) -> Iterator[Session]:
-    """A session of its own, committed at the end. The lock timeout turns a wait for rows the
-    `db` fixture holds uncommitted into an error instead of a hang."""
+    """A session of its own, committed at the end."""
     with Session(engine) as session:
-        session.execute(text("SET LOCAL lock_timeout = '10s'"))
         yield session
         session.commit()
 
@@ -79,10 +76,14 @@ class _Content:
     the block ends, and remembers the locations and phrases it added."""
 
     def __init__(
-        self, open_session: Callable[[], AbstractContextManager[Session]], building: str
+        self,
+        open_session: Callable[[], AbstractContextManager[Session]],
+        building: str,
+        db: Session | None = None,
     ) -> None:
         self._open_session = open_session
         self._building = building
+        self._db = db  # the test's `db` session, when committed content must not clash with it
         self._rooms = count(1000)  # 4 digits, which the room number format allows
         self.locations: list[UUID] = []
         self.phrases: list[tuple[FeedbackCode, Language]] = []
@@ -116,37 +117,40 @@ class _Content:
 
     def delete(self, engine: Engine) -> None:
         """Deletes what this added, in foreign-key order (the test has deleted its games), and
-        checks that no committed location is left."""
+        checks that no committed location or feedback phrase is left."""
         with _committed(engine) as session:
             session.execute(delete(Location).where(Location.id.in_(self.locations)))
             if self.phrases:
                 key = tuple_(FeedbackAudio.code, FeedbackAudio.language)
                 session.execute(delete(FeedbackAudio).where(key.in_(self.phrases)))
         committed_room = Location.room_number.startswith(f"{COMMITTED_BUILDING} ")
+        committed_file = FeedbackAudio.file_path.startswith(f"{COMMITTED_BUILDING.lower()}-")
         with Session(engine) as session:
-            left = session.scalar(select(func.count()).where(committed_room))
-        assert left == 0, f"{left} committed test locations are left in the database"
+            locations = session.scalar(select(func.count()).where(committed_room))
+            phrases = session.scalar(select(func.count()).where(committed_file))
+        assert (locations, phrases) == (0, 0), (
+            f"committed test rows left in the database: {locations} locations, "
+            f"{phrases} feedback phrases"
+        )
 
     def _add_location(self, session: Session, **fields: bool) -> UUID:
         room_number = f"{self._building} {next(self._rooms)}"
-        location = Location(
-            id=uuid4(),
-            name=f"Test room {room_number}",
-            building_name="Test Building",
-            room_number=room_number,
-            accepted_answers=[room_number.replace(" ", "")],
-            gps_points=[{"lat": CAMPUS_LAT, "lng": CAMPUS_LNG}],
-            gps_radius_meters=get_settings().gps_radius_meters,
-            **fields,
-        )
+        location = location_row(room_number, id=uuid4(), **fields)
         session.add(location)
         self.locations.append(location.id)
         return location.id
 
     def _add_phrases(self, language: Language, session: Session) -> None:
         missing = _missing_phrases(language, session)
+        if self._db is not None and len(_missing_phrases(language, self._db)) < len(missing):
+            pytest.fail(
+                f"the `db` fixture already holds {language} feedback phrases that only it can "
+                "see, so committing them too would wait on its uncommitted rows. Use another "
+                "language for the committed content, or don't add the phrases to `db`."
+            )
+        file_prefix = self._building.lower()
         session.add_all(
-            FeedbackAudio(code=code, language=language, file_path=f"{uuid4()}.mp3")
+            FeedbackAudio(code=code, language=language, file_path=f"{file_prefix}-{uuid4()}.mp3")
             for code in missing
         )
         session.flush()  # for the queries that follow, even with autoflush off
@@ -203,9 +207,11 @@ def ja_basic_content(playable_location_ids: Callable[..., list[UUID]]) -> None:
 
 
 @pytest.fixture
-def committed_content(test_engine: Engine) -> Iterator[_Content]:
-    """Content rows committed in their own sessions, deleted after the test."""
-    rows = _Content(lambda: _committed(test_engine), COMMITTED_BUILDING)
+def committed_content(test_engine: Engine, request: pytest.FixtureRequest) -> Iterator[_Content]:
+    """Content rows committed in their own sessions, deleted after the test. A test that also
+    uses `db` is checked for feedback phrases in the same language that only `db` can see."""
+    db = request.getfixturevalue("db") if "db" in request.fixturenames else None
+    rows = _Content(lambda: _committed(test_engine), COMMITTED_BUILDING, db)
     yield rows
     rows.delete(test_engine)
 
@@ -217,7 +223,8 @@ def committed_location_ids(committed_content: _Content) -> Callable[..., list[UU
     commits the content (feedback phrases included) and deletes it after the test.
 
     Don't use it in a test that also has `db` content in the same language: the committed
-    phrases would wait for the uncommitted ones (lock_timeout turns that into an error)."""
+    phrases would wait for the uncommitted ones, so the test fails with a message naming the
+    language instead."""
     return committed_content.playable
 
 
