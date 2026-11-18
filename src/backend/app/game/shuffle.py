@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.errors import AppError, ErrorCode
 from app.game.control import lock_open_game, session_not_active
 from app.game.draw import draw_replacements
+from app.game.progress import game_details
 from app.game.sessions import UNFINISHED
 from app.game.start import new_location_row
 from app.game.status import GameStatus, status_of
@@ -113,12 +114,5 @@ def _state_changed(game: GameSession) -> AppError:
     return AppError(
         ErrorCode.STATE_CHANGED,
         "The game changed since it was loaded",
-        details=[
-            {
-                "session_id": str(game.id),
-                "state": game.state,
-                "shuffles_used": game.shuffles_used,
-                "current_position": game.current_position,
-            }
-        ],
+        details=[{**game_details(game), "shuffles_used": game.shuffles_used}],
     )

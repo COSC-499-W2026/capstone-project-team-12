@@ -5,6 +5,7 @@ location with a photo (A10) both call `move_on`.
 """
 
 from datetime import datetime
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -103,14 +104,33 @@ def out_of_step(game: GameSession) -> AppError:
     return AppError(
         ErrorCode.INVALID_STAGE,
         "The game has no location to play at this position",
-        details=[
-            {
-                "session_id": str(game.id),
-                "state": game.state,
-                "current_position": game.current_position,
-            }
-        ],
+        details=[game_details(game)],
     )
+
+
+def inactive_location(game: GameSession) -> AppError:
+    """409 STATE_CHANGED: the location was deactivated, and nothing is written."""
+    return AppError(
+        ErrorCode.STATE_CHANGED, "This location is no longer active", details=[game_details(game)]
+    )
+
+
+def wrong_stage(game: GameSession, row: SessionLocation, stage: Literal[1, 2]) -> AppError:
+    """409 INVALID_STAGE: the current location isn't in the stage this action needs."""
+    return AppError(
+        ErrorCode.INVALID_STAGE,
+        f"The current location isn't in Stage {stage}",
+        details=[{"session_id": str(game.id), "position": row.position, "status": row.status}],
+    )
+
+
+def game_details(game: GameSession) -> dict[str, object]:
+    """Error details naming the game, its state and its position."""
+    return {
+        "session_id": str(game.id),
+        "state": game.state,
+        "current_position": game.current_position,
+    }
 
 
 def _skip(row: SessionLocation) -> None:

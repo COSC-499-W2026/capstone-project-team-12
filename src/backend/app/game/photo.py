@@ -21,7 +21,7 @@ from app.engagement.interface import EngagementResult
 from app.errors import AppError, ErrorCode
 from app.game.control import lock_open_game, session_not_active
 from app.game.current_location import CurrentLocation, attempts_left, describe
-from app.game.progress import current_row, move_on
+from app.game.progress import current_row, move_on, wrong_stage
 from app.game.scoring import score_finalized_location
 from app.models.enums import Language, LocationStatus, SessionState
 from app.models.game import SessionLocation
@@ -60,11 +60,7 @@ def lock_photo_location(student_id: UUID, game_id: UUID, db: Session) -> Session
         raise session_not_active(game, "Resume the game before sending a photo")
     row = current_row(game, db)
     if row.status != LocationStatus.VERIFYING:
-        raise AppError(
-            ErrorCode.INVALID_STAGE,
-            "The current location isn't in Stage 2",
-            details=[{"session_id": str(game.id), "position": row.position, "status": row.status}],
-        )
+        raise wrong_stage(game, row, 2)
     if attempts_left(row) == 0:
         raise AppError(ErrorCode.ATTEMPTS_EXHAUSTED, "No photo attempts are left here")
     game.last_activity_at = datetime.now(UTC)
