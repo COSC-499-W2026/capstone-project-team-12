@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, Select, func, select
 from sqlalchemy.orm import Session
 
+from app.engagement.badges import in_language_or_global
 from app.models.engagement import Achievement, PointsLedger, UserAchievement, UserLanguageStats
 from app.models.enums import Language, PointsSourceType
 
@@ -63,7 +64,7 @@ def get_language_engagement_stats(
         .join(Achievement, UserAchievement.achievement_id == Achievement.id)
         .where(
             UserAchievement.user_id == student_id,
-            ((UserAchievement.language == language) | (UserAchievement.language.is_(None))),
+            in_language_or_global(language),
         )
         .order_by(
             UserAchievement.unlocked_at.desc(),
@@ -72,15 +73,7 @@ def get_language_engagement_stats(
         .limit(RECENT_BADGES_LIMIT)
     )
 
-    badges = tuple(
-        RecentBadge(
-            achievement_key=achievement.achievement_key,
-            icon_key=achievement.icon_key,
-            language=Language(unlock.language) if unlock.language is not None else None,
-            unlocked_at=unlock.unlocked_at,
-        )
-        for unlock, achievement in db.execute(statement).all()
-    )
+    badges = _badges(statement, db)
 
     return LanguageEngagementStats(
         language=language,
@@ -142,11 +135,24 @@ def get_game_engagement(
         .where(
             UserAchievement.user_id == student_id,
             UserAchievement.unlocked_at.in_(award_times),
-            (UserAchievement.language == language) | UserAchievement.language.is_(None),
+            in_language_or_global(language),
         )
         .order_by(UserAchievement.unlocked_at, Achievement.achievement_key)
     )
-    badges = tuple(
+    badges = _badges(statement, db)
+    level = level_for_points(after)
+    return GameEngagement(
+        level=level,
+        level_up=level > level_for_points(before),
+        new_badges=badges,
+    )
+
+
+def _badges(
+    statement: Select[tuple[UserAchievement, Achievement]], db: Session
+) -> tuple[RecentBadge, ...]:
+    """The badges of the (unlock, achievement) rows the statement selects."""
+    return tuple(
         RecentBadge(
             achievement_key=achievement.achievement_key,
             icon_key=achievement.icon_key,
@@ -154,12 +160,6 @@ def get_game_engagement(
             unlocked_at=unlock.unlocked_at,
         )
         for unlock, achievement in db.execute(statement).all()
-    )
-    level = level_for_points(after)
-    return GameEngagement(
-        level=level,
-        level_up=level > level_for_points(before),
-        new_badges=badges,
     )
 
 
