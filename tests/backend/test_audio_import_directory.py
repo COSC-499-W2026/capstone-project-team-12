@@ -12,14 +12,13 @@ from sqlalchemy.orm import Session
 from test_clue_audio_import import zip_of
 
 from app.config import get_settings
-from app.content.audio_import import import_clue_audio
+from app.content.audio_import import _DIRECTORY_BYTES_PER_FILE, import_clue_audio
 from app.content.schemas import AudioImportReport
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 
 END, ZIP64_END, ZIP64_LOCATOR = b"PK\x05\x06", b"PK\x06\x06", b"PK\x06\x07"
 ENTRY = 46  # bytes of a file's entry in the list, before its name, extra fields and comment
-BYTES_PER_FILE = 4096  # allowed in the list for each file the import takes
 # the extra fields macOS writes on every entry: a timestamp and the owner's user and group ids
 MAC_EXTRA = struct.pack("<HHBl", 0x5455, 5, 1, 0) + struct.pack(
     "<HHBBIBI", 0x7875, 11, 1, 4, 1, 4, 1
@@ -39,7 +38,7 @@ def one_file_limit(monkeypatch: pytest.MonkeyPatch, stored_media_dir: Path) -> i
     """MAX_IMPORT_FILES 1: the list of files can be at most this many bytes."""
     monkeypatch.setenv("MAX_IMPORT_FILES", "1")
     get_settings.cache_clear()  # stored_media_dir clears it again after the test
-    return BYTES_PER_FILE
+    return _DIRECTORY_BYTES_PER_FILE  # the budget the import itself uses
 
 
 def directory_size(data: bytes) -> int:
