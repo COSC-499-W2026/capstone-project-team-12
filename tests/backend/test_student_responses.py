@@ -2,10 +2,13 @@
 
 Student-facing: every /api/v1 route without a role guard that refuses students. That includes
 the /teacher class routes, since a TA can be a student account.
+
+It checks schema field names, not response values.
 """
 
 import importlib
 import pkgutil
+import re
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -47,9 +50,15 @@ FORBIDDEN_WORDS = {
 FORBIDDEN_NAMES = {"location_name", "gps_points", "gps_points_snapshot"}
 
 
+def words(field: str) -> list[str]:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", field)
+    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", spaced)
+    return re.split(r"[^a-z0-9]+", spaced.lower())
+
+
 def gives_location_away(field: str) -> bool:
-    name = field.lower()
-    return name in FORBIDDEN_NAMES or not FORBIDDEN_WORDS.isdisjoint(name.split("_"))
+    parts = words(field)
+    return "_".join(parts) in FORBIDDEN_NAMES or not FORBIDDEN_WORDS.isdisjoint(parts)
 
 
 def api_routes() -> list[APIRoute]:
@@ -184,6 +193,12 @@ def test_only_role_guarded_routes_are_skipped(
         "building_name",
         "floor_number",
         "location_name",
+        "roomNumber",
+        "targetLatitude",
+        "ocrText",
+        "locationName",
+        "gpsPoints",
+        "GPSPoints",
     ],
 )
 def test_a_location_field_is_caught(field: str) -> None:
@@ -192,7 +207,17 @@ def test_a_location_field_is_caught(field: str) -> None:
 
 @pytest.mark.parametrize(
     "field",
-    ["name", "location_id", "locations", "gps_override_available_at", "points_awarded", "trend"],
+    [
+        "name",
+        "location_id",
+        "locations",
+        "gps_override_available_at",
+        "points_awarded",
+        "trend",
+        "locationId",
+        "gpsOverrideAvailableAt",
+        "pointsAwarded",
+    ],
 )
 def test_other_fields_are_not(field: str) -> None:
     assert not gives_location_away(field)
