@@ -253,7 +253,7 @@ class UserStats(Base):
 
 
 class DailyChallenge(Base):
-    """One of three challenges generated per student per Vancouver day."""
+    """One of three challenges generated per student per local app day."""
 
     __tablename__ = "daily_challenges"
     __table_args__ = (

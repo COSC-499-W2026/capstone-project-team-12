@@ -14,7 +14,7 @@ from app.config import get_settings
 from app.models.engagement import UserStats
 
 
-def vancouver_date(now: datetime | None = None) -> date:
+def app_calendar_date(now: datetime | None = None) -> date:
     """Return the calendar date in the configured app timezone."""
     if now is None:
         now = datetime.now(UTC)
@@ -38,7 +38,7 @@ def record_active_day(
 
     The caller must hold the student lock and must commit or roll back.
     """
-    today = vancouver_date(now)
+    today = app_calendar_date(now)
     stats = db.get(UserStats, student_id)
 
     if stats is None:
