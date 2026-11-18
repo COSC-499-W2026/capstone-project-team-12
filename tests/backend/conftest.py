@@ -512,8 +512,7 @@ def replay_route(
             json_body, form = body.get("json_body"), body.get("form")
             response = client.request(method, path, json=json_body, data=form, headers=headers)
             if after_ping is not None and path.endswith("/navigation/ping"):
-                game_id = path.split("/")[4]
-                after_ping(client, token or "", game_id)
+                after_ping(client, token or "", str(game.id))
             return response.status_code, response.json()
 
         def sleep(seconds: float) -> None:
