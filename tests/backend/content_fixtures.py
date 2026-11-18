@@ -4,7 +4,8 @@ points at. Registered in conftest.py through `pytest_plugins`.
 Game tests take their content from these fixtures instead of asking the content interface or
 AudioService for IDs, so they don't depend on how content is stored. A test that starts, resets
 or shuffles a game asks `playable_location_ids` for the language and difficulty it plays, even
-when it doesn't use the IDs, so that there is content to draw.
+when it doesn't use the IDs, so that there is content to draw. A test that needs a deactivated
+location asks `deactivated_location_id` for one instead of making up an id.
 
 The content interface and UploadedAudioService are still stubs, so for now these fixtures hand
 out the stubs' IDs (the same 30 fake locations in every language and difficulty). When the real
@@ -110,3 +111,31 @@ def snapshot_ids(db: Session) -> Callable[[], SnapshotIds]:
         return SnapshotIds(uuid4(), uuid4(), audio.clue_audio_asset_id(uuid4(), db))
 
     return make
+
+
+@pytest.fixture
+def deactivated_location_id() -> Callable[[], UUID]:
+    """make(): the id of a location that a game must treat as deactivated (skipped or refused).
+    For now any id the content stub doesn't serve; once the fixtures create rows, an inactive
+    location."""
+    return uuid4
+
+
+@pytest.fixture
+def committed_snapshot_ids(test_engine: Engine) -> Callable[[], SnapshotIds]:
+    """snapshot_ids for rows committed in their own sessions (see committed_location_ids).
+    For now it commits nothing, like committed_location_ids."""
+    audio = UploadedAudioService()
+
+    def make() -> SnapshotIds:
+        with Session(test_engine) as session:
+            return SnapshotIds(uuid4(), uuid4(), audio.clue_audio_asset_id(uuid4(), session))
+
+    return make
+
+
+@pytest.fixture
+def committed_deactivated_location_id() -> Callable[[], UUID]:
+    """deactivated_location_id for rows committed in their own sessions. For now it commits
+    nothing, like committed_location_ids."""
+    return uuid4

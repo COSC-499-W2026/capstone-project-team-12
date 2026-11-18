@@ -5,13 +5,12 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game.navigation import Ping, PingOutcome, Trend, process_ping
 from app.models.accounts import User
@@ -29,13 +28,14 @@ def north(metres: float, accuracy: float = 5) -> Ping:
 
 
 @pytest.fixture
-def playing(db: Session, navigating_game: Callable[..., Any]) -> Callable[..., Any]:
+def playing(
+    navigating_game: Callable[..., Any], playable_location_ids: Callable[..., list[UUID]]
+) -> Callable[..., Any]:
     """An active game navigating to its first location, which started a minute ago.
 
-    The location is eligible, so it counts as active. Pass location_id for a deactivated one.
+    The location is playable, so it counts as active. Pass location_id for a deactivated one.
     """
-    active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
-    assert active, "needs an active ja/basic location"
+    active = playable_location_ids(Language.JA, Difficulty.BASIC, count=1)
     return partial(navigating_game, NOW, "app.game.navigation", location_id=active[0])
 
 
@@ -156,9 +156,9 @@ def test_pings_are_rate_limited(
 
 
 def test_a_deactivated_location_is_409_and_changes_nothing(
-    db: Session, playing: Callable[..., Any]
+    db: Session, playing: Callable[..., Any], deactivated_location_id: Callable[[], UUID]
 ) -> None:
-    game, row = playing(location_id=uuid4())
+    game, row = playing(location_id=deactivated_location_id())
     before = (
         row.status,
         row.last_ping_at,

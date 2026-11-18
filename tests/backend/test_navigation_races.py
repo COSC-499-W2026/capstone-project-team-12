@@ -4,10 +4,10 @@ The jobs start together (run_together in conftest) and keep their transactions o
 so the row locks overlap. A job given HOLD as its delay starts after the first one holds the lock.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -15,7 +15,6 @@ import pytest
 from sqlalchemy import Engine, delete, select, text
 from sqlalchemy.orm import Session
 
-from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game.arrival import Arrival, confirm_arrival
 from app.game.control import pause_game, quit_game
@@ -33,7 +32,9 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.game import GameSession, SessionLocation
-from app.services.audio import UploadedAudioService
+
+if TYPE_CHECKING:  # pytest_plugins in conftest imports it at run time, so pytest rewrites it
+    from content_fixtures import SnapshotIds
 
 LAT, LNG = 49.9394, -119.3948
 FAR_LAT = 50.0  # well outside every stub entrance
@@ -43,7 +44,9 @@ HOLD = 0.3
 GPS = ArrivalOverride.GPS_UNAVAILABLE
 
 
-def _start(engine: Engine, rows: list[dict[str, Any]]) -> tuple[UUID, UUID]:
+def _start(
+    engine: Engine, rows: list[dict[str, Any]], locations: list[UUID], snapshot: "SnapshotIds"
+) -> tuple[UUID, UUID]:
     with Session(engine) as session:
         user = User(
             email=f"{uuid4().hex[:12]}@example.com",
@@ -61,18 +64,13 @@ def _start(engine: Engine, rows: list[dict[str, Any]]) -> tuple[UUID, UUID]:
         )
         session.add(game)
         session.flush()
-        audio = UploadedAudioService()
-        # a random id counts as deactivated; a confirm needs an eligible location
-        active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, session))
-        assert active, "needs an active ja/basic location"
-        unused = iter(active)
         for position, fields in enumerate(rows, start=1):
             values: dict[str, Any] = {
                 "session_id": game.id,
-                "location_id": uuid4() if "location_id" in fields else next(unused),
+                "location_id": locations[position - 1],
                 "position": position,
-                "clue_id": uuid4(),
-                "audio_asset_id": audio.clue_audio_asset_id(uuid4(), session),
+                "clue_id": snapshot.clue_id,
+                "audio_asset_id": snapshot.audio_asset_id,
                 "accepted_answers_snapshot": ["SCI333"],
                 "gps_points_snapshot": [{"lat": LAT, "lng": LNG}],
                 "radius_snapshot": 30,
@@ -93,13 +91,26 @@ def _cleanup(engine: Engine, user_id: UUID) -> None:
         session.commit()
 
 
-@contextmanager
-def _playing(engine: Engine, rows: list[dict[str, Any]]) -> Any:
-    user_id, game_id = _start(engine, rows)
-    try:
-        yield user_id, game_id
-    finally:
-        _cleanup(engine, user_id)
+@pytest.fixture
+def playing(
+    test_engine: Engine,
+    committed_location_ids: Callable[..., list[UUID]],
+    committed_snapshot_ids: Callable[[], "SnapshotIds"],
+) -> Callable[..., Any]:
+    """playing(rows): a committed ja/basic game with one location per row, as a context manager
+    giving (student id, game id), deleted afterwards. A row without a location_id is at a
+    different playable location, so it counts as active."""
+
+    @contextmanager
+    def play(rows: list[dict[str, Any]]) -> Iterator[tuple[UUID, UUID]]:
+        locations = committed_location_ids(Language.JA, Difficulty.BASIC)
+        user_id, game_id = _start(test_engine, rows, locations, committed_snapshot_ids())
+        try:
+            yield user_id, game_id
+        finally:
+            _cleanup(test_engine, user_id)
+
+    return play
 
 
 def _navigating(**fields: Any) -> dict[str, Any]:
@@ -144,9 +155,9 @@ def _body(arrival: Arrival) -> tuple[Any, ...]:
 
 
 def test_two_confirms_agree_and_record_one_override(
-    test_engine: Engine, run_together: Callable[..., list[Any]]
+    test_engine: Engine, run_together: Callable[..., list[Any]], playing: Callable[..., Any]
 ) -> None:
-    with _playing(test_engine, [_navigating()]) as (student_id, game_id):
+    with playing([_navigating()]) as (student_id, game_id):
         second_started: dict[str, datetime] = {}
 
         def confirm(session: Session) -> Arrival:
@@ -170,9 +181,9 @@ def test_two_confirms_agree_and_record_one_override(
 
 
 def test_a_ping_after_confirm_is_the_wrong_stage(
-    test_engine: Engine, run_together: Callable[..., list[Any]]
+    run_together: Callable[..., list[Any]], playing: Callable[..., Any]
 ) -> None:
-    with _playing(test_engine, [_navigating()]) as (student_id, game_id):
+    with playing([_navigating()]) as (student_id, game_id):
 
         def confirm(session: Session) -> Arrival:
             return confirm_arrival(student_id, game_id, None, 1, session)
@@ -188,9 +199,9 @@ def test_a_ping_after_confirm_is_the_wrong_stage(
 
 
 def test_two_pings_inside_two_seconds_one_is_rate_limited(
-    test_engine: Engine, run_together: Callable[..., list[Any]]
+    run_together: Callable[..., list[Any]], playing: Callable[..., Any]
 ) -> None:
-    with _playing(test_engine, [_navigating(last_ping_at=None)]) as (student_id, game_id):
+    with playing([_navigating(last_ping_at=None)]) as (student_id, game_id):
 
         def ping(session: Session) -> PingOutcome:
             return process_ping(student_id, game_id, Ping(LAT, LNG, 5), session)
@@ -203,9 +214,9 @@ def test_two_pings_inside_two_seconds_one_is_rate_limited(
 
 
 def test_confirm_after_pause_is_not_active(
-    test_engine: Engine, run_together: Callable[..., list[Any]]
+    run_together: Callable[..., list[Any]], playing: Callable[..., Any]
 ) -> None:
-    with _playing(test_engine, [_navigating()]) as (student_id, game_id):
+    with playing([_navigating()]) as (student_id, game_id):
 
         def pause(session: Session) -> Any:
             return pause_game(student_id, game_id, session)
@@ -221,9 +232,9 @@ def test_confirm_after_pause_is_not_active(
 
 @pytest.mark.parametrize("follow", ["confirm", "ping"])
 def test_quit_then_a_play_action_is_not_active(
-    test_engine: Engine, run_together: Callable[..., list[Any]], follow: str
+    run_together: Callable[..., list[Any]], playing: Callable[..., Any], follow: str
 ) -> None:
-    with _playing(test_engine, [_navigating()]) as (student_id, game_id):
+    with playing([_navigating()]) as (student_id, game_id):
 
         def quit(session: Session) -> Any:
             return quit_game(student_id, game_id, session)
@@ -242,9 +253,9 @@ def test_quit_then_a_play_action_is_not_active(
 
 
 def test_a_ping_after_a_shuffle_starts_the_new_row(
-    test_engine: Engine, run_together: Callable[..., list[Any]]
+    test_engine: Engine, run_together: Callable[..., list[Any]], playing: Callable[..., Any]
 ) -> None:
-    with _playing(test_engine, [_navigating(), {"status": LocationStatus.PENDING}]) as ids:
+    with playing([_navigating(), {"status": LocationStatus.PENDING}]) as ids:
         student_id, game_id = ids
 
         def shuffle(session: Session) -> Any:
@@ -261,9 +272,9 @@ def test_a_ping_after_a_shuffle_starts_the_new_row(
 
 
 def test_confirm_after_a_shuffle_is_a_stale_position(
-    test_engine: Engine, run_together: Callable[..., list[Any]]
+    run_together: Callable[..., list[Any]], playing: Callable[..., Any]
 ) -> None:
-    with _playing(test_engine, [_navigating(), {"status": LocationStatus.PENDING}]) as ids:
+    with playing([_navigating(), {"status": LocationStatus.PENDING}]) as ids:
         student_id, game_id = ids
 
         def shuffle(session: Session) -> Any:
@@ -279,17 +290,18 @@ def test_confirm_after_a_shuffle_is_a_stale_position(
 
 
 def test_two_current_location_calls_skip_invalid_rows_once(
-    test_engine: Engine, run_together: Callable[..., list[Any]]
+    test_engine: Engine,
+    run_together: Callable[..., list[Any]],
+    playing: Callable[..., Any],
+    committed_deactivated_location_id: Callable[[], UUID],
 ) -> None:
-    with Session(test_engine) as session:
-        active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, session))
-        assert active, "needs an active ja/basic location"
+    gone = committed_deactivated_location_id
     rows = [
-        _navigating(location_id=uuid4()),
-        {"status": LocationStatus.PENDING, "location_id": uuid4()},
-        {"status": LocationStatus.PENDING, "location_id": active[0]},
+        _navigating(location_id=gone()),
+        {"status": LocationStatus.PENDING, "location_id": gone()},
+        {"status": LocationStatus.PENDING},
     ]
-    with _playing(test_engine, rows) as (student_id, game_id):
+    with playing(rows) as (student_id, game_id):
 
         def current(session: Session) -> CurrentLocation | Any:
             return get_current_location(student_id, game_id, session)
