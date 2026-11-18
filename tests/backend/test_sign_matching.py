@@ -8,7 +8,7 @@ import pytest
 
 from app.config import get_settings
 from app.models.enums import FeedbackCode, PhotoResult
-from app.verification.matching import Candidate, MatchThresholds, TextBox, decide
+from app.verification.matching import Candidate, MatchThresholds, TextBox, better, decide
 
 SPEC_THRESHOLDS = MatchThresholds(match=0.60, unclear=0.45)  # spec, Configuration
 ANSWERS = ["SCI333"]
@@ -182,6 +182,29 @@ def test_equal_results_go_to_the_higher_confidence() -> None:
 def test_no_match_keeps_the_most_confident_room_number() -> None:
     result = decide_spec(("LIB 312", 0.6), ("EXIT", 0.9), ("COM 101", 0.95))
     assert result == (PhotoResult.NO_MATCH, Candidate("COM101", 0.95))
+
+
+# better(): the two reads of one photo, ranked as decide ranks the candidates of one read.
+@pytest.mark.parametrize(
+    ("first", "second", "winner"),
+    [
+        (("SCI 334", 0.9), ("SCI 333", 0.7), "second"),  # MATCH over UNCLEAR
+        (("SCI 333", 0.7), ("SCI 334", 0.9), "first"),
+        (("SCI 334", 0.9), ("SCI 333", 0.5), "second"),  # the answer before one character away
+        (("333", 0.9), ("SCI 334", 0.5), "second"),  # a room number before a number alone
+        (("SCI 334", 0.5), ("SCX 333", 0.8), "second"),  # then the higher confidence
+        (("LIB 312", 0.9), ("", 0.9), "first"),  # a candidate before no candidate
+        (("SCI 334", 0.8), ("SCX 333", 0.8), "first"),  # equal: the first read
+    ],
+)
+def test_the_better_of_two_reads_is_kept(
+    first: tuple[str, float], second: tuple[str, float], winner: str
+) -> None:
+    decisions = {
+        "first": decide(boxes(first), ANSWERS, SPEC_THRESHOLDS),
+        "second": decide(boxes(second), ANSWERS, SPEC_THRESHOLDS),
+    }
+    assert better(decisions["first"], decisions["second"], ANSWERS) is decisions[winner]
 
 
 @pytest.mark.parametrize(
