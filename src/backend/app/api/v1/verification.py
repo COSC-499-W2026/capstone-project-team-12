@@ -4,11 +4,12 @@ The router calls both components in turn, so neither imports the other: game loc
 location (`lock_photo_location`), verification reads the photo and decides
 (`verify_photo`), and game applies the result (`finish_photo_location`).
 
-A first slice of the spec's pipeline (A10 plan, demo cut): everything runs in one transaction,
-with the game locked while OCR reads the photo, so one game's uploads run one at a time. Still to
-come with the photo_attempts table: the attempt records, the Idempotency-Key and its replays,
-committing the attempt before OCR, keeping the photo for the OCR evaluation, the OCR queue
-(503 OCR_BUSY) and the photo rate limit.
+A first slice of the spec's pipeline (A10 plan, demo cut): one transaction, so OCR reads the photo
+while the user, game and location rows are locked. Still to come with photo_attempts: attempt
+records, the Idempotency-Key, committing before OCR (the two-phase flow), the OCR queue (503
+OCR_BUSY) and the rate limit. Costs until then: (1) unlimited concurrent reads, each holding a
+pooled connection (about 15 at once exhaust the pool); (2) the user row stays locked, so a refresh
+or login waits; (3) a missing feedback phrase raises 404 after OCR and rolls the result back.
 """
 
 from http import HTTPStatus
@@ -16,7 +17,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
@@ -62,19 +63,16 @@ class PhotoResponse(BaseModel):
     """A photo's result. Never the room number, the accepted answers or the OCR text."""
 
     result: PhotoResult
-    # this photo's attempt number at the location, and the attempts it has left
-    attempt: int
+    attempt: int = Field(description="This photo's attempt number at the location.")
     attempts_remaining: int
-    # the phrases to play, in order
-    feedback: list[FeedbackResponse]
-    # set once the location is finished (completed or failed)
+    feedback: list[FeedbackResponse] = Field(description="The phrases to play, in order.")
     location_result: LocationResultResponse | None
     engagement: EngagementResponse | None
-    # the new current location, once this one is finished; null while it is still in Stage 2
-    # and once the game is completed
-    next: NextLocationResponse | None
-    # the game's summary (as GET /games/{id}/summary) once this photo completed the game; else null
-    summary: GameSummaryResponse | None
+    next: NextLocationResponse | None = Field(description="The location the game moved on to.")
+    summary: GameSummaryResponse | None = Field(
+        description="The game summary (as GET /games/{id}/summary) once this photo completed "
+        "the game; else null."
+    )
 
 
 @verification_router.post(

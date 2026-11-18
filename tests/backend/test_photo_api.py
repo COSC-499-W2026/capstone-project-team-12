@@ -147,7 +147,7 @@ def test_a_photo_of_the_right_sign_completes_the_location(
     assert body["engagement"]["total_points"] == 100
     assert body["next"]["position"] == 2 and body["next"]["stage"] == "navigation"
     assert body["next"]["clue_audio_url"] and body["summary"] is None
-    assert "SCI333" not in response.text and "SCI 333" not in response.text  # rule 1
+    assert "SCI333" not in response.text and "SCI 333" not in response.text
     assert len(reads) == 1
     db.expire_all()
     first = location(game, 1, db)
@@ -177,8 +177,10 @@ def test_six_photos_of_another_room_fail_the_location(
         assert codes(body) == ["VERIFY_NO_MATCH"]
         assert body["location_result"] is body["engagement"] is body["next"] is None
         assert body["summary"] is None
-    body = upload(game).json()
+    response = upload(game)
+    body = response.json()
 
+    assert "LIB312" not in response.text and "LIB 312" not in response.text
     assert (body["result"], body["attempt"], body["attempts_remaining"]) == ("no_match", 6, 0)
     assert codes(body) == ["VERIFY_EXHAUSTED"]
     assert body["location_result"] == {"status": "failed", "points_awarded": 0}
