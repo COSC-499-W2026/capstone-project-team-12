@@ -78,6 +78,64 @@ def unlock_completion_badges(
     return tuple(sorted(unlocked))
 
 
+def unlock_streak_badges(
+    student_id: UUID,
+    streak_days: int,
+    db: Session,
+) -> tuple[str, ...]:
+    """Unlock eligible global streak achievements once per student.
+
+    Streak achievements are stored with language=None so they apply
+    across all languages.
+
+    Called while the student's row lock is held. Does not commit;
+    the caller owns the transaction.
+    """
+    definitions = db.scalars(
+        select(Achievement).where(
+            Achievement.is_active.is_(True),
+            Achievement.category == "streak",
+        )
+    ).all()
+
+    unlocked: list[str] = []
+
+    for achievement in definitions:
+        condition = achievement.unlock_condition
+
+        if condition.get("type") != "streak_days":
+            continue
+
+        threshold = condition.get("threshold")
+        if type(threshold) is not int or threshold < 1:
+            continue
+
+        if streak_days < threshold:
+            continue
+
+        existing = db.scalar(
+            select(UserAchievement.id).where(
+                UserAchievement.user_id == student_id,
+                UserAchievement.achievement_id == achievement.id,
+                UserAchievement.language.is_(None),
+            )
+        )
+        if existing is not None:
+            continue
+
+        db.add(
+            UserAchievement(
+                user_id=student_id,
+                achievement_id=achievement.id,
+                language=None,
+            )
+        )
+        unlocked.append(achievement.achievement_key)
+
+    db.flush()
+    return tuple(sorted(unlocked))
+
+
 @dataclass(frozen=True)
 class AchievementProgress:
     """Progress toward a measurable achievement."""

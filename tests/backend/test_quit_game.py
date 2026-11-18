@@ -12,7 +12,6 @@ import pytest
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
-from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game.control import quit_game
 from app.game.draw import draw_locations
@@ -166,10 +165,11 @@ def test_the_next_game_today_starts_with_the_unplayed_locations(
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
+    playable_location_ids: Callable[..., list[UUID]],
     state: SessionState,
 ) -> None:
     # quit is what A11's carry-over looks for; a reset or an expiry wouldn't count
-    eligible: list[UUID] = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
+    eligible = playable_location_ids(Language.JA, Difficulty.BASIC)
     student = make_user()
     now = datetime.now(UTC)
     game = make_game_session(
