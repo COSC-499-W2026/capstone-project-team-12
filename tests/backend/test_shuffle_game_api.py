@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from game_fields import GAME_FIELDS
 from httpx2 import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -29,21 +30,6 @@ from app.models.enums import (
 )
 from app.models.game import GameSession, SessionLocation
 from app.services.audio import MediaNotFoundError
-
-GAME_FIELDS = {
-    "session_id",
-    "state",
-    "end_reason",
-    "class_id",
-    "language",
-    "difficulty",
-    "current_position",
-    "shuffles_used",
-    "total_score",
-    "started_at",
-    "paused_at",
-    "locations",
-}
 
 
 @pytest.fixture
