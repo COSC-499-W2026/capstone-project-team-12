@@ -1,12 +1,15 @@
 """Tests for API rate-limiting. An autouse fixture in conftest.py resets the limiter per test."""
 
+from collections.abc import Callable
 from http import HTTPStatus
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.errors import ErrorCode
+from app.models.accounts import User
 
 
 def test_global_rate_limit_is_shared_by_all_routes(client: TestClient) -> None:
@@ -69,3 +72,24 @@ def test_register_is_limited_per_ip(client: TestClient, monkeypatch: pytest.Monk
     assert response.json()["error"]["code"] == ErrorCode.RATE_LIMITED
     assert "Retry-After" in response.headers
     assert other_ip.post(url, json={}).status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+def test_photo_uploads_are_limited_per_user(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    make_user: Callable[..., User],
+    auth_headers: Callable[[User], dict[str, str]],
+) -> None:
+    monkeypatch.setattr(get_settings(), "photo_uploads_per_user", 3)
+    alice, bob = auth_headers(make_user()), auth_headers(make_user())
+    url = f"/api/v1/games/{uuid4()}/verification/photo"
+    photo = {"photo": ("sign.jpg", b"not checked", "image/jpeg")}
+    for _ in range(3):
+        assert client.post(url, files=photo, headers=alice).status_code == 404
+
+    response = client.post(url, files=photo, headers=alice)
+
+    assert response.status_code == HTTPStatus.TOO_MANY_REQUESTS
+    assert response.json()["error"]["code"] == ErrorCode.RATE_LIMITED
+    assert "Retry-After" in response.headers
+    assert client.post(url, files=photo, headers=bob).status_code == 404
