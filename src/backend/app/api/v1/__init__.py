@@ -16,6 +16,7 @@ from app.api.v1.email_links import email_links_router
 from app.api.v1.games import games_router
 from app.api.v1.me import me_router
 from app.api.v1.media import media_router
+from app.api.v1.verification import verification_router
 from app.errors import error_responses
 
 # every route can fail validation; this replaces FastAPI's default 422 schema with ours
@@ -30,3 +31,4 @@ api_router.include_router(email_links_router)
 api_router.include_router(games_router)
 api_router.include_router(me_router)
 api_router.include_router(media_router)
+api_router.include_router(verification_router)
