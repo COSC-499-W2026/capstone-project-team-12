@@ -34,6 +34,8 @@ export async function renderClasses() {
             event.preventDefault();
             busy(create, async () => {
               const result = await api.post("/teacher/classes", { name: name.value.trim(), semester: semester.value.trim(), language: language.value });
+              // the response has no code id, so this code can be shown but not deactivated
+              rememberCode(result.class_id, { id: null, code: result.access_code, expires_at: null, active: true });
               created.replaceChildren(
                 h("div", { class: "card stack" },
                   h("h2", {}, `${result.name} created`),
@@ -57,6 +59,61 @@ export async function renderClasses() {
   );
 }
 
+// The API can't list a class's codes yet, so the page remembers the ones made in this browser
+const CODES_KEY = "hunt-demo-access-codes";
+
+function savedCodes() {
+  try {
+    return JSON.parse(localStorage.getItem(CODES_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveCodes(all) {
+  try {
+    localStorage.setItem(CODES_KEY, JSON.stringify(all));
+  } catch {
+    // kept until the page reloads
+  }
+}
+
+function rememberCode(classId, code) {
+  const all = savedCodes();
+  all[classId] = [code, ...(all[classId] || [])];
+  saveCodes(all);
+}
+
+function markInactive(classId, codeId) {
+  const all = savedCodes();
+  for (const code of all[classId] || []) if (code.id === codeId) code.active = false;
+  saveCodes(all);
+}
+
+// The newest code large on screen, the others below; each active one with Deactivate
+function codeList(classId, redraw) {
+  const codes = savedCodes()[classId] || [];
+  if (!codes.length) return [h("p", { class: "muted" }, "No codes made in this browser yet.")];
+  return codes.map((code, i) => {
+    const deactivate = code.id && code.active ? h("button", { class: "btn ghost small" }, "Deactivate") : null;
+    deactivate?.addEventListener("click", () => busy(deactivate, async () => {
+      await api.patch(`/teacher/access-codes/${code.id}`);
+      markInactive(classId, code.id);
+      toast(`${formatCode(code.code)} no longer works for new students`);
+      redraw();
+    }));
+    const note = !code.active
+      ? h("span", { class: "pill bad" }, "Deactivated")
+      : code.id
+        ? h("span", { class: "muted" }, code.expires_at ? `Expires ${formatDate(code.expires_at)}` : "")
+        : h("span", { class: "muted" }, "Made with the class; can't be deactivated here yet");
+    return h("div", { class: "stack" },
+      i === 0 && code.active ? h("div", { class: "code" }, formatCode(code.code)) : h("b", {}, formatCode(code.code)),
+      h("div", { class: "row", style: "justify-content: space-between" }, note, deactivate),
+    );
+  });
+}
+
 // Codes are stored as 8 characters and shown as K7PM-3QXD
 function formatCode(code) {
   const plain = code.replace("-", "");
@@ -74,22 +131,15 @@ export async function renderClass(id) {
   }
   const owner = info.staff_role === "owner";
 
-  const codeArea = h("div", {});
+  const codeArea = h("div", { class: "stack" });
+  const drawCodes = () => codeArea.replaceChildren(...codeList(id, drawCodes));
   const newCode = h("button", { class: "btn" }, "Generate access code");
   newCode.addEventListener("click", () => busy(newCode, async () => {
     const code = await api.post(`/teacher/classes/${id}/access-codes`, {});
-    const deactivate = h("button", { class: "btn ghost" }, "Deactivate code");
-    deactivate.addEventListener("click", () => busy(deactivate, async () => {
-      await api.patch(`/teacher/access-codes/${code.id}`);
-      toast("Code deactivated");
-      codeArea.replaceChildren(h("p", { class: "muted" }, `${formatCode(code.code)} no longer works for new students.`));
-    }));
-    codeArea.replaceChildren(
-      h("div", { class: "code" }, formatCode(code.code)),
-      h("p", { class: "muted" }, `Expires ${formatDate(code.expires_at)}`),
-      deactivate,
-    );
+    rememberCode(id, { id: code.id, code: code.code, expires_at: code.expires_at, active: true });
+    drawCodes();
   }));
+  drawCodes();
 
   const toggle = h("input", { type: "checkbox", checked: info.leaderboard_enabled, disabled: !owner });
   toggle.addEventListener("change", () => busy(null, async () => {
