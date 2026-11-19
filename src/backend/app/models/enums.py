@@ -146,3 +146,22 @@ class EmailStatus(StrEnum):
     PENDING = "pending"
     SENT = "sent"
     FAILED = "failed"
+
+
+class AuditAction(StrEnum):
+    """Administrative actions recorded in audit_log."""
+
+    CREATE_USER = "user_created"
+    DEACTIVATE_USER = "user_deactivated"
+    REACTIVATE_USER = "user_reactivated"
+    UPDATE_USER = "user_updated"
+    PERMISSIONS_CHANGED = "permissions_changed"
+    TRANSFER_CLASS = "class_transferred"
+
+
+class AuditResult(StrEnum):
+    """How an audited action ended."""
+
+    SUCCESS = "success"
+    FAILURE = "failure"  # attempted, but an error stopped it
+    DENIED = "denied"  # refused because the actor lacked permission
