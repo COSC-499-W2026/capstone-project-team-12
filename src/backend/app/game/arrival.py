@@ -12,7 +12,7 @@ from app.errors import AppError, ErrorCode
 from app.game.control import lock_open_game, session_not_active
 from app.game.current_location import CurrentLocation, Stage, describe
 from app.game.navigation import NavigationRules, is_weak, override_available_at
-from app.game.progress import current_row
+from app.game.progress import current_row, game_details, inactive_location, wrong_stage
 from app.models.enums import (
     ArrivalOverride,
     FeedbackCode,
@@ -53,13 +53,9 @@ def confirm_arrival(
     if row.status == LocationStatus.VERIFYING:
         return _arrival(game, describe(game, row, db), db)
     if row.status != LocationStatus.NAVIGATING:
-        raise AppError(
-            ErrorCode.INVALID_STAGE,
-            "The current location isn't in Stage 1",
-            details=[{"session_id": str(game.id), "position": row.position, "status": row.status}],
-        )
+        raise wrong_stage(game, row, 1)
     if not content.is_location_active(row.location_id, db):
-        raise _inactive(game)
+        raise inactive_location(game)
     if game.state != SessionState.ACTIVE:
         raise session_not_active(game, "Resume the game before confirming arrival")
     now = datetime.now(UTC)
@@ -118,31 +114,10 @@ def _arrival(game: GameSession, location: CurrentLocation, db: Session) -> Arriv
     return Arrival(location, code, get_audio_service().feedback_audio_url(code, language, db))
 
 
-def _inactive(game: GameSession) -> AppError:
-    """409 STATE_CHANGED: the location was deactivated, and nothing is written."""
-    return AppError(
-        ErrorCode.STATE_CHANGED,
-        "This location is no longer active",
-        details=[
-            {
-                "session_id": str(game.id),
-                "state": game.state,
-                "current_position": game.current_position,
-            }
-        ],
-    )
-
-
 def _moved_on(game: GameSession) -> AppError:
     """409 STATE_CHANGED: the app's position is out of date (e.g. a very late retry)."""
     return AppError(
         ErrorCode.STATE_CHANGED,
         "The game has moved on since this location",
-        details=[
-            {
-                "session_id": str(game.id),
-                "state": game.state,
-                "current_position": game.current_position,
-            }
-        ],
+        details=[game_details(game)],
     )
