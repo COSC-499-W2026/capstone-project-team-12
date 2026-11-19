@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta, tzinfo
 from itertools import count
 from pathlib import Path
-from typing import Any, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar
 from urllib.parse import parse_qs, unquote, urlsplit
 from uuid import UUID, uuid4
 
@@ -43,6 +43,9 @@ from app.models.enums import (
 from app.models.game import GameSession, SessionLocation
 from app.services.limiter import limiter
 from app.services.storage import MEDIA_URL_PREFIX, get_storage_service
+
+if TYPE_CHECKING:  # only for the annotation, so pytest_plugins below still imports it first
+    from content_fixtures import SnapshotIds
 
 # playable content for game tests; importing content_fixtures here would skip assert rewriting
 pytest_plugins = ["content_fixtures"]
@@ -418,7 +421,7 @@ def open_game(make_game_session: Callable[..., GameSession]) -> Callable[..., Ga
 
 @pytest.fixture
 def make_session_location(
-    db: Session, snapshot_ids: Callable[[GameSession], Any]
+    db: Session, snapshot_ids: Callable[[GameSession, UUID | None], "SnapshotIds"]
 ) -> Callable[..., SessionLocation]:
     """A pending location in the game with a valid content snapshot (IDs from snapshot_ids)."""
 
@@ -426,7 +429,7 @@ def make_session_location(
         values: dict[str, Any] = {
             "session_id": game.id,
             "position": position,
-            **snapshot_ids(game)._asdict(),
+            **snapshot_ids(game, fields.get("location_id"))._asdict(),
             "accepted_answers_snapshot": ["SCI333"],
             "gps_points_snapshot": [{"lat": 49.9394, "lng": -119.3948}],
             "radius_snapshot": 30,
@@ -539,21 +542,27 @@ def replay_route(
     return run
 
 
+def location_row(room_number: str, /, **fields: Any) -> Location:
+    """An active location with that room number, its answer and one entrance, not yet added
+    (make_location adds one to `db`; content_fixtures also commits some). `fields` win, a
+    `room_number` among them too."""
+    values: dict[str, Any] = {
+        "name": f"Test room {room_number}",
+        "building_name": "Test Building",
+        "room_number": room_number,
+        "accepted_answers": [room_number.replace(" ", "")],
+        "gps_points": [{"lat": 49.9394, "lng": -119.3948}],
+        "gps_radius_meters": get_settings().gps_radius_meters,
+    }
+    return Location(**(values | fields))
+
+
 @pytest.fixture
 def make_location(db: Session) -> Callable[..., Location]:
-    """An active location with a new room number, its answer and one entrance."""
+    """An active location with a new "TST" room number (see location_row), added to `db`."""
 
     def make(**fields: Any) -> Location:
-        room_number = f"TST {next(_room_numbers)}"
-        values: dict[str, Any] = {
-            "name": f"Test room {room_number}",
-            "building_name": "Test Building",
-            "room_number": room_number,
-            "accepted_answers": [room_number.replace(" ", "")],
-            "gps_points": [{"lat": 49.9394, "lng": -119.3948}],
-            "gps_radius_meters": get_settings().gps_radius_meters,
-        }
-        return _add(db, Location(**(values | fields)))
+        return _add(db, location_row(f"TST {next(_room_numbers)}", **fields))
 
     return make
 
