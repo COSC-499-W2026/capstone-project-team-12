@@ -16,9 +16,9 @@ from app.engagement.interface import (
     app_calendar_date,
     challenge_expiry,
     ensure_daily_challenges,
-    get_active_class_ids,
     get_and_report_streak,
     get_language_engagement_stats,
+    list_active_classes,
     list_unlocked_achievements,
 )
 from app.errors import AppError, ErrorCode, error_responses
@@ -36,6 +36,17 @@ from app.models.enums import (
 me_router = APIRouter(prefix="/me", tags=["me"])
 
 
+class ProfileClassResponse(BaseModel):
+    """A class the student is actively enrolled in."""
+
+    id: UUID
+    name: str = Field(description='The class name, e.g. "JAPN 101 - Fall 2026".')
+    language: Language = Field(description="The class's target language.")
+    joined_at: datetime = Field(
+        description="When the student first joined the class. Rejoining doesn't change it."
+    )
+
+
 class ProfileResponse(BaseModel):
     """The user's profile and the settings of their app."""
 
@@ -43,11 +54,13 @@ class ProfileResponse(BaseModel):
     username: str
     email: str
     role: UserRole
-    classes: list[UUID] = Field(
+    classes: list[ProfileClassResponse] = Field(
         description=(
-            "The classes the student is actively enrolled in, newest first by the date they first "
-            "joined each one. A class they left and rejoined keeps its original join date. Always "
-            "empty for staff and admins: classes a teacher teaches aren't listed here."
+            "The classes the student is actively enrolled in, for the class switcher, newest "
+            "first by the date they first joined each one. A class they left and rejoined keeps "
+            "its original join date. Classes they left, were removed from or that were archived "
+            "aren't listed. Always empty for staff and admins: classes a teacher teaches aren't "
+            "listed here."
         )
     )
     current_class_id: UUID | None = Field(
@@ -80,14 +93,14 @@ class UpdateProfileRequest(BaseModel):
 
 def _profile(user: User, db: Session) -> ProfileResponse:
     # one read, so current_class_id is always one of classes
-    active = get_active_class_ids(user.id, db)
+    active = list_active_classes(user.id, db)
     return ProfileResponse(
         id=user.id,
         username=user.username,
         email=user.email,
         role=user.role,
-        classes=active,
-        current_class_id=current_class_id(user, db, active),
+        classes=[ProfileClassResponse.model_validate(c, from_attributes=True) for c in active],
+        current_class_id=current_class_id(user, db, [c.id for c in active]),
         preferred_language=user.preferred_language,
     )
 
@@ -138,7 +151,10 @@ def update_profile(
     summary="Get the current user's profile details.",
     description=(
         "The signed-in user's account details, their active classes and the settings of their "
-        "app. Staff and admins have no enrolments, so their classes list is empty. Admins get "
+        "app. Each class has its id, name, target language and the date the student first "
+        "joined it, newest first, so the app can show a class switcher; current_class_id is one "
+        "of them, or null for Practice. Staff and admins have no enrolments, so their classes "
+        "list is empty. Admins get "
         "their profile here, but they don't play, so PATCH /me/profile refuses them with 403 "
         "FORBIDDEN_ROLE."
     ),
