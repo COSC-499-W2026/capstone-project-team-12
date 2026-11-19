@@ -179,7 +179,10 @@ export async function renderClass(id) {
     h("div", {}, h("h2", {}, "Leaderboard"), boardArea),
   );
 
-  api.get(`/teacher/classes/${id}/analytics`).then((a) => analyticsArea.replaceChildren(analyticsView(a)), (error) => analyticsArea.replaceChildren(errorLine(error)));
+  Promise.all([api.get(`/teacher/classes/${id}/analytics`), locationNames()]).then(
+    ([a, names]) => analyticsArea.replaceChildren(analyticsView(a, names)),
+    (error) => analyticsArea.replaceChildren(errorLine(error)),
+  );
   api.get(`/teacher/classes/${id}/students`).then((s) => studentsArea.replaceChildren(studentsView(s)), (error) => studentsArea.replaceChildren(errorLine(error)));
   api.get(`/classes/${id}/leaderboard?page_size=50`).then((b) => boardArea.replaceChildren(leaderboardTable(b.items)), (error) => boardArea.replaceChildren(errorLine(error)));
 }
@@ -192,7 +195,18 @@ function seconds(value) {
   return value === null || value === undefined ? "—" : `${Math.round(value / 60)} min`;
 }
 
-function analyticsView(a) {
+// The analytics label is "Location {position}", which repeats across rooms; staff may read the
+// locations, so label each row by its room instead. Falls back to the API label if that fails.
+async function locationNames() {
+  try {
+    const locations = await api.get("/content/locations");
+    return new Map(locations.map((l) => [l.id, l.room_number || l.name]));
+  } catch {
+    return new Map();
+  }
+}
+
+function analyticsView(a, names) {
   const t = a.class_stats;
   return h("div", { class: "stack" },
     h("div", { class: "grid2" },
@@ -206,7 +220,7 @@ function analyticsView(a) {
         h("thead", {}, h("tr", {}, ["Location", "Finished", "Completed", "Failed", "Success", "Photos", "Avg time", "GPS overrides", "Flagged"].map((c) => h("th", {}, c)))),
         h("tbody", {},
           a.locations.map((l) =>
-            h("tr", {}, [l.label, l.finished, l.completed, l.failed, l.finished ? percent(l.success_rate) : "—", l.photo_attempts, seconds(l.average_time_seconds), l.gps_overrides, l.flagged_results].map((v) => h("td", {}, v))),
+            h("tr", {}, [names.get(l.location_id) || l.label, l.finished, l.completed, l.failed, l.finished ? percent(l.success_rate) : "—", l.photo_attempts, seconds(l.average_time_seconds), l.gps_overrides, l.flagged_results].map((v) => h("td", {}, v))),
           ),
         ),
       ),
