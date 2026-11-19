@@ -17,9 +17,10 @@ export function h(tag, props = {}, ...children) {
   return el;
 }
 
+// Lists are flattened and empty values (false, null) skipped, as in h()
 export function mount(...children) {
   const app = document.getElementById("app");
-  app.replaceChildren(...children);
+  app.replaceChildren(...children.flat().filter((child) => child !== null && child !== undefined && child !== false));
   window.scrollTo(0, 0);
 }
 
