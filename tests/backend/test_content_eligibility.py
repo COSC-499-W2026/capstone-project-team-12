@@ -105,10 +105,11 @@ def test_an_ineligible_location_is_neither_eligible_nor_snapshotted(
         location_snapshot(location_id, *FR_2, db)
 
 
-@pytest.mark.parametrize("difficulty", Difficulty)
 def test_a_language_missing_a_feedback_phrase_has_no_eligible_locations(
-    db: Session, drawable_clue: Callable[..., Clue], difficulty: Difficulty
+    db: Session, drawable_clue: Callable[..., Clue]
 ) -> None:
+    # one difficulty: the phrase check comes before difficulty matters
+    difficulty = Difficulty.ADVANCING
     korean = drawable_clue(Language.KO, difficulty).location_id
     japanese = drawable_clue(Language.JA, difficulty).location_id
     assert korean in eligible_location_ids(Language.KO, difficulty, db)

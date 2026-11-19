@@ -52,12 +52,6 @@ class SnapshotIds(NamedTuple):
     audio_asset_id: UUID
 
 
-def _missing_phrases(language: Language, db: Session) -> list[FeedbackCode]:
-    query = select(FeedbackAudio.code).where(FeedbackAudio.language == language)
-    recorded = set(db.scalars(query))
-    return [code for code in FeedbackCode if code not in recorded]
-
-
 def _clue_ids(
     location_ids: list[UUID], language: Language, difficulty: Difficulty, session: Session
 ) -> list[UUID]:
@@ -193,8 +187,9 @@ class _Content:
         return location.id
 
     def _add_phrases(self, language: Language, session: Session) -> None:
-        missing = _missing_phrases(language, session)
-        if self._db is not None and len(_missing_phrases(language, self._db)) < len(missing):
+        missing_in = get_audio_service().missing_feedback_codes  # the rule game and coverage use
+        missing = missing_in(session)[language]
+        if self._db is not None and len(missing_in(self._db)[language]) < len(missing):
             pytest.fail(
                 f"the `db` fixture already holds {language} feedback phrases that only it can "
                 "see, so committing them too would wait on its uncommitted rows. Use another "
