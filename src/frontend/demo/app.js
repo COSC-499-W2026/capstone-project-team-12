@@ -251,11 +251,34 @@ function challengeLabel(key) {
   return `Complete ${count} ${kind}location${count === "1" ? "" : "s"}`;
 }
 
+// Achievement names and conditions from the spec (Achievements)
+const BADGES = {
+  first_step: ["First Step", "Complete 1 location"],
+  starter: ["Starter", "Complete 5 locations"],
+  explorer: ["Explorer", "Complete 20 locations"],
+  campus_master: ["Campus Master", "Complete every playable location in this language"],
+  week_warrior: ["Week Warrior", "7-day streak"],
+  challenge_master: ["Challenge Master", "Complete 10 Challenging locations"],
+  perfect_session: ["Perfect Session", "Complete all 5 locations of a game, none failed or skipped"],
+};
+
+function badgeLabel(key) {
+  return BADGES[key] || [key.split("_").map((w) => w[0].toUpperCase() + w.slice(1)).join(" "), ""];
+}
+
 export function badgesCard(badges, title) {
   return h("div", { class: "card" },
     h("h2", {}, title),
     badges.length
-      ? h("div", { class: "row" }, badges.map((b) => h("span", { class: "pill ok", title: formatDate(b.unlocked_at) }, b.achievement_key)))
+      ? h("div", { class: "stack" },
+          badges.map((b) => {
+            const [name, condition] = badgeLabel(b.achievement_key);
+            return h("div", { class: "row", style: "justify-content: space-between" },
+              h("span", { class: "pill ok" }, name),
+              h("span", { class: "muted" }, condition || formatDate(b.unlocked_at)),
+            );
+          }),
+        )
       : h("p", { class: "muted" }, "No badges yet"),
   );
 }
