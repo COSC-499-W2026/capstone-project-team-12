@@ -70,6 +70,10 @@ def test_photo_pixel_limit_defaults_to_25_megapixels(monkeypatch: pytest.MonkeyP
     assert Settings(_env_file=None).max_photo_megapixels == 12
 
 
+def test_expire_sessions_batch_cap_defaults_to_20() -> None:
+    assert Settings(_env_file=None).expire_sessions_max_batches == 20
+
+
 @pytest.mark.parametrize(
     "variable",
     [
