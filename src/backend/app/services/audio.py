@@ -16,11 +16,11 @@ Content counts a language without them as having no eligible locations, so every
 with all its phrases in place. `feedback_audio_url` can then only fail if a phrase is removed
 while a game is in progress.
 
-UploadedAudioService is a stub: the audio tables do not exist yet, so it ignores `db`. Every clue
-has a recording, with a fixed ID per clue, and every feedback phrase exists. The stub stores
-nothing: IDs and storage keys are worked out from the secret key, so they survive a restart, and
-an ID that `clue_audio_asset_id` did not hand out raises `MediaNotFoundError`. The real version
-will read `audio_assets` and `feedback_audio` through `db`; the signatures will not change.
+UploadedAudioService reads the feedback phrases from `feedback_audio` through `db`. Its clue
+recordings are still a stub that ignores `db`: every clue has a recording, with a fixed ID per
+clue. The stub stores nothing: IDs and storage keys are worked out from the secret key, so they
+survive a restart, and an ID that `clue_audio_asset_id` did not hand out raises
+`MediaNotFoundError`. The real version will read `audio_assets`; the signatures will not change.
 Every method only reads: it never commits, rolls back or explicitly flushes the caller's session.
 """
 
@@ -31,9 +31,11 @@ from functools import lru_cache
 from typing import Protocol
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import AudioServiceType, get_settings
+from app.models.content import FeedbackAudio
 from app.models.enums import FeedbackCode, Language
 
 # Raised when no recording exists; re-exported because callers of AudioService catch it here.
@@ -79,7 +81,8 @@ def _stub_key(*parts: object) -> str:
 
 
 class UploadedAudioService:
-    """`uploaded`: a clue uses its primary uploaded recording (a stub, see the module docstring).
+    """`uploaded`: a clue uses its primary uploaded recording (still a stub, see the module
+    docstring), and a feedback phrase its uploaded file.
 
     Not a subclass of `AudioService`, so a missing method fails instead of inheriting the
     Protocol's empty body; mypy checks the match through `_IMPLEMENTATIONS`.
@@ -97,11 +100,18 @@ class UploadedAudioService:
         return get_storage_service().signed_url(_stub_key("clue", audio_asset_id))
 
     def feedback_audio_url(self, code: FeedbackCode, language: Language, db: Session) -> str:
-        return get_storage_service().signed_url(_stub_key("feedback", code, language))
+        file_path = db.scalar(
+            select(FeedbackAudio.file_path).where(
+                FeedbackAudio.code == code, FeedbackAudio.language == language
+            )
+        )
+        if file_path is None:
+            raise MediaNotFoundError
+        return get_storage_service().signed_url(file_path)
 
     def has_all_feedback_phrases(self, language: Language, db: Session) -> bool:
-        # The real version compares the language's `feedback_audio` rows with `FeedbackCode`.
-        return True
+        recorded = db.scalars(select(FeedbackAudio.code).where(FeedbackAudio.language == language))
+        return set(FeedbackCode) <= set(recorded)
 
 
 _IMPLEMENTATIONS: dict[AudioServiceType, Callable[[], AudioService]] = {

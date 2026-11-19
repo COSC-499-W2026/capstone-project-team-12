@@ -381,8 +381,9 @@ def test_reset_holds_the_students_lock_until_the_transaction_ends(
 ) -> None:
     """A start or a class switch takes the student's lock first, so a reset has to take it too,
     in the same order (the student, then the game), or the two could deadlock. The setup
-    commits, unlike the other tests, so the lock is visible to another connection."""
-    committed_location_ids(Language.JA, Difficulty.BASIC)
+    commits, unlike the other tests, so the lock is visible to another connection. It plays
+    Spanish because this file's `db` content is Japanese (see committed_location_ids)."""
+    committed_location_ids(Language.ES, Difficulty.BASIC)
     student_id = game_id = None
     holder: Session | None = None
     try:
@@ -396,7 +397,7 @@ def test_reset_holds_the_students_lock_until_the_transaction_ends(
             setup.flush()
             game = GameSession(
                 student_id=student.id,
-                target_language=Language.JA,
+                target_language=Language.ES,
                 difficulty=Difficulty.BASIC,
                 last_activity_at=datetime.now(UTC),
             )
