@@ -197,7 +197,7 @@ function analyticsView(a) {
   return h("div", { class: "stack" },
     h("div", { class: "grid2" },
       h("div", { class: "stat" }, h("span", { class: "muted" }, "Locations finished"), h("b", {}, t.finished)),
-      h("div", { class: "stat" }, h("span", { class: "muted" }, "Success rate"), h("b", {}, percent(t.success_rate))),
+      h("div", { class: "stat" }, h("span", { class: "muted" }, "Success rate"), h("b", {}, t.finished ? percent(t.success_rate) : "—")),
       h("div", { class: "stat" }, h("span", { class: "muted" }, "Photo attempts"), h("b", {}, t.photo_attempts)),
       h("div", { class: "stat" }, h("span", { class: "muted" }, "Average time"), h("b", {}, seconds(t.average_time_seconds))),
     ),
@@ -206,11 +206,11 @@ function analyticsView(a) {
         h("thead", {}, h("tr", {}, ["Location", "Finished", "Completed", "Failed", "Success", "Photos", "Avg time", "GPS overrides", "Flagged"].map((c) => h("th", {}, c)))),
         h("tbody", {},
           a.locations.map((l) =>
-            h("tr", {}, [l.label, l.finished, l.completed, l.failed, percent(l.success_rate), l.photo_attempts, seconds(l.average_time_seconds), l.gps_overrides, l.flagged_results].map((v) => h("td", {}, v))),
+            h("tr", {}, [l.label, l.finished, l.completed, l.failed, l.finished ? percent(l.success_rate) : "—", l.photo_attempts, seconds(l.average_time_seconds), l.gps_overrides, l.flagged_results].map((v) => h("td", {}, v))),
           ),
         ),
       ),
-      !a.locations.length && h("p", { class: "muted" }, "No games played yet"),
+      !a.locations.length && h("p", { class: "muted" }, "No locations finished yet (completed or failed). Skipped locations don't count."),
     ),
   );
 }
@@ -230,7 +230,7 @@ function studentsView(students) {
             h("td", {}, s.sessions),
             h("td", {}, s.completed_locations),
             h("td", {}, s.failed_locations),
-            h("td", {}, percent(s.success_rate)),
+            h("td", {}, s.completed_locations + s.failed_locations ? percent(s.success_rate) : "—"),
             h("td", {}, `${s.streak_days} d`),
             h("td", {}, formatDate(s.last_activity_at)),
             h("td", {}, s.difficulty_hints.filter((d) => d.suggestion).map((d) => h("div", {}, `${DIFFICULTIES[d.difficulty]}: ${SUGGESTION[d.suggestion] || d.suggestion}`))),
