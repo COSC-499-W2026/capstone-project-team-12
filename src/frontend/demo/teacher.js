@@ -192,7 +192,8 @@ function errorLine(error) {
 }
 
 function seconds(value) {
-  return value === null || value === undefined ? "—" : `${Math.round(value / 60)} min`;
+  if (value === null || value === undefined) return "—";
+  return value < 60 ? `${Math.round(value)} s` : `${Math.round(value / 60)} min`;
 }
 
 // The analytics label is "Location {position}", which repeats across rooms; staff may read the
