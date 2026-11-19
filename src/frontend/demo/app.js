@@ -35,17 +35,23 @@ export async function me(refresh = false) {
   return profile;
 }
 
-function classLanguages() {
+// What this browser remembers about each class it joined: { language, joined_at }
+function joinedClasses() {
   try {
-    return JSON.parse(localStorage.getItem(CLASS_LANG_KEY) || "{}");
+    const known = JSON.parse(localStorage.getItem(CLASS_LANG_KEY) || "{}");
+    // older entries stored only the language
+    for (const [id, value] of Object.entries(known)) {
+      if (typeof value === "string") known[id] = { language: value, joined_at: null };
+    }
+    return known;
   } catch {
     return {};
   }
 }
 
 function rememberClassLanguage(classId, language) {
-  const known = classLanguages();
-  known[classId] = language;
+  const known = joinedClasses();
+  known[classId] = { language, joined_at: new Date().toISOString() };
   try {
     localStorage.setItem(CLASS_LANG_KEY, JSON.stringify(known));
   } catch {
@@ -55,7 +61,7 @@ function rememberClassLanguage(classId, language) {
 
 // The language the student plays in: the current class's, else the Practice language
 export function playLanguage(p) {
-  return (p.current_class_id && classLanguages()[p.current_class_id]) || p.preferred_language || "ja";
+  return (p.current_class_id && joinedClasses()[p.current_class_id]?.language) || p.preferred_language || "ja";
 }
 
 function homeFor(p) {
@@ -222,36 +228,60 @@ async function renderHome() {
 }
 
 // Class switcher (spec: profile): the student's classes and Practice. The API gives only class
-// ids, so a class is named by the language remembered when the student joined it here.
-function classSwitcher(p, openGame) {
-  const known = classLanguages();
-  const select = h("select", { disabled: Boolean(openGame), "aria-label": "Play in" },
-    p.classes.map((id, i) =>
-      h("option", { value: id, selected: id === p.current_class_id }, known[id] ? `${LANGUAGES[known[id]]} class` : `Class ${i + 1}`),
-    ),
-    h("option", { value: "practice", selected: !p.current_class_id }, "Practice"),
-  );
-  const practiceLanguage = h("select", { disabled: Boolean(openGame), "aria-label": "Practice language" },
-    Object.entries(LANGUAGES).map(([value, name]) => h("option", { value, selected: value === (p.preferred_language || "ja") }, name)),
-  );
-  const practiceField = h("span", { hidden: Boolean(p.current_class_id) }, practiceLanguage);
+// ids, so a class is labelled by the language and join date remembered when it was joined here.
+function classLabel(id, index, known) {
+  const info = known[id];
+  if (!info) return `Class ${index + 1}`;
+  const joined = info.joined_at
+    ? ` · joined ${new Date(info.joined_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`
+    : "";
+  return `${LANGUAGES[info.language]}${joined}`;
+}
 
-  const save = () => busy(null, async () => {
-    const body = select.value === "practice"
-      ? { current_class_id: null, preferred_language: practiceLanguage.value }
-      : { current_class_id: select.value };
+function classSwitcher(p, openGame) {
+  const known = joinedClasses();
+  const locked = Boolean(openGame);
+  const switchTo = (body) => busy(null, async () => {
     await api.patch("/me/profile", body);
     await renderHome();
   });
+  const practiceLanguage = h("select", { disabled: locked, "aria-label": "Practice language" },
+    Object.entries(LANGUAGES).map(([value, name]) => h("option", { value, selected: value === (p.preferred_language || "ja") }, name)),
+  );
+  const toPractice = () => switchTo({ current_class_id: null, preferred_language: practiceLanguage.value });
+  const lockedNote = locked && h("p", { class: "muted" }, "Finish or quit your game to switch.");
+
+  // One class (the usual case): a plain line, with Practice one tap away
+  if (p.classes.length <= 1) {
+    const only = p.classes[0];
+    const onClass = Boolean(only && p.current_class_id === only);
+    const name = only && known[only] ? `${LANGUAGES[known[only].language]} class` : "your class";
+    const line = onClass
+      ? [h("b", {}, `Playing in: ${name}`), h("button", { class: "btn ghost small", disabled: locked, onclick: toPractice }, "Play Practice instead")]
+      : [
+          h("b", {}, "Playing in: Practice"),
+          practiceLanguage,
+          only && h("button", { class: "btn ghost small", disabled: locked, onclick: () => switchTo({ current_class_id: only }) }, `Back to ${name}`),
+        ];
+    if (!onClass) practiceLanguage.addEventListener("change", toPractice);
+    return h("div", { class: "stack" }, h("div", { class: "row", style: "justify-content: space-between" }, ...line), lockedNote);
+  }
+
+  // Several classes: a dropdown
+  const select = h("select", { disabled: locked, "aria-label": "Playing in" },
+    p.classes.map((id, i) => h("option", { value: id, selected: id === p.current_class_id }, classLabel(id, i, known))),
+    h("option", { value: "practice", selected: !p.current_class_id }, "Practice"),
+  );
+  const practiceField = h("span", { hidden: Boolean(p.current_class_id) }, practiceLanguage);
   select.addEventListener("change", () => {
     practiceField.hidden = select.value !== "practice";
-    save();
+    if (select.value === "practice") toPractice();
+    else switchTo({ current_class_id: select.value });
   });
-  practiceLanguage.addEventListener("change", save);
-
+  practiceLanguage.addEventListener("change", toPractice);
   return h("div", { class: "stack" },
     h("div", { class: "row" }, h("span", { class: "muted" }, "Playing in"), select, practiceField),
-    openGame && h("p", { class: "muted" }, "Finish or quit your game to switch."),
+    lockedNote,
   );
 }
 
