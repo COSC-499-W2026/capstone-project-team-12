@@ -671,3 +671,44 @@ dialog.report .row {
 .camera [hidden] {
   display: none;
 }
+
+/* Badges: earned ones in the accent colour, locked ones dimmed */
+.badge-icon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  color: var(--accent-dark);
+}
+
+.badge-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.badges {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+}
+
+.badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  text-align: center;
+  font-size: 0.85rem;
+}
+
+.badge .badge-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.badge.locked {
+  opacity: 0.45;
+  filter: grayscale(1);
+}

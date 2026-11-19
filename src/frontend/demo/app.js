@@ -1,5 +1,6 @@
 import { api, signedIn, whenSignedOut } from "./api.js";
 import { renderGame, renderSummary } from "./game.js";
+import { badgeIcon } from "./icons.js";
 import { renderClass, renderClasses } from "./teacher.js";
 import { bilingualBlock, busy, formatDate, h, mount, showError, toast } from "./ui.js";
 
@@ -189,6 +190,7 @@ async function renderHome() {
   const language = playLanguage(p);
   let stats = null;
   let openGame = null;
+  let achievements = null;
   try {
     stats = await api.get(`/me/engagement?language=${language}`);
   } catch (error) {
@@ -198,6 +200,12 @@ async function renderHome() {
     openGame = await api.get("/games/current");
   } catch (error) {
     if (error.status !== 404) showError(error);
+  }
+  try {
+    achievements = (await api.get(`/me/achievements?language=${language}`)).achievements;
+  } catch (error) {
+    // the card is left out; the rest of home still works
+    console.warn(error);
   }
   const levelSpan = stats && stats.points_to_next_level !== null ? stats.total_points + stats.points_to_next_level : null;
   mount(
@@ -220,7 +228,7 @@ async function renderHome() {
       ? h("button", { class: "btn big", onclick: () => go(`/play/${openGame.session_id}`) }, "Resume game")
       : h("button", { class: "btn big", onclick: () => go("/play/new") }, "Start a game"),
     stats && challengesCard(stats.daily_challenges),
-    stats && badgesCard(stats.recent_badges, "Recent badges"),
+    achievements && allBadgesCard(achievements),
     h("div", { class: "row", style: "margin-top: 14px" },
       h("button", { class: "btn ghost", onclick: () => go("/join") }, "Join a class"),
     ),
@@ -335,12 +343,35 @@ export function badgesCard(badges, title) {
           badges.map((b) => {
             const [name, condition] = badgeLabel(b.achievement_key);
             return h("div", { class: "row", style: "justify-content: space-between" },
-              h("span", { class: "pill ok" }, name),
+              h("span", { class: "row" }, badgeIcon(b.achievement_key), h("span", { class: "pill ok" }, name)),
               h("span", { class: "muted" }, condition || formatDate(b.unlocked_at)),
             );
           }),
         )
       : h("p", { class: "muted" }, "No badges yet"),
+  );
+}
+
+// Every badge for the language: earned ones lit with the date, the others dimmed with progress
+function allBadgesCard(achievements) {
+  const earned = achievements.filter((a) => a.unlocked).length;
+  return h("div", { class: "card" },
+    h("h2", {}, `Badges · ${earned} of ${achievements.length}`),
+    h("div", { class: "badges" },
+      achievements.map((a) => {
+        const [name, condition] = badgeLabel(a.achievement_key);
+        const detail = a.unlocked
+          ? `Earned ${formatDate(a.unlocked_at)}`
+          : a.progress
+            ? `${Math.min(a.progress.current, a.progress.required)} / ${a.progress.required}`
+            : condition;
+        return h("div", { class: a.unlocked ? "badge" : "badge locked", title: condition },
+          badgeIcon(a.achievement_key),
+          h("b", {}, name),
+          h("span", { class: "muted" }, detail),
+        );
+      }),
+    ),
   );
 }
 
