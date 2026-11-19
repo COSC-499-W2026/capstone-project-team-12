@@ -5,16 +5,22 @@ player.preload = "auto";
 const queue = [];
 let busy = false;
 let status = () => {};
+let lastKind = null;
 
 // `refresh` returns a fresh signed URL when a link has expired (403), e.g. from current-location.
-export function play(url, refresh) {
+// `kind` is "clue" or "feedback": an audio report covers the clip that played last.
+export function play(url, refresh, kind = "feedback") {
   if (!url) return;
-  queue.push({ url, refresh, retried: false });
+  queue.push({ url, refresh, kind, retried: false });
   if (!busy) next();
 }
 
 export function playAll(feedback) {
   for (const item of feedback || []) play(item.audio_url);
+}
+
+export function lastPlayed() {
+  return lastKind;
 }
 
 export function clear() {
@@ -35,6 +41,7 @@ function next() {
     return;
   }
   busy = true;
+  lastKind = item.kind;
   status("playing");
   player.src = item.url;
   player.onended = next;
@@ -46,7 +53,7 @@ async function failed(item) {
   if (item.refresh && !item.retried) {
     try {
       const url = await item.refresh();
-      queue.unshift({ url, refresh: item.refresh, retried: true });
+      queue.unshift({ ...item, url, retried: true });
     } catch {
       status("unavailable");
     }

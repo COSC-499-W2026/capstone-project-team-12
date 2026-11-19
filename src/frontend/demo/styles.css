@@ -448,3 +448,32 @@ dialog .row {
   justify-content: flex-end;
   margin-top: 16px;
 }
+
+.btn.small {
+  min-height: 44px;
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+textarea {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+}
+
+dialog.report fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+dialog.report label {
+  font-weight: 400;
+}
+
+dialog.report .row {
+  justify-content: flex-end;
+}

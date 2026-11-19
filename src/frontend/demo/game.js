@@ -74,11 +74,12 @@ function draw() {
   els.here = h("button", { class: "btn wide", disabled: true, onclick: () => confirmArrival(null) }, "I'm here");
   els.noGps = h("button", { class: "btn ghost wide", hidden: true, onclick: () => confirmArrival("gps_unavailable") }, "Continue without GPS");
   els.takePhoto = h("button", { class: "btn big wide", onclick: openCamera }, "Take photo");
+  els.report = h("button", { class: "btn ghost small", onclick: openReport }, "Report audio problem");
 
   const stageControls = verifying
-    ? [els.takePhoto, els.replay]
+    ? [els.takePhoto, els.replay, els.report]
     : session.clueStarted
-      ? [els.here, els.noGps, els.replay]
+      ? [els.here, els.noGps, els.replay, els.report]
       : [els.start];
 
   audio.onStatus((state) => {
@@ -125,12 +126,41 @@ async function freshClueUrl() {
 // The clue starts from a tap, so mobile browsers allow the audio
 function startClue() {
   session.clueStarted = true;
-  audio.play(clueUrl(), freshClueUrl);
+  audio.play(clueUrl(), freshClueUrl, "clue");
   draw();
 }
 
 function replayClue() {
-  audio.play(clueUrl(), freshClueUrl);
+  audio.play(clueUrl(), freshClueUrl, "clue");
+}
+
+// Report audio problem (spec, Audio): the dialog as specified, always in English. The backend
+// has no report endpoint yet, so the demo says so instead of sending anything.
+const REPORT_REASONS = ["Can't hear it clearly", "Wrong content", "Doesn't play", "Other"];
+
+function openReport() {
+  const clip = audio.lastPlayed() === "feedback" ? "the last feedback phrase" : "the current clue";
+  const note = h("textarea", { rows: 3, maxlength: 500, placeholder: "Optional note" });
+  const dialog = h("dialog", { class: "report" },
+    h("form", { method: "dialog", class: "stack" },
+      h("h2", {}, "Report audio problem"),
+      h("p", { class: "muted" }, `About ${clip}.`),
+      h("fieldset", { class: "stack" },
+        REPORT_REASONS.map((reason, i) => h("label", { class: "row" }, h("input", { type: "radio", name: "reason", value: reason, required: true, checked: i === 0 }), reason)),
+      ),
+      note,
+      h("div", { class: "row" },
+        h("button", { class: "btn ghost", value: "cancel", formnovalidate: true }, "Cancel"),
+        h("button", { class: "btn", value: "send" }, "Send"),
+      ),
+    ),
+  );
+  dialog.addEventListener("close", () => {
+    if (dialog.returnValue === "send") toast("Thanks. Reports aren't sent in this demo yet.");
+    dialog.remove();
+  });
+  document.body.append(dialog);
+  dialog.showModal();
 }
 
 function startTracking() {
