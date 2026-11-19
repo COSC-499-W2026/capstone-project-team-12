@@ -90,6 +90,7 @@ class Settings(BaseSettings):
     global_rate_limit: PositiveInt = 120
     login_attempts_per_email: PositiveInt = 5  # per (email, IP)
     login_attempts_per_ip: PositiveInt = 100
+    register_attempts_per_ip: PositiveInt = 100
 
     @property
     def refresh_cookie_secure(self) -> bool:
