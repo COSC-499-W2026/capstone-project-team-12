@@ -197,10 +197,7 @@ async function renderHome() {
   mount(
     h("h1", {}, `Hi, ${p.username}`),
     h("div", { class: "card" },
-      h("div", { class: "row", style: "justify-content: space-between" },
-        h("span", { class: "pill" }, p.current_class_id ? "Class" : "Practice"),
-        h("span", { class: "muted" }, LANGUAGES[language]),
-      ),
+      classSwitcher(p, openGame),
       stats &&
         h("div", { class: "stats3", style: "margin-top: 12px" },
           h("div", { class: "stat" }, h("span", { class: "muted" }, "Level"), h("b", {}, stats.level)),
@@ -221,6 +218,40 @@ async function renderHome() {
     h("div", { class: "row", style: "margin-top: 14px" },
       h("button", { class: "btn ghost", onclick: () => go("/join") }, "Join a class"),
     ),
+  );
+}
+
+// Class switcher (spec: profile): the student's classes and Practice. The API gives only class
+// ids, so a class is named by the language remembered when the student joined it here.
+function classSwitcher(p, openGame) {
+  const known = classLanguages();
+  const select = h("select", { disabled: Boolean(openGame), "aria-label": "Play in" },
+    p.classes.map((id, i) =>
+      h("option", { value: id, selected: id === p.current_class_id }, known[id] ? `${LANGUAGES[known[id]]} class` : `Class ${i + 1}`),
+    ),
+    h("option", { value: "practice", selected: !p.current_class_id }, "Practice"),
+  );
+  const practiceLanguage = h("select", { disabled: Boolean(openGame), "aria-label": "Practice language" },
+    Object.entries(LANGUAGES).map(([value, name]) => h("option", { value, selected: value === (p.preferred_language || "ja") }, name)),
+  );
+  const practiceField = h("span", { hidden: Boolean(p.current_class_id) }, practiceLanguage);
+
+  const save = () => busy(null, async () => {
+    const body = select.value === "practice"
+      ? { current_class_id: null, preferred_language: practiceLanguage.value }
+      : { current_class_id: select.value };
+    await api.patch("/me/profile", body);
+    await renderHome();
+  });
+  select.addEventListener("change", () => {
+    practiceField.hidden = select.value !== "practice";
+    save();
+  });
+  practiceLanguage.addEventListener("change", save);
+
+  return h("div", { class: "stack" },
+    h("div", { class: "row" }, h("span", { class: "muted" }, "Playing in"), select, practiceField),
+    openGame && h("p", { class: "muted" }, "Finish or quit your game to switch."),
   );
 }
 
