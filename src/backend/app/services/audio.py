@@ -17,16 +17,12 @@ with all its phrases in place. `feedback_audio_url` can then only fail if a phra
 while a game is in progress. The rule lives only here: content's coverage report lists each
 language's `missing_feedback_codes`, so the report and the draw cannot disagree.
 
-UploadedAudioService reads the feedback phrases from `feedback_audio` through `db`. Its clue
-recordings are still a stub that ignores `db`: every clue has a recording, with a fixed ID per
-clue. The stub stores nothing: IDs and storage keys are worked out from the secret key, so they
-survive a restart, and an ID that `clue_audio_asset_id` did not hand out raises
-`MediaNotFoundError`. The real version will read `audio_assets`; the signatures will not change.
-Every method only reads: it never commits, rolls back or explicitly flushes the caller's session.
+UploadedAudioService reads clue recordings from `audio_assets` and feedback phrases from
+`feedback_audio` through `db`; a URL signs the row's own storage key, which is random and never
+derived from the clue. Every method only reads: it never commits, rolls back or explicitly
+flushes the caller's session.
 """
 
-import hashlib
-import hmac
 from collections.abc import Callable
 from functools import lru_cache
 from typing import Protocol
@@ -36,7 +32,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import AudioServiceType, get_settings
-from app.models.content import FeedbackAudio
+from app.models.content import AudioAsset, FeedbackAudio
 from app.models.enums import FeedbackCode, Language
 
 # Raised when no recording exists; re-exported because callers of AudioService catch it here.
@@ -69,40 +65,28 @@ class AudioService(Protocol):
         ...
 
 
-def _stub_digest(*parts: object) -> bytes:
-    # Keyed with the secret key, so neither an ID nor a storage key leads back to its clue or
-    # phrase.
-    message = "/".join(("stub-audio", *map(str, parts))).encode()
-    return hmac.new(get_settings().secret_key.encode(), message, hashlib.sha256).digest()
-
-
-def _stub_tag(body: bytes) -> bytes:
-    return _stub_digest("tag", body.hex())[:8]
-
-
-def _stub_key(*parts: object) -> str:
-    # Shaped like the keys StorageService.save makes: a random version 4 UUID plus ".mp3".
-    return f"{UUID(bytes=_stub_digest('key', *parts)[:16], version=4)}.mp3"
-
-
 class UploadedAudioService:
-    """`uploaded`: a clue uses its primary uploaded recording (still a stub, see the module
-    docstring), and a feedback phrase its uploaded file.
+    """`uploaded`: a clue uses its primary uploaded recording, and a feedback phrase its uploaded
+    file.
 
     Not a subclass of `AudioService`, so a missing method fails instead of inheriting the
     Protocol's empty body; mypy checks the match through `_IMPLEMENTATIONS`.
     """
 
     def clue_audio_asset_id(self, clue_id: UUID, db: Session) -> UUID:
-        # The first half identifies the recording; the second half shows the stub handed it out.
-        body = _stub_digest("asset", clue_id)[:8]
-        return UUID(bytes=body + _stub_tag(body))
+        asset_id = db.scalar(
+            select(AudioAsset.id).where(AudioAsset.clue_id == clue_id, AudioAsset.is_primary)
+        )
+        if asset_id is None:
+            raise MediaNotFoundError
+        return asset_id
 
     def clue_audio_url(self, audio_asset_id: UUID, db: Session) -> str:
-        body, tag = audio_asset_id.bytes[:8], audio_asset_id.bytes[8:]
-        if not hmac.compare_digest(tag, _stub_tag(body)):
+        # primary or not: a game keeps the recording its snapshot names after the primary moves
+        file_path = db.scalar(select(AudioAsset.file_path).where(AudioAsset.id == audio_asset_id))
+        if file_path is None:
             raise MediaNotFoundError
-        return get_storage_service().signed_url(_stub_key("clue", audio_asset_id))
+        return get_storage_service().signed_url(file_path)
 
     def feedback_audio_url(self, code: FeedbackCode, language: Language, db: Session) -> str:
         file_path = db.scalar(
