@@ -22,6 +22,7 @@ from app.content.interface import (
 )
 from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
 from app.models.enums import FeedbackCode
+from app.models.game import GameSession
 from app.services.audio import MediaNotFoundError, UploadedAudioService, get_audio_service
 
 ALL_MODES = list(product(Language, Difficulty))
@@ -151,21 +152,25 @@ def test_only_an_active_location_is_active(
     assert not is_location_active(uuid4(), db)
 
 
-def test_snapshot_holds_the_locations_answers_entrances_radius_and_clue(
-    db: Session, drawable_clue: Callable[..., Clue]
+def test_snapshot_holds_the_locations_answers_entrances_radius_clue_and_primary_recording(
+    db: Session, drawable_clue: Callable[..., Clue], make_audio_asset: Callable[..., AudioAsset]
 ) -> None:
     radius = get_settings().gps_radius_meters + 15  # not the setting: the location's own
     entrances = [{"lat": 49.9401, "lng": -119.3952}, {"lat": 49.9398, "lng": -119.3961}]
     clue = drawable_clue(
-        accepted_answers=["SCI333", "SCI3330"], gps_points=entrances, gps_radius_meters=radius
+        primary=False,
+        accepted_answers=["SCI333", "SCI3330"],
+        gps_points=entrances,
+        gps_radius_meters=radius,
     )
+    primary = make_audio_asset(clue, is_primary=True)
 
     snapshot = location_snapshot(clue.location_id, *FR_2, db)
 
     assert snapshot == LocationSnapshot(
         location_id=clue.location_id,
         clue_id=clue.id,
-        audio_asset_id=get_audio_service().clue_audio_asset_id(clue.id, db),
+        audio_asset_id=primary.id,
         accepted_answers=("SCI333", "SCI3330"),
         gps_points=(GpsPoint(49.9401, -119.3952), GpsPoint(49.9398, -119.3961)),
         radius_meters=radius,
@@ -206,6 +211,24 @@ def test_playable_test_locations_have_no_overlapping_arrival_circles(
     entrances = [(point, s.radius_meters) for s in snapshots for point in s.gps_points]
     for (a, radius_a), (b, radius_b) in combinations(entrances, 2):
         assert distance_meters(a, b) > radius_a + radius_b
+
+
+def test_session_rows_point_at_real_content_and_never_widen_a_draw(
+    db: Session,
+    make_game_session: Callable[..., GameSession],
+    playable_location_ids: Callable[..., list[UUID]],
+    snapshot_ids: Callable[..., tuple[UUID, UUID, UUID]],
+) -> None:
+    """Game tests rely on this: a row at a playable location has the IDs a draw would give it,
+    and a row with its own location adds nothing a game could draw."""
+    game = make_game_session()  # ja/basic
+    [playable] = playable_location_ids(Language.JA, Difficulty.BASIC, count=1)
+    drawn = location_snapshot(playable, Language.JA, Difficulty.BASIC, db)
+    assert snapshot_ids(game, playable) == (drawn.location_id, drawn.clue_id, drawn.audio_asset_id)
+
+    location_id, _, audio_asset_id = snapshot_ids(game)
+    assert location_id not in eligible_location_ids(Language.JA, Difficulty.BASIC, db)
+    get_audio_service().clue_audio_url(audio_asset_id, db)  # a recording that exists
 
 
 def test_content_lookups_never_commit_flush_roll_back_or_load_a_location(

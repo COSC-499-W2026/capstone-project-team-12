@@ -11,8 +11,7 @@ The fixtures make real rows. The first time a test asks for playable locations t
 active ones, 67 m apart, shared by every language and difficulty; each language and difficulty
 asked for gets a clue with a primary recording at all 30, and its language every feedback
 phrase. Rows made through the `db` fixture are rolled back with it; the `committed_*` fixtures
-commit theirs and delete them after the test. UploadedAudioService's clue recordings are still a
-stub, so a snapshot's recording ID is the one the stub gives its clue, as in location_snapshot.
+commit theirs and delete them after the test.
 """
 
 from collections.abc import Callable, Iterator
@@ -30,7 +29,6 @@ from app.content.clue_audio import UPLOAD_PROVIDER
 from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
 from app.models.enums import Difficulty, FeedbackCode, Language
 from app.models.game import GameSession
-from app.services.audio import get_audio_service
 
 # the size of the spec's campus set
 PLAYABLE_LOCATIONS = 30
@@ -81,6 +79,30 @@ def _clue_ids(
     return [clues[location_id] for location_id in location_ids]
 
 
+def _recording(clue_id: UUID, is_primary: bool) -> AudioAsset:
+    return AudioAsset(
+        id=uuid4(),
+        clue_id=clue_id,
+        file_path=f"{uuid4()}.mp3",
+        provider=UPLOAD_PROVIDER,
+        is_primary=is_primary,
+        duration_seconds=5.0,
+        file_size_kb=80,
+    )
+
+
+def _recording_id(clue_id: UUID, session: Session) -> UUID:
+    """The clue's primary recording, else one it has, else a new one that isn't primary (so a
+    location that no game could draw doesn't become drawable)."""
+    query = select(AudioAsset.id).where(AudioAsset.clue_id == clue_id)
+    asset_id = session.scalar(query.order_by(AudioAsset.is_primary.desc()).limit(1))
+    if asset_id is None:
+        recording = _recording(clue_id, is_primary=False)
+        session.add(recording)
+        asset_id = recording.id
+    return asset_id
+
+
 @contextmanager
 def _committed(engine: Engine) -> Iterator[Session]:
     """A session of its own, committed at the end."""
@@ -127,16 +149,7 @@ class _Content:
             if (language, difficulty) not in self._modes:
                 self._modes.add((language, difficulty))
                 for clue_id in _clue_ids(self._playable, language, difficulty, session):
-                    session.add(
-                        AudioAsset(
-                            clue_id=clue_id,
-                            file_path=f"{uuid4()}.mp3",
-                            provider=UPLOAD_PROVIDER,
-                            is_primary=True,
-                            duration_seconds=5.0,
-                            file_size_kb=80,
-                        )
-                    )
+                    session.add(_recording(clue_id, is_primary=True))
         return self._playable[:count]
 
     def snapshot(
@@ -146,7 +159,7 @@ class _Content:
             self._add_phrases(language, session)
             location_id = location_id or self._add_location(session)
             [clue_id] = _clue_ids([location_id], language, difficulty, session)
-            audio_asset_id = get_audio_service().clue_audio_asset_id(clue_id, session)
+            audio_asset_id = _recording_id(clue_id, session)
         return SnapshotIds(location_id, clue_id, audio_asset_id)
 
     def deactivated(self) -> UUID:
@@ -284,10 +297,11 @@ def committed_location_ids(committed_content: _Content) -> Callable[..., list[UU
 @pytest.fixture
 def snapshot_ids(db_content: _Content) -> Callable[..., SnapshotIds]:
     """make(game, location_id=None): IDs for the snapshot of a location in `game`: the location,
-    its clue in the game's language and difficulty (added if missing) and the clue's recording.
-    Without a location_id, a new active location that no game can draw (its clue has no primary
-    recording), so session rows never add to a draw. Adds every feedback phrase in the game's
-    language, which a game only starts with."""
+    its clue in the game's language and difficulty and the clue's recording (its primary one, as
+    location_snapshot picks; clue and recording added if missing). Without a location_id, a new
+    active location that no game can draw (its recording isn't primary), so session rows never
+    add to a draw. Adds every feedback phrase in the game's language, which a game only starts
+    with."""
 
     def make(game: GameSession, location_id: UUID | None = None) -> SnapshotIds:
         mode = Language(game.target_language), Difficulty(game.difficulty)
