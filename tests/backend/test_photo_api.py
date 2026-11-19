@@ -49,7 +49,7 @@ def verifying_game(
     playable_location_ids: Callable[..., list[UUID]],
     fixed_daily_challenge_targets: None,
 ) -> Callable[..., GameSession]:
-    """A saved game with `locations` active (stub) locations, at the first one, which is in Stage
+    """A saved game with `locations` playable locations, at the first one, which is in Stage
     2 (or `status`) with the answer SCI333; the others are pending. The last game action was an
     hour ago. Other keywords are for the game."""
 

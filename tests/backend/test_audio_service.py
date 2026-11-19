@@ -110,6 +110,8 @@ def test_a_language_without_one_phrase_lacks_it(
     )
 
     # the same phrase in another language does not count
+    assert audio.missing_feedback_codes(db)[Language.KO] == [missing]
+    assert audio.missing_feedback_codes(db)[Language.JA] == []
     assert not audio.has_all_feedback_phrases(Language.KO, db)
     with pytest.raises(MediaNotFoundError) as refused:
         audio.feedback_audio_url(missing, Language.KO, db)
@@ -178,4 +180,5 @@ def test_audio_lookups_never_commit_flush_or_roll_back_the_callers_session(
         audio.feedback_audio_url(code, language, db)
     for language in Language:
         audio.has_all_feedback_phrases(language, db)
+    audio.missing_feedback_codes(db)
     assert transaction_calls == []

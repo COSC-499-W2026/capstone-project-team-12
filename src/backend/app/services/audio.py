@@ -14,7 +14,8 @@ app is imported (app.db reads the settings), so a bad value stops the app before
 A language is playable only when all its feedback phrases exist (`has_all_feedback_phrases`).
 Content counts a language without them as having no eligible locations, so every game starts
 with all its phrases in place. `feedback_audio_url` can then only fail if a phrase is removed
-while a game is in progress.
+while a game is in progress. The rule lives only here: content's coverage report lists each
+language's `missing_feedback_codes`, so the report and the draw cannot disagree.
 
 UploadedAudioService reads the feedback phrases from `feedback_audio` through `db`. Its clue
 recordings are still a stub that ignores `db`: every clue has a recording, with a fixed ID per
@@ -57,6 +58,10 @@ class AudioService(Protocol):
     def feedback_audio_url(self, code: FeedbackCode, language: Language, db: Session) -> str:
         """Signed, short-lived URL of the phrase `code` in `language`; `MediaNotFoundError` if
         none, e.g. a phrase removed during a game (see the module docstring)."""
+        ...
+
+    def missing_feedback_codes(self, db: Session) -> dict[Language, list[FeedbackCode]]:
+        """For every language, the `FeedbackCode` phrases it lacks, in `FeedbackCode` order."""
         ...
 
     def has_all_feedback_phrases(self, language: Language, db: Session) -> bool:
@@ -109,9 +114,17 @@ class UploadedAudioService:
             raise MediaNotFoundError
         return get_storage_service().signed_url(file_path)
 
+    def missing_feedback_codes(self, db: Session) -> dict[Language, list[FeedbackCode]]:
+        # one query for every language, so a report shows them all as of the same read
+        rows = db.execute(select(FeedbackAudio.language, FeedbackAudio.code))
+        recorded = {(language, code) for language, code in rows}
+        return {
+            language: [code for code in FeedbackCode if (language, code) not in recorded]
+            for language in Language
+        }
+
     def has_all_feedback_phrases(self, language: Language, db: Session) -> bool:
-        recorded = db.scalars(select(FeedbackAudio.code).where(FeedbackAudio.language == language))
-        return set(FeedbackCode) <= set(recorded)
+        return not self.missing_feedback_codes(db)[language]
 
 
 _IMPLEMENTATIONS: dict[AudioServiceType, Callable[[], AudioService]] = {
