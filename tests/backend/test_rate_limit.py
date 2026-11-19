@@ -2,6 +2,7 @@
 
 from http import HTTPStatus
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
@@ -38,3 +39,18 @@ def test_login_rate_limit_per_email_and_ip(client: TestClient) -> None:
     response = client.post("/api/v1/auth/login", data=login_data_2)
     assert response.status_code == HTTPStatus.UNAUTHORIZED
     assert response.json()["error"]["code"] == ErrorCode.INVALID_CREDENTIALS
+
+
+def test_login_is_limited_per_ip_across_emails(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(get_settings(), "login_attempts_per_ip", 3)
+    for i in range(3):
+        form = {"username": f"user{i}@example.com", "password": "ValidPassword1"}
+        assert client.post("/api/v1/auth/login", data=form).status_code == HTTPStatus.UNAUTHORIZED
+
+    form = {"username": "another@example.com", "password": "ValidPassword1"}
+    response = client.post("/api/v1/auth/login", data=form)
+
+    assert response.status_code == HTTPStatus.TOO_MANY_REQUESTS
+    assert "Retry-After" in response.headers
