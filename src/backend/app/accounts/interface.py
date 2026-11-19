@@ -20,6 +20,7 @@ from app.models.enums import ClassStaffRole, UserRole
 
 __all__ = [
     "get_current_user",
+    "user_id_from_token",
     "require_class_role",
     "is_class_staff",
     "can_manage_content",
@@ -31,19 +32,23 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 KEY = get_settings().access_token_secret_key
 
 
+def user_id_from_token(token: str) -> UUID | None:
+    """The user id in a signed, unexpired access token; None for any other token."""
+    try:
+        payload = decode(token, str(KEY), ["HS256"], options={"require": ["exp", "sub"]})
+        return UUID(payload.get("sub"))
+    except (InvalidTokenError, ValueError, TypeError):
+        return None
+
+
 def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)], db: Annotated[Session, Depends(get_db)]
 ) -> User:
     """Returns the authenticated user represented by the access token."""
-    try:
-        payload = decode(token, str(KEY), ["HS256"], options={"require": ["exp", "sub"]})
-        user_id = UUID(payload.get("sub"))
-    except (InvalidTokenError, ValueError) as err:
-        raise AppError(
-            ErrorCode.NOT_AUTHENTICATED,
-            "Something went wrong when validating your account, please login to your account again",
-        ) from err
-    user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+    user_id = user_id_from_token(token)
+    user = None
+    if user_id is not None:
+        user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
     if user is None:
         raise AppError(
             ErrorCode.NOT_AUTHENTICATED,
