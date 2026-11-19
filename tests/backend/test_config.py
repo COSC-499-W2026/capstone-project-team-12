@@ -216,6 +216,7 @@ def test_rate_limits_default_to_the_spec_values() -> None:
     assert settings.login_attempts_per_email == 5
     assert settings.login_attempts_per_ip == 100
     assert settings.register_attempts_per_ip == 100
+    assert settings.photo_uploads_per_user == 10
 
 
 @pytest.mark.parametrize(

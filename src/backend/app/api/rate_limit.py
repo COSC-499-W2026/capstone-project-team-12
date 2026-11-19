@@ -9,8 +9,9 @@ from typing import Annotated
 from fastapi import Depends, Request
 from fastapi.security import OAuth2PasswordRequestForm
 
-from app.accounts.interface import user_id_from_token
+from app.accounts.interface import get_current_user, user_id_from_token
 from app.config import get_settings
+from app.models.accounts import User
 from app.services.limiter import count_request
 
 AUTH_PATH = "/api/v1/auth/"
@@ -26,6 +27,11 @@ def global_rate_limit(request: Request) -> None:
 
 def register_rate_limit(request: Request) -> None:
     count_request("register", get_settings().register_attempts_per_ip, _client_ip(request))
+
+
+def photo_rate_limit(user: Annotated[User, Depends(get_current_user)]) -> None:
+    """Per user, refused files included, so OCR can't be run in a loop."""
+    count_request("photo", get_settings().photo_uploads_per_user, f"user:{user.id}")
 
 
 def login_rate_limit(
