@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.engagement.interface import get_class_location_analytics
 from app.models.accounts import User
+from app.models.content import Location
 from app.models.engagement import Class
 from app.models.enums import (
     ArrivalOverride,
@@ -26,12 +27,13 @@ def test_location_statistics_and_time_cap(
     make_class_staff: Callable[..., object],
     make_game_session: Callable[..., object],
     make_session_location: Callable[..., object],
+    make_location: Callable[..., Location],
 ) -> None:
     teacher = make_user(role=UserRole.STAFF)
     school_class = make_class()
     make_class_staff(school_class, teacher)
 
-    location_id = uuid4()
+    location_id = make_location().id
     started = datetime(2026, 11, 1, 12, tzinfo=UTC)
 
     game1 = make_game_session(class_id=school_class.id)
@@ -81,13 +83,14 @@ def test_excludes_practice_other_classes_and_unfinished(
     make_class_staff: Callable[..., object],
     make_game_session: Callable[..., object],
     make_session_location: Callable[..., object],
+    make_location: Callable[..., Location],
 ) -> None:
     teacher = make_user(role=UserRole.STAFF)
     school_class = make_class()
     other_class = make_class()
     make_class_staff(school_class, teacher)
 
-    location_id = uuid4()
+    location_id = make_location().id
     completed_at = datetime(2026, 11, 1, 12, tzinfo=UTC)
 
     classroom_game = make_game_session(class_id=school_class.id)
@@ -159,16 +162,18 @@ def test_teacher_analytics_endpoint(
     make_class_staff: Callable[..., object],
     make_game_session: Callable[..., object],
     make_session_location: Callable[..., object],
+    make_location: Callable[..., Location],
 ) -> None:
     teacher = make_user(role=UserRole.STAFF)
     school_class = make_class()
     make_class_staff(school_class, teacher)
+    second, fourth = make_location().id, make_location().id
 
     game = make_game_session(class_id=school_class.id)
     make_session_location(
         game,
         2,
-        location_id=UUID(int=2),
+        location_id=second,
         status=LocationStatus.COMPLETED,
         points_awarded=100,
         attempts_used=1,
@@ -176,7 +181,7 @@ def test_teacher_analytics_endpoint(
     )
 
     make_session_location(
-        game, 4, location_id=UUID(int=1), status=LocationStatus.FAILED, attempts_used=2
+        game, 4, location_id=fourth, status=LocationStatus.FAILED, attempts_used=2
     )
 
     response = client.get(
@@ -190,8 +195,8 @@ def test_teacher_analytics_endpoint(
     assert data["class_stats"]["success_rate"] == 50.0
     assert data["class_stats"]["photo_attempts"] == 3
     assert [(item["location_id"], item["label"]) for item in data["locations"]] == [
-        (str(UUID(int=2)), "Location 2"),
-        (str(UUID(int=1)), "Location 4"),
+        (str(second), "Location 2"),
+        (str(fourth), "Location 4"),
     ]
     assert all(
         {"room_number", "name", "location_name"}.isdisjoint(item) for item in data["locations"]

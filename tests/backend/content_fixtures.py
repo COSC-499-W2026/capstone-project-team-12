@@ -7,14 +7,12 @@ or shuffles a game asks `playable_location_ids` for the language and difficulty 
 when it doesn't use the IDs, so that there is content to draw. A test that needs a deactivated
 location asks `deactivated_location_id` for one instead of making up an id.
 
-The feedback phrases and deactivated locations are real rows: a game only starts in a language
-that has every phrase, and plays them while it runs, so the fixtures add the ones the database
-lacks. Rows made through the `db` fixture are rolled back with it; the `committed_*` fixtures
-commit theirs and delete them after the test. The content interface and UploadedAudioService's
-clue recordings are still stubs, so for now playable location and recording IDs are the stubs'
-(the same 30 fake locations in every language and difficulty). When the real versions read the
-content tables (A20), the fixtures will create those rows too, and the tests that use them stay
-as they are.
+The fixtures make real rows. The first time a test asks for playable locations they make 30
+active ones, 67 m apart, shared by every language and difficulty; each language and difficulty
+asked for gets a clue with a primary recording at all 30, and its language every feedback
+phrase. Rows made through the `db` fixture are rolled back with it; the `committed_*` fixtures
+commit theirs and delete them after the test. UploadedAudioService's clue recordings are still a
+stub, so a snapshot's recording ID is the one the stub gives its clue, as in location_snapshot.
 """
 
 from collections.abc import Callable, Iterator
@@ -25,18 +23,21 @@ from uuid import UUID, uuid4
 
 import pytest
 from conftest import location_row
-from sqlalchemy import Engine, delete, func, select, tuple_
+from sqlalchemy import Engine, and_, delete, func, select, tuple_, update
 from sqlalchemy.orm import Session
 
-from app.content import interface as content
-from app.models.content import FeedbackAudio, Location
+from app.content.clue_audio import UPLOAD_PROVIDER
+from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
 from app.models.enums import Difficulty, FeedbackCode, Language
 from app.models.game import GameSession
 from app.services.audio import get_audio_service
 
-# as many as the content stub serves, and the size of the spec's campus set
+# the size of the spec's campus set
 PLAYABLE_LOCATIONS = 30
 JA, BASIC = Language.JA, Difficulty.BASIC
+# About 67 m of latitude between neighbouring playable locations: more than twice the default
+# 30 m radius, so no point is inside the arrival circles of two locations.
+SPACING_DEGREES = 0.0006
 # Building codes of the room numbers made here (make_location uses "TST"), and in lowercase the
 # start of the phrases' file names. Committed rows have their own, so they can't collide with the
 # `db` fixture's rows and the teardown can check that none is left behind.
@@ -51,16 +52,33 @@ class SnapshotIds(NamedTuple):
     audio_asset_id: UUID
 
 
-def _playable(language: Language, difficulty: Difficulty, count: int, db: Session) -> list[UUID]:
-    ids = sorted(content.eligible_location_ids(language, difficulty, db))
-    assert len(ids) >= count, f"needs {count} playable {language}/{difficulty} locations"
-    return ids[:count]
+def _clue_ids(
+    location_ids: list[UUID], language: Language, difficulty: Difficulty, session: Session
+) -> list[UUID]:
+    """The clue of each location in `language` and `difficulty`, added where it is missing.
 
-
-def _missing_phrases(language: Language, db: Session) -> list[FeedbackCode]:
-    query = select(FeedbackAudio.code).where(FeedbackAudio.language == language)
-    recorded = set(db.scalars(query))
-    return [code for code in FeedbackCode if code not in recorded]
+    Flushes before and after, because the unit of work orders inserts only along relationships,
+    which the content models don't declare: locations, then clues, then their recordings."""
+    session.flush()
+    query = select(Clue.location_id, Clue.id).where(
+        Clue.location_id.in_(location_ids),
+        Clue.language == language,
+        Clue.difficulty == difficulty,
+    )
+    clues = {location_id: clue_id for location_id, clue_id in session.execute(query)}
+    for location_id in location_ids:
+        if location_id not in clues:
+            clues[location_id] = uuid4()
+            session.add(
+                Clue(
+                    id=clues[location_id],
+                    location_id=location_id,
+                    language=language,
+                    difficulty=difficulty,
+                )
+            )
+    session.flush()
+    return [clues[location_id] for location_id in location_ids]
 
 
 @contextmanager
@@ -85,6 +103,8 @@ class _Content:
         self._building = building
         self._db = db  # the test's `db` session, when committed content must not clash with it
         self._rooms = count(1000)  # 4 digits, which the room number format allows
+        self._playable: list[UUID] = []  # sorted, made by the first `playable` call
+        self._modes: set[tuple[Language, Difficulty]] = set()
         self.locations: list[UUID] = []
         self.phrases: list[tuple[FeedbackCode, Language]] = []
 
@@ -98,18 +118,36 @@ class _Content:
         difficulty: Difficulty = BASIC,
         count: int = PLAYABLE_LOCATIONS,
     ) -> list[UUID]:
+        assert count <= PLAYABLE_LOCATIONS, f"at most {PLAYABLE_LOCATIONS} playable locations"
         with self._open_session() as session:
             self._add_phrases(language, session)
-            return _playable(language, difficulty, count, session)
+            if not self._playable:
+                added = (self._add_location(session, i) for i in range(PLAYABLE_LOCATIONS))
+                self._playable = sorted(added)
+            if (language, difficulty) not in self._modes:
+                self._modes.add((language, difficulty))
+                for clue_id in _clue_ids(self._playable, language, difficulty, session):
+                    session.add(
+                        AudioAsset(
+                            clue_id=clue_id,
+                            file_path=f"{uuid4()}.mp3",
+                            provider=UPLOAD_PROVIDER,
+                            is_primary=True,
+                            duration_seconds=5.0,
+                            file_size_kb=80,
+                        )
+                    )
+        return self._playable[:count]
 
     def snapshot(
         self, language: Language, difficulty: Difficulty, location_id: UUID | None
     ) -> SnapshotIds:
         with self._open_session() as session:
             self._add_phrases(language, session)
-            clue_id = uuid4()
+            location_id = location_id or self._add_location(session)
+            [clue_id] = _clue_ids([location_id], language, difficulty, session)
             audio_asset_id = get_audio_service().clue_audio_asset_id(clue_id, session)
-        return SnapshotIds(location_id or uuid4(), clue_id, audio_asset_id)
+        return SnapshotIds(location_id, clue_id, audio_asset_id)
 
     def deactivated(self) -> UUID:
         with self._open_session() as session:
@@ -119,6 +157,9 @@ class _Content:
         """Deletes what this added, in foreign-key order (the test has deleted its games), and
         checks that no committed location or feedback phrase is left."""
         with _committed(engine) as session:
+            clues = select(Clue.id).where(Clue.location_id.in_(self.locations))
+            session.execute(delete(AudioAsset).where(AudioAsset.clue_id.in_(clues)))
+            session.execute(delete(Clue).where(Clue.location_id.in_(self.locations)))
             session.execute(delete(Location).where(Location.id.in_(self.locations)))
             if self.phrases:
                 key = tuple_(FeedbackAudio.code, FeedbackAudio.language)
@@ -133,16 +174,22 @@ class _Content:
             f"{phrases} feedback phrases"
         )
 
-    def _add_location(self, session: Session, **fields: bool) -> UUID:
+    def _add_location(self, session: Session, index: int = 0, **fields: bool) -> UUID:
+        """A location `index` spacings north of location_row's entrance."""
         room_number = f"{self._building} {next(self._rooms)}"
         location = location_row(room_number, id=uuid4(), **fields)
+        location.gps_points = [
+            {"lat": point["lat"] + index * SPACING_DEGREES, "lng": point["lng"]}
+            for point in location.gps_points
+        ]
         session.add(location)
         self.locations.append(location.id)
         return location.id
 
     def _add_phrases(self, language: Language, session: Session) -> None:
-        missing = _missing_phrases(language, session)
-        if self._db is not None and len(_missing_phrases(language, self._db)) < len(missing):
+        missing_in = get_audio_service().missing_feedback_codes  # the rule game and coverage use
+        missing = missing_in(session)[language]
+        if self._db is not None and len(missing_in(self._db)[language]) < len(missing):
             pytest.fail(
                 f"the `db` fixture already holds {language} feedback phrases that only it can "
                 "see, so committing them too would wait on its uncommitted rows. Use another "
@@ -185,15 +232,21 @@ def playable_location_ids(db_content: _Content) -> Callable[..., list[UUID]]:
 
 @pytest.fixture
 def limit_playable_locations(
-    playable_location_ids: Callable[..., list[UUID]], monkeypatch: pytest.MonkeyPatch
+    db: Session, playable_location_ids: Callable[..., list[UUID]]
 ) -> Callable[[int], None]:
-    """limit(count): from now on a game in any language and difficulty can draw only the first
-    `count` playable ja/basic locations, for a test of too little content. For now this patches
-    the content stub; once the fixtures create rows, it will hide the rest instead."""
+    """limit(count): from now on a game can draw only the first `count` playable ja/basic
+    locations, for a test of too little content. Every other clue recording stops being primary,
+    including content the database held before the test; the locations stay active, so a game
+    that holds one doesn't skip it."""
 
     def limit(count: int) -> None:
-        playable = frozenset(playable_location_ids(count=count))
-        monkeypatch.setattr(content, "eligible_location_ids", lambda *_: playable)
+        kept = select(Clue.id).where(
+            Clue.location_id.in_(playable_location_ids(count=count)),
+            Clue.language == JA,
+            Clue.difficulty == BASIC,
+        )
+        others = and_(AudioAsset.is_primary, AudioAsset.clue_id.not_in(kept))
+        db.execute(update(AudioAsset).where(others).values(is_primary=False))
 
     return limit
 
@@ -231,10 +284,10 @@ def committed_location_ids(committed_content: _Content) -> Callable[..., list[UU
 @pytest.fixture
 def snapshot_ids(db_content: _Content) -> Callable[..., SnapshotIds]:
     """make(game, location_id=None): IDs for the snapshot of a location in `game`: the location,
-    its clue and the clue's primary recording. Adds every feedback phrase in the game's
-    language, which a game only starts with. Without a location_id, don't rely on the location
-    being active or deactivated (the stub's random ID counts as deactivated): pass one when that
-    matters."""
+    its clue in the game's language and difficulty (added if missing) and the clue's recording.
+    Without a location_id, a new active location that no game can draw (its clue has no primary
+    recording), so session rows never add to a draw. Adds every feedback phrase in the game's
+    language, which a game only starts with."""
 
     def make(game: GameSession, location_id: UUID | None = None) -> SnapshotIds:
         mode = Language(game.target_language), Difficulty(game.difficulty)

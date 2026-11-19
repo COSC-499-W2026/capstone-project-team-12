@@ -2,10 +2,10 @@
 
 A combination is playable when new games can draw it: the clue is drawable (`DRAWABLE`: the
 spec's eligible location, active with a room number and a primary recording) and every feedback
-phrase exists in that language. The feedback phrase rule is the content interface's (a game plays
-them all), stricter than the spec's definition of an eligible location, so the report lists each
-language's missing phrases to show why nothing in it is playable. Clue text is reported but does
-not affect play.
+phrase exists in that language. The feedback phrase rule is AudioService's, which the content
+interface's draw also uses (a game plays them all); it is stricter than the spec's definition of
+an eligible location, so the report lists each language's missing phrases to show why nothing in
+it is playable. Clue text is reported but does not affect play.
 
 Read-only, two queries however many locations there are: locations with their clues and primary
 recordings in one statement (so a location committed meanwhile cannot appear without its clues),
@@ -28,13 +28,14 @@ from app.content.schemas import (
     LanguageCoverage,
     LocationCoverage,
 )
-from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
+from app.models.content import AudioAsset, Clue, Location
 from app.models.enums import Difficulty, FeedbackCode, Language
+from app.services.audio import get_audio_service
 
 # Join condition from clues to their primary recording (at most one per clue).
 PRIMARY_RECORDING = and_(AudioAsset.clue_id == Clue.id, AudioAsset.is_primary)
-# A clue new games can draw, over locations joined to clues and PRIMARY_RECORDING. The real
-# eligible_location_ids is to reuse both, so the report and the draw cannot disagree.
+# A clue new games can draw, over locations joined to clues and PRIMARY_RECORDING. The content
+# interface's draw and snapshot reuse both, so the report and the draw cannot disagree.
 DRAWABLE = and_(Location.is_active, Location.room_number.is_not(None), AudioAsset.id.is_not(None))
 
 
@@ -58,7 +59,7 @@ _Clues = dict[tuple[UUID, str, int], _ClueState]  # by (location id, language, d
 def coverage_report(db: Session) -> CoverageReport:
     """Every location (inactive ones too, by room number) with each language and difficulty, and
     per language the missing feedback phrases and the playable locations at each difficulty."""
-    missing = _missing_feedback_codes(db)
+    missing = get_audio_service().missing_feedback_codes(db)
     locations = _locations(db, missing)
     playable = Counter(
         (combination.language, combination.difficulty)
@@ -80,15 +81,6 @@ def coverage_report(db: Session) -> CoverageReport:
         for language in Language
     ]
     return CoverageReport(languages=languages, locations=locations)
-
-
-def _missing_feedback_codes(db: Session) -> _MissingCodes:
-    rows = db.execute(select(FeedbackAudio.language, FeedbackAudio.code))
-    recorded = {(language, code) for language, code in rows}
-    return {
-        language: [code for code in FeedbackCode if (language, code) not in recorded]
-        for language in Language
-    }
 
 
 def _locations(db: Session, missing: _MissingCodes) -> list[LocationCoverage]:

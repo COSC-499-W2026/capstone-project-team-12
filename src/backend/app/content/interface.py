@@ -8,11 +8,15 @@ and difficulty, and every feedback phrase exists in that language (otherwise a f
 fail during the game). Content only decides which locations qualify; game does the picking
 (carry-over, preferring uncompleted locations, shuffle exclusions, NOT_ENOUGH_CONTENT).
 
-These are stubs: the content tables do not exist yet, so they serve 30 fake locations with fixed
-IDs and ignore `db`. The real versions will query `locations` and `clues` through `db` and read
-each location's own `gps_radius_meters`; the signatures will not change.
-Every function here only reads: it never commits, rolls back or explicitly flushes the caller's
-session (the automatic flush before a query is fine).
+Eligibility is `DRAWABLE` from app.content.coverage, so the coverage report and the draw cannot
+disagree. Each function reads only the columns it returns, so no `Location` is loaded into the
+caller's session. Every function here only reads: it never commits, rolls back or explicitly
+flushes the caller's session (the automatic flush before a query is fine).
+
+No row is locked. A content manager may deactivate a location or move a clue's primary recording
+while a game is drawing: `location_snapshot` checks eligibility again, so a location that stopped
+qualifying after `eligible_location_ids` read it is refused, and game draws another. A snapshot
+already taken keeps its recording, because recordings are never deleted while a game uses them.
 
 A snapshot holds the answers. It is for the server only and must never appear in a
 student-facing response, error message or log.
@@ -26,11 +30,14 @@ for those URLs directly; they are not part of this interface. If AudioService fi
 """
 
 from dataclasses import dataclass, field
-from uuid import NAMESPACE_URL, UUID, uuid5
+from typing import Any
+from uuid import UUID
 
+from sqlalchemy import Select, and_, select
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
+from app.content.coverage import DRAWABLE, PRIMARY_RECORDING
+from app.models.content import AudioAsset, Clue, Location
 from app.models.enums import Difficulty, Language
 from app.services.audio import MediaNotFoundError, get_audio_service
 
@@ -72,22 +79,19 @@ class LocationNotEligibleError(Exception):
     """The location is not (or no longer) eligible for the requested language and difficulty."""
 
 
-_STUB_LOCATION_COUNT = 30
-_STUB_BUILDING_CODE = "TST"
-_STUB_FIRST_ROOM = 101
-_STUB_ORIGIN = GpsPoint(lat=49.9394, lng=-119.3948)  # UBCO campus
-# About 67 m of latitude between neighbouring fake locations: more than twice the default 30 m
-# radius, so no point is inside the arrival circles of two locations.
-_STUB_SPACING_DEGREES = 0.0006
-
-
-def _stub_id(*parts: object) -> UUID:
-    return uuid5(NAMESPACE_URL, "stub/" + "/".join(str(part) for part in parts))
-
-
-_STUB_LOCATION_NUMBERS = {
-    _stub_id("location", number): number for number in range(_STUB_LOCATION_COUNT)
-}
+def _drawable(language: Language, difficulty: Difficulty, *columns: Any) -> Select[Any]:
+    """`columns` of each location drawable in `language` and `difficulty`, one row per location
+    (a clue per location, language and difficulty, and at most one primary recording per clue)."""
+    clue = and_(
+        Clue.location_id == Location.id, Clue.language == language, Clue.difficulty == difficulty
+    )
+    return (
+        select(*columns)
+        .select_from(Location)
+        .join(Clue, clue)
+        .outerjoin(AudioAsset, PRIMARY_RECORDING)
+        .where(DRAWABLE)
+    )
 
 
 def eligible_location_ids(
@@ -99,12 +103,12 @@ def eligible_location_ids(
     """
     if not get_audio_service().has_all_feedback_phrases(language, db):
         return frozenset()
-    return frozenset(_STUB_LOCATION_NUMBERS)
+    return frozenset(db.scalars(_drawable(language, difficulty, Location.id)))
 
 
 def is_location_active(location_id: UUID, db: Session) -> bool:
-    """False once a content manager has deactivated the location (the stub: any unknown ID)."""
-    return location_id in _STUB_LOCATION_NUMBERS
+    """False once a content manager has deactivated the location, and for an unknown ID."""
+    return bool(db.scalar(select(Location.is_active).where(Location.id == location_id)))
 
 
 def location_snapshot(
@@ -115,14 +119,18 @@ def location_snapshot(
     The feedback phrases are not checked here: game draws only from `eligible_location_ids`,
     which checks them once per draw instead of once per location.
     """
-    number = _STUB_LOCATION_NUMBERS.get(location_id)
-    if number is None:
+    query = _drawable(
+        language,
+        difficulty,
+        Clue.id,
+        Location.accepted_answers,
+        Location.gps_points,
+        Location.gps_radius_meters,
+    ).where(Location.id == location_id)
+    row = db.execute(query).one_or_none()
+    if row is None:
         raise LocationNotEligibleError(location_id)
-    entrance = GpsPoint(
-        lat=_STUB_ORIGIN.lat + number * _STUB_SPACING_DEGREES,
-        lng=_STUB_ORIGIN.lng,
-    )
-    clue_id = _stub_id("clue", location_id, difficulty.value, language.value)
+    clue_id, answers, entrances, radius_meters = row
     try:
         audio_asset_id = get_audio_service().clue_audio_asset_id(clue_id, db)
     except MediaNotFoundError as error:
@@ -132,7 +140,7 @@ def location_snapshot(
         location_id=location_id,
         clue_id=clue_id,
         audio_asset_id=audio_asset_id,
-        accepted_answers=(f"{_STUB_BUILDING_CODE}{_STUB_FIRST_ROOM + number}",),
-        gps_points=(entrance,),
-        radius_meters=get_settings().gps_radius_meters,
+        accepted_answers=tuple(answers),
+        gps_points=tuple(GpsPoint(lat=point["lat"], lng=point["lng"]) for point in entrances),
+        radius_meters=radius_meters,
     )
