@@ -477,3 +477,197 @@ dialog.report label {
 dialog.report .row {
   justify-content: flex-end;
 }
+
+/* photo module (photo.js): camera, framing guide, result */
+.camera {
+  margin-bottom: 14px;
+  overflow: hidden;
+  border-radius: 24px;
+  background: var(--night);
+}
+
+.cam-frame {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  max-height: 62dvh;
+  width: 100%;
+  overflow: hidden;
+}
+
+.cam-frame video,
+.cam-still {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* the sign goes in the middle with a margin around it: OCR reads that better than a filled frame */
+.cam-guide {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 60%;
+  aspect-ratio: 5 / 2;
+  border-radius: 12px;
+  box-shadow: 0 0 0 9999px oklch(23.57% 0.066 313.19 / 0.35);
+  transform: translate(-50%, -50%);
+}
+
+.cam-guide i {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border: 0 solid var(--on-night);
+}
+
+.cam-guide i:nth-child(1) {
+  top: 0;
+  left: 0;
+  border-width: 4px 0 0 4px;
+  border-top-left-radius: 12px;
+}
+
+.cam-guide i:nth-child(2) {
+  top: 0;
+  right: 0;
+  border-width: 4px 4px 0 0;
+  border-top-right-radius: 12px;
+}
+
+.cam-guide i:nth-child(3) {
+  bottom: 0;
+  left: 0;
+  border-width: 0 0 4px 4px;
+  border-bottom-left-radius: 12px;
+}
+
+.cam-guide i:nth-child(4) {
+  right: 0;
+  bottom: 0;
+  border-width: 0 4px 4px 0;
+  border-bottom-right-radius: 12px;
+}
+
+.cam-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  color: var(--on-night);
+}
+
+.cam-shutter {
+  width: 72px;
+  height: 72px;
+  border: 5px solid var(--on-night);
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+.cam-shutter:active {
+  transform: scale(0.92);
+}
+
+.cam-shutter:disabled {
+  background: var(--line);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.cam-spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 64px;
+  height: 64px;
+  margin: -32px 0 0 -32px;
+  border: 6px solid oklch(100% 0 0 / 0.35);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: cam-spin 0.9s linear infinite;
+}
+
+@keyframes cam-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.cam-result {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: oklch(23.57% 0.066 313.19 / 0.45);
+}
+
+.cam-result b {
+  display: grid;
+  place-items: center;
+  width: 128px;
+  height: 128px;
+  border-radius: 50%;
+  color: var(--card);
+  font-size: 72px;
+  line-height: 1;
+}
+
+.cam-result.match b {
+  background: var(--ok);
+  animation: cam-pop 0.5s cubic-bezier(0.2, 1.6, 0.4, 1);
+}
+
+.cam-result.unclear b {
+  background: var(--warn);
+  color: var(--ink);
+  animation: cam-wobble 0.7s ease-in-out;
+}
+
+.cam-result.no_match b {
+  background: var(--bad);
+  animation: cam-shake 0.5s ease-in-out;
+}
+
+@keyframes cam-pop {
+  from {
+    transform: scale(0.2);
+    opacity: 0;
+  }
+}
+
+@keyframes cam-wobble {
+  25% {
+    transform: rotate(-12deg);
+  }
+  50% {
+    transform: rotate(10deg);
+  }
+  75% {
+    transform: rotate(-6deg);
+  }
+}
+
+@keyframes cam-shake {
+  20%,
+  60% {
+    transform: translateX(-14px);
+  }
+  40%,
+  80% {
+    transform: translateX(14px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cam-result b,
+  .cam-spinner {
+    animation: none;
+  }
+}
+
+.camera [hidden] {
+  display: none;
+}
