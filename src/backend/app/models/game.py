@@ -162,7 +162,9 @@ class SessionLocation(Base):
 
     id: Mapped[UUID] = uuid_pk()
     session_id: Mapped[UUID] = mapped_column(ForeignKey("game_sessions.id"))
-    location_id: Mapped[UUID]  # FK to locations added once Eddy's content tables exist
+    # content is never deleted (locations are deactivated), so these FKs keep the default
+    # ON DELETE NO ACTION: deleting content a game used fails instead of erasing its history
+    location_id: Mapped[UUID] = mapped_column(ForeignKey("locations.id"))
     position: Mapped[int]
     status: Mapped[str] = mapped_column(
         default=LocationStatus.PENDING, server_default=LocationStatus.PENDING.value
@@ -200,8 +202,8 @@ class SessionLocation(Base):
     completed_at: Mapped[datetime | None]
 
     # content snapshot taken when the location is drawn (server only, never sent to students)
-    clue_id: Mapped[UUID]  # FK to clues added later
-    audio_asset_id: Mapped[UUID]  # FK to audio_assets added later
+    clue_id: Mapped[UUID] = mapped_column(ForeignKey("clues.id"))
+    audio_asset_id: Mapped[UUID] = mapped_column(ForeignKey("audio_assets.id"))
     accepted_answers_snapshot: Mapped[list[str]] = mapped_column(JSONB)
     gps_points_snapshot: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
     radius_snapshot: Mapped[int]

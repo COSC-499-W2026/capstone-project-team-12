@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.accounts import User
+from app.models.content import Location
 from app.models.engagement import Achievement, Class, ClassEnrollment, PointsLedger, UserAchievement
 from app.models.enums import (
     AchievementCategory,
@@ -229,6 +230,7 @@ def test_export_does_not_count_repeated_pairs_or_practice(
     make_enrollment: Callable[..., ClassEnrollment],
     make_game_session: Callable,
     make_session_location: Callable,
+    make_location: Callable[..., Location],
 ) -> None:
     teacher = make_user(role=UserRole.STAFF)
     student = make_user()
@@ -237,7 +239,7 @@ def test_export_does_not_count_repeated_pairs_or_practice(
     make_class_staff(classroom, teacher)
     make_enrollment(student, classroom)
 
-    shared_location = uuid4()
+    shared_location = make_location().id
 
     # Same location and difficulty repeated: counts once.
     for _ in range(2):

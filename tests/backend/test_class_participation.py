@@ -1,7 +1,6 @@
 """A16 participation grading: distinct completions, dates, and class isolation."""
 
 from datetime import UTC, date, datetime
-from uuid import uuid4
 
 import pytest
 
@@ -56,9 +55,10 @@ def test_unique_pairs_and_difficulty_count_separately(
     make_enrollment,
     make_game_session,
     make_session_location,
+    make_location,
 ):
     _, student, classroom = _setup(make_user, make_class, make_class_staff, make_enrollment)
-    shared_id = uuid4()
+    shared_id = make_location().id
     for difficulty in (Difficulty.BASIC, Difficulty.BASIC, Difficulty.ADVANCING):
         _location(
             make_game_session,
