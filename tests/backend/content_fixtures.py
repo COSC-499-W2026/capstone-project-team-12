@@ -29,6 +29,7 @@ from app.content.clue_audio import UPLOAD_PROVIDER
 from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
 from app.models.enums import Difficulty, FeedbackCode, Language
 from app.models.game import GameSession
+from app.services.audio import get_audio_service
 
 # the size of the spec's campus set
 PLAYABLE_LOCATIONS = 30
