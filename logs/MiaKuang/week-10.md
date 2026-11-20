@@ -63,7 +63,7 @@ Tests are new test functions (a parametrized test counts once). Generated files 
 
 **Generated code review:** See "A second thing went wrong" above: two conditions in the query had no test, and now each does.
 
-**Code quality:** No temporary workaround. Functions are 8 to 61 lines; the longest, `get_game_engagement`, is three related queries for one game. `engagement/interface.py` was already over 500 lines; I added 6.
+**Code quality:** No temporary workaround. Functions are 8 to 61 lines; the longest, `get_game_engagement`, is three related queries for one game. `engagement/interface.py` was already over 500 lines, because it is the one module other components may import from engagement, so every feature adds to it; I added 6. Splitting it by feature is a follow-up.
 
 **Teammate review:** Eddy found nothing blocking. Of his optional points I computed the level once instead of twice; a shared badge helper went to #354.
 
@@ -77,7 +77,7 @@ Tests are new test functions (a parametrized test counts once). Generated files 
 
 **Generated code review:** When I reviewed the response, I noticed the level and badges were at the top level instead of in the nested `engagement` object we agreed on Oct 23. Therefore, I moved them. I also noticed the lookup, 404 and expiry were copied from `get_game`. Therefore, both now use a shared `load_game`.
 
-**Code quality:** No temporary workaround. Functions are 4 to 19 lines. `api/v1/games.py` was already 520 lines before this stack and is 581 after it; moving the summary into its own module is a follow-up.
+**Code quality:** No temporary workaround. Functions are 4 to 19 lines. `api/v1/games.py` was already 520 lines before this stack and is 581 after it, because every game route and its response models are in that one router; moving the summary into its own module is a follow-up.
 
 **Teammate review:** Eddy found that my new badge schema duplicated `RecentBadgeResponse`, so the frontend would get two types for one thing. Therefore, the summary reuses it.
 
@@ -119,6 +119,8 @@ Tests are new test functions (a parametrized test counts once). Generated files 
 
 **Generated code review:** When I reviewed the README section, I noticed it didn't say to run the script from the repo root. Therefore, I added it.
 
+**Code quality:** `tests/backend/conftest.py` was already over 500 lines (585) and grew to 637 with the shared replay fixture, because all shared backend fixtures live in this one file (we keep one conftest per test folder); splitting the fixtures into plain modules is a follow-up.
+
 **Teammate review:** Eddy found that the pause test used private code (`api._call` and a patched `Api.ping`). Therefore, it pauses through the public route (in #340).
 
 **Tests:** 13 tests. 4 integration tests in `tests/backend/test_gps_replay_api.py` run the script against the real routes. Happy path: walking in and confirming. Abnormal: a weak signal. Negative: a pause stops the replay. 9 unit tests in `tests/utils/test_gps_replay.py` cover stopping errors and the HTTP client. The full suite passed before merge.
@@ -131,7 +133,7 @@ Tests are new test functions (a parametrized test counts once). Generated files 
 
 **Generated code review:** When I reviewed the catch-up test, I noticed it never reached the 2 s rate-limit check. Therefore, I changed it so it reaches the check and fails without it.
 
-**Code quality:** No temporary workaround. Functions are 2 to 61 lines; `replay` grew to 61 because it now keeps the timeline and the rate limit.
+**Code quality:** No temporary workaround. Functions are 2 to 61 lines; `replay` grew to 61 because it now keeps the timeline and the rate limit. `tests/utils/test_gps_replay.py` (545 lines) is now over 500, because all of the script's unit tests are in one file and this PR added the timing and error tests; `tests/backend/conftest.py` (659) grew for the reason in #327. Splitting them by topic is a follow-up.
 
 **Teammate review:** Eddy checked each fix and asked for five small robustness fixes, such as a clear exit for a file that isn't UTF-8. Therefore, I made all five.
 
@@ -161,7 +163,7 @@ Tests are new test functions (a parametrized test counts once). Generated files 
 
 **Generated code review:** When I reviewed the tests, I noticed removing the login's lock left every test passing. Therefore, the new race test runs for both login and refresh, and fails without either lock.
 
-**Code quality:** No temporary workaround. Functions are 3 to 42 lines; the longest, `rotate_tokens`, has to lock the user before it checks the token.
+**Code quality:** No temporary workaround. Functions are 3 to 42 lines; the longest, `rotate_tokens`, has to lock the user before it checks the token. `tests/backend/test_login.py` grew to 522 lines, because the new race tests share its login helpers; moving the race tests into their own file is a follow-up.
 
 **Teammate review:** Eddy found that if one test thread failed, the other was never finished. Therefore, each thread is finished on its own. He also asked for the rule "lock the user first" to be written where callers see it, so I added it to the interface.
 
