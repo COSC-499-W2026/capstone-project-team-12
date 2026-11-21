@@ -400,8 +400,9 @@ class AchievementsResponse(BaseModel):
         "including global achievements and previously earned inactive "
         "achievements. Each item includes its unlock state and available "
         "progress, including completed challenging locations for Challenge Master. "
-        "Unlocked achievements appear newest first, followed "
-        "by locked achievements."
+        "Perfect Session unlocks when all five locations in one session are completed, "
+        "excluding locations replaced by a shuffle. Unlocked achievements appear newest first, "
+        "followed by locked achievements."
     ),
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,

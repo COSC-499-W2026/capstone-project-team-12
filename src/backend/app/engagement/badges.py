@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.engagement import Achievement, PointsLedger, UserAchievement
-from app.models.enums import Difficulty, Language, LocationStatus, PointsSourceType
+from app.models.enums import Difficulty, Language, LocationStatus, PointsSourceType, SkipReason
 from app.models.game import GameSession, SessionLocation
 
 
@@ -29,10 +29,26 @@ def _challenging_completion_count(student_id: UUID, language: str, db: Session) 
     )
 
 
+def _is_perfect_session(session_id: UUID, required: int, db: Session) -> bool:
+    """Check the live positions of this session, including the just-scored result."""
+    total, completed = db.execute(
+        select(
+            func.count(),
+            func.count().filter(SessionLocation.status == LocationStatus.COMPLETED),
+        ).where(
+            SessionLocation.session_id == session_id,
+            SessionLocation.skip_reason.is_distinct_from(SkipReason.SHUFFLED),
+        )
+    ).one()
+    return total == completed == required
+
+
 def unlock_completion_badges(
     student_id: UUID,
     language: str,
     db: Session,
+    *,
+    session_id: UUID | None = None,
 ) -> tuple[str, ...]:
     """Unlock eligible completion badges once per student and language.
 
@@ -64,17 +80,21 @@ def unlock_completion_badges(
         condition = achievement.unlock_condition
 
         condition_type = condition.get("type")
-        threshold = condition.get("threshold")
+        threshold = condition.get(
+            "locations" if condition_type == "perfect_session" else "threshold"
+        )
         if type(threshold) is not int or threshold < 1:
             continue
 
         if condition_type == "locations_completed":
-            count = completed_count
+            eligible = completed_count >= threshold
         elif condition_type == "challenging_locations_completed":
-            count = _challenging_completion_count(student_id, language, db)
+            eligible = _challenging_completion_count(student_id, language, db) >= threshold
+        elif condition_type == "perfect_session":
+            eligible = session_id is not None and _is_perfect_session(session_id, threshold, db)
         else:
             continue
-        if count < threshold:
+        if not eligible:
             continue
 
         existing = db.scalar(
