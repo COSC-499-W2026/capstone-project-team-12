@@ -537,7 +537,7 @@ def validate_code_and_enrol(
 ) -> UUID:
     """Validate an access code and enrol a student in its class.
 
-    Return the class ID on success.
+    Return the class ID on success and select it for a new or reactivated enrolment.
 
     A retry succeeds without consuming another code use when the student
     is already actively enrolled in the class using the same access code.
@@ -559,7 +559,7 @@ def validate_code_and_enrol(
     Input is normalized by removing spaces and hyphens and converting
     to uppercase.
 
-    The function locks the student row to serialize concurrent joins.
+    Locks are acquired in student, access code, then class order.
     It does not commit. The caller owns the transaction.
     """
     normalized_code = "".join(code.upper().split()).replace("-", "")
@@ -601,7 +601,12 @@ def validate_code_and_enrol(
         if retry_enrolment is None:
             raise AppError(ErrorCode.INVALID_ACCESS_CODE)
 
-    school_class = db.get(Class, access_code.class_id)
+    school_class = db.scalar(
+        select(Class)
+        .where(Class.id == access_code.class_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
 
     if school_class is None:
         raise AppError(ErrorCode.INVALID_ACCESS_CODE)
@@ -664,6 +669,8 @@ def validate_code_and_enrol(
                 left_at=None,
             )
         )
+
+    user.current_class_id = school_class.id
 
     # Increment atomically without committing the caller's transaction.
     db.execute(
