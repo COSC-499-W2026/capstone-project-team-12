@@ -173,3 +173,12 @@ Paginated collection responses must use the following structure:
 |page_size|Effective page size|
 |total|Total number of resources matching request filter|
 |has_next_page|Indicates whether another page is available|
+
+## Teacher API: classroom access codes
+
+| Method and path | Who | Purpose |
+| --- | --- | --- |
+| `POST /teacher/classes` | Staff | Create a class and return the initial access code and its `access_code_id`. |
+| `POST /teacher/classes/{id}/access-codes` | Owner, TA | Create an additional code for an active class. |
+| `GET /teacher/classes/{id}/access-codes` | Owner, TA | List all codes newest first, including expired and deactivated codes. Archived classes stay readable. Each entry includes `id`, `code`, `expires_at`, `is_active`, `max_uses`, `uses_count`, and `created_at`. |
+| `PATCH /teacher/access-codes/{id}` | Owner, TA | Deactivate an access code for an active class. |

@@ -48,6 +48,7 @@ from app.engagement.classes import (
     create_class,
     deactivate_access_code,
     generate_access_code,
+    list_class_access_codes,
     list_staff_classes,
     update_class_settings,
 )
@@ -108,6 +109,7 @@ __all__ = [
     "is_actively_enrolled",
     "is_class_archived",
     "leave_class",
+    "list_class_access_codes",
     "list_staff_classes",
     "require_active_enrolment",
     "update_class_settings",

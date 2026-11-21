@@ -311,6 +311,17 @@ def update_class_settings(
     return school_class
 
 
+def list_class_access_codes(class_id: UUID, db: Session) -> list[AccessCode]:
+    """Return all codes for an authorized class, newest first."""
+    return list(
+        db.scalars(
+            select(AccessCode)
+            .where(AccessCode.class_id == class_id)
+            .order_by(AccessCode.created_at.desc(), AccessCode.id)
+        )
+    )
+
+
 def deactivate_access_code(
     code_id: UUID,
     actor: User,
