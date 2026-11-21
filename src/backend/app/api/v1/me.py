@@ -542,8 +542,9 @@ class JoinClassResponse(BaseModel):
         "Successful enrolment also makes it the student's current class. "
         "Repeating a successful request with the original access code "
         "returns success without changing the current class or consuming another use, "
-        "even if the code "
-        "has expired or reached its usage limit. Deactivated codes are rejected."
+        "even if the code has expired or reached its usage limit. A deactivated code "
+        "returns 400 INVALID_ACCESS_CODE, including the original code. A different valid code "
+        "for the same class returns 409 ALREADY_IN_CLASS_FOR_LANGUAGE."
     ),
     responses=error_responses(
         HTTPStatus.BAD_REQUEST,

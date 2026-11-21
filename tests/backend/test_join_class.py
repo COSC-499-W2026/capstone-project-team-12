@@ -267,6 +267,8 @@ def test_retry_does_not_consume_code(
 
     first = join_as(client, student, access_code.code)
     assert first.status_code == 200, first.text
+    selection = client.patch("/api/v1/me/profile", json={"current_class_id": None})
+    assert selection.status_code == 200, selection.text
 
     db.refresh(access_code)
     original_uses = access_code.uses_count
@@ -289,6 +291,13 @@ def test_retry_does_not_consume_code(
 
     db.refresh(access_code)
     assert access_code.uses_count == original_uses
+    db.refresh(student)
+    assert student.current_class_id is None
+    enrollment = (
+        db.query(ClassEnrollment).filter_by(student_id=student.id, class_id=school_class.id).one()
+    )
+    assert enrollment.is_active
+    assert enrollment.access_code_id == access_code.id
 
 
 def test_same_class_different_valid_code_conflict(
@@ -306,6 +315,8 @@ def test_same_class_different_valid_code_conflict(
 
     first = join_as(client, student, original_code.code)
     assert first.status_code == 200, first.text
+    selection = client.patch("/api/v1/me/profile", json={"current_class_id": None})
+    assert selection.status_code == 200, selection.text
 
     response = join_as(client, student, other_code.code)
     assert_error(response, 409, ErrorCode.ALREADY_IN_CLASS_FOR_LANGUAGE)
@@ -318,7 +329,10 @@ def test_same_class_different_valid_code_conflict(
     enrollment = (
         db.query(ClassEnrollment).filter_by(student_id=student.id, class_id=school_class.id).one()
     )
+    assert enrollment.is_active
     assert enrollment.access_code_id == original_code.id
+    db.refresh(student)
+    assert student.current_class_id is None
 
 
 @pytest.mark.parametrize("code_state", ["expired", "exhausted"])

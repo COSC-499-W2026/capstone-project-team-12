@@ -173,3 +173,7 @@ Paginated collection responses must use the following structure:
 |page_size|Effective page size|
 |total|Total number of resources matching request filter|
 |has_next_page|Indicates whether another page is available|
+
+## Join-class retries
+
+For `POST /api/v1/me/classes/join`, a student with an active enrolment in the class can retry with the original code and receive `200`, even if that code has expired or reached its usage limit. An inactive code returns `400 INVALID_ACCESS_CODE`, including when it was the original code. A different valid code for the same class returns `409 ALREADY_IN_CLASS_FOR_LANGUAGE`. These retries leave the enrolment, code usage, and current class selection unchanged.
