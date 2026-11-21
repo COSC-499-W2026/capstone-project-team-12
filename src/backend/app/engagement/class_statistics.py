@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.engagement.streaks import app_calendar_date, visible_streak
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
+from app.models.content import Location
 from app.models.engagement import ClassEnrollment, PointsLedger, UserAchievement, UserStats
 from app.models.enums import ArrivalOverride, Difficulty, DifficultySuggestion, LocationStatus
 from app.models.game import GameSession, SessionLocation
@@ -51,11 +52,11 @@ def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
     average = func.avg(func.least(func.greatest(elapsed, 0), 1800)).filter(
         completed_filter, location.started_at.is_not(None), location.completed_at.is_not(None)
     )
-    first_position = func.min(location.position)
+    label = func.coalesce(Location.room_number, Location.name)
     rows = db.execute(
         select(
             location.location_id,
-            first_position,
+            label,
             func.count(),
             func.count().filter(completed_filter),
             func.coalesce(func.sum(location.attempts_used), 0),
@@ -64,12 +65,13 @@ def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
             func.count().filter(location.arrival_override == ArrivalOverride.GPS_UNAVAILABLE),
         )
         .join(GameSession, GameSession.id == location.session_id)
+        .join(Location, Location.id == location.location_id)
         .where(
             GameSession.class_id == class_id,
             location.status.in_((LocationStatus.COMPLETED, LocationStatus.FAILED)),
         )
-        .group_by(func.rollup(location.location_id))
-        .order_by(func.grouping(location.location_id).desc(), first_position, location.location_id)
+        .group_by(func.rollup(tuple_(location.location_id, label)))
+        .order_by(func.grouping(location.location_id).desc(), label, location.location_id)
     ).all()
 
     # ROLLUP includes a class summary even when no location results match.
@@ -95,11 +97,11 @@ def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
             flagged,
             overrides,
             location_id,
-            f"Location {position}",
+            label,
         )
         for (
             location_id,
-            position,
+            label,
             finished,
             completed,
             attempts,
