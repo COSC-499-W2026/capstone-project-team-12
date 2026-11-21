@@ -7,9 +7,18 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.game.scoring import score_finalized_location
 from app.models.accounts import User
 from app.models.engagement import Achievement, PointsLedger, UserAchievement
-from app.models.enums import Language, PointsSourceType, UserRole
+from app.models.enums import (
+    Difficulty,
+    Language,
+    LocationStatus,
+    PointsSourceType,
+    SessionState,
+    UserRole,
+)
+from app.models.game import GameSession, SessionLocation
 
 URL = "/api/v1/me/achievements"
 
@@ -268,7 +277,7 @@ def test_unsupported_progress_is_null(
     auth_headers: Callable[[User], dict[str, str]],
 ) -> None:
     items = _items(client, make_user(role=UserRole.STUDENT), auth_headers)
-    for key in ("campus_master", "week_warrior", "challenge_master", "perfect_session"):
+    for key in ("campus_master", "week_warrior", "perfect_session"):
         assert _badge(items, key)["progress"] is None
 
 
@@ -284,3 +293,63 @@ def test_progress_does_not_automatically_unlock_achievement(
     assert first_step["progress"] == {"current": 1, "required": 1}
     assert first_step["unlocked"] is False
     assert first_step["unlocked_at"] is None
+
+
+def test_challenge_master_unlocks_only_once_at_ten_completions(
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    auth_headers: Callable[[User], dict[str, str]],
+) -> None:
+    student = make_user()
+    other = make_user()
+    now = datetime.now(UTC)
+    key = "challenge_master"
+
+    def previous_completion(player: User, language: Language, difficulty: Difficulty) -> None:
+        game = make_game_session(
+            player,
+            difficulty=difficulty,
+            target_language=language,
+            state=SessionState.COMPLETED,
+            completed_at=now,
+        )
+        make_session_location(
+            game, 1, status=LocationStatus.COMPLETED, completed_at=now, points_awarded=100
+        )
+
+    for _ in range(8):
+        previous_completion(student, Language.JA, Difficulty.CHALLENGING)
+    previous_completion(student, Language.JA, Difficulty.BASIC)
+    previous_completion(student, Language.FR, Difficulty.CHALLENGING)
+    previous_completion(other, Language.JA, Difficulty.CHALLENGING)
+
+    game = make_game_session(student, difficulty=Difficulty.CHALLENGING)
+    failed = make_session_location(game, 1, status=LocationStatus.FAILED)
+    assert key not in score_finalized_location(game, failed, db).achievements_unlocked
+
+    def finish(position: int) -> SessionLocation:
+        return make_session_location(
+            game, position, status=LocationStatus.COMPLETED, completed_at=now, points_awarded=100
+        )
+
+    ninth = finish(2)
+    assert key not in score_finalized_location(game, ninth, db).achievements_unlocked
+    before = _badge(_items(client, student, auth_headers), key)
+    assert before["progress"] == {"current": 9, "required": 10}
+    assert before["unlocked"] is False
+
+    tenth = finish(3)
+    result = score_finalized_location(game, tenth, db)
+    assert key in result.achievements_unlocked
+    assert key not in score_finalized_location(game, tenth, db).achievements_unlocked
+    assert key not in score_finalized_location(game, finish(4), db).achievements_unlocked
+
+    japanese_badge = _badge(_items(client, student, auth_headers), key)
+    french_badge = _badge(_items(client, student, auth_headers, Language.FR), key)
+    assert japanese_badge["unlocked"] is True
+    assert japanese_badge["progress"] == {"current": 11, "required": 10}
+    assert french_badge["unlocked"] is False
+    assert french_badge["progress"] == {"current": 1, "required": 10}

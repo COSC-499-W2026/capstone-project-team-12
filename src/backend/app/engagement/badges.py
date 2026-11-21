@@ -8,7 +8,25 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.engagement import Achievement, PointsLedger, UserAchievement
-from app.models.enums import Language, PointsSourceType
+from app.models.enums import Difficulty, Language, LocationStatus, PointsSourceType
+from app.models.game import GameSession, SessionLocation
+
+
+def _challenging_completion_count(student_id: UUID, language: str, db: Session) -> int:
+    """Count completed location results in challenging games for one student and language."""
+    return (
+        db.scalar(
+            select(func.count(SessionLocation.id))
+            .join(GameSession, GameSession.id == SessionLocation.session_id)
+            .where(
+                GameSession.student_id == student_id,
+                GameSession.target_language == language,
+                GameSession.difficulty == Difficulty.CHALLENGING,
+                SessionLocation.status == LocationStatus.COMPLETED,
+            )
+        )
+        or 0
+    )
 
 
 def unlock_completion_badges(
@@ -45,14 +63,18 @@ def unlock_completion_badges(
     for achievement in definitions:
         condition = achievement.unlock_condition
 
-        if condition.get("type") != "locations_completed":
-            continue
-
+        condition_type = condition.get("type")
         threshold = condition.get("threshold")
         if type(threshold) is not int or threshold < 1:
             continue
 
-        if completed_count < threshold:
+        if condition_type == "locations_completed":
+            count = completed_count
+        elif condition_type == "challenging_locations_completed":
+            count = _challenging_completion_count(student_id, language, db)
+        else:
+            continue
+        if count < threshold:
             continue
 
         existing = db.scalar(
@@ -204,12 +226,13 @@ def list_unlocked_achievements(
         condition = achievement.unlock_condition
         progress: AchievementProgress | None = None
 
-        if condition.get("type") == "locations_completed":
-            threshold = condition.get("threshold")
-
-            if type(threshold) is int and threshold > 0:
+        threshold = condition.get("threshold")
+        if type(threshold) is int and threshold > 0:
+            if condition.get("type") == "locations_completed":
+                progress = AchievementProgress(current=completed_count, required=threshold)
+            elif condition.get("type") == "challenging_locations_completed":
                 progress = AchievementProgress(
-                    current=completed_count,
+                    current=_challenging_completion_count(student_id, language, db),
                     required=threshold,
                 )
 
