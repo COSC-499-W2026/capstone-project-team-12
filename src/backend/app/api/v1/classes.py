@@ -22,6 +22,7 @@ from app.accounts.interface import (
 )
 from app.db import get_db
 from app.engagement.interface import (
+    archive_class,
     create_class,
     deactivate_access_code,
     generate_access_code,
@@ -739,6 +740,37 @@ def leave_class_endpoint(
     try:
         leave_class(user.id, class_id, db)
         end_open_sessions(class_id, db, student_id=user.id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+@teacher_classes_router.post(
+    "/{class_id}/archive",
+    status_code=HTTPStatus.NO_CONTENT,
+    operation_id="archiveClass",
+    summary="Archive a classroom",
+    description=(
+        "Only the classroom owner can archive it. Archiving ends active enrolments "
+        "and open class games, preserves earned points, and prevents future joins "
+        "and games. Repeating the request succeeds."
+    ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER))],
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+    ),
+)
+def archive_class_endpoint(
+    class_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Archive the classroom and end its games in one transaction."""
+    try:
+        archive_class(class_id, db)
+        end_open_sessions(class_id, db)
         db.commit()
     except Exception:
         db.rollback()

@@ -70,7 +70,7 @@ from app.engagement.streaks import (
     visible_streak,
 )
 from app.errors import AppError, ErrorCode
-from app.models.accounts import ClassStaff
+from app.models.accounts import ClassStaff, User
 from app.models.engagement import (
     AccessCode,
     Class,
@@ -108,6 +108,7 @@ __all__ = [
     "is_actively_enrolled",
     "is_class_archived",
     "leave_class",
+    "archive_class",
     "list_staff_classes",
     "require_active_enrolment",
     "update_class_settings",
@@ -604,7 +605,7 @@ def validate_code_and_enrol(
     school_class = db.scalar(
         select(Class)
         .where(Class.id == access_code.class_id)
-        .with_for_update()
+        .with_for_update(key_share=True)
         .execution_options(populate_existing=True)
     )
 
@@ -730,4 +731,58 @@ def leave_class(student_id: UUID, class_id: UUID, db: Session) -> None:
             .limit(1)
         )
 
+    db.flush()
+
+
+def archive_class(class_id: UUID, db: Session) -> None:
+    """Archive a class and end its enrolments without committing.
+
+    Lock enrolled students before the class, matching join and serializing
+    against game start, reset, leave and class selection. A join that committed
+    while these locks were being acquired requires a fresh pass.
+    """
+    enrolled_students = select(ClassEnrollment.student_id).where(
+        ClassEnrollment.class_id == class_id,
+        ClassEnrollment.is_active.is_(True),
+    )
+    while True:
+        locks = db.begin_nested()
+        students = db.scalars(
+            select(User)
+            .where(User.id.in_(enrolled_students) | (User.current_class_id == class_id))
+            .order_by(User.id)
+            .with_for_update(key_share=True)
+            .execution_options(populate_existing=True)
+        ).all()
+        school_class = db.scalar(
+            select(Class)
+            .where(Class.id == class_id)
+            .with_for_update(key_share=True)
+            .execution_options(populate_existing=True)
+        )
+        if school_class is None:
+            locks.rollback()
+            raise AppError(ErrorCode.NOT_FOUND)
+        if school_class.archived_at is not None:
+            locks.commit()
+            return
+
+        if set(db.scalars(enrolled_students)).issubset(student.id for student in students):
+            locks.commit()
+            break
+        locks.rollback()
+
+    now = datetime.now(UTC)
+    school_class.archived_at = now
+    db.execute(
+        update(ClassEnrollment)
+        .where(
+            ClassEnrollment.class_id == class_id,
+            ClassEnrollment.is_active.is_(True),
+        )
+        .values(is_active=False, end_reason=EnrollmentEndReason.ARCHIVED, left_at=now)
+    )
+    for student in students:
+        if student.current_class_id == class_id:
+            student.current_class_id = next(iter(get_active_class_ids(student.id, db)), None)
     db.flush()
