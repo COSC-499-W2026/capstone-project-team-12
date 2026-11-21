@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.content.interface import eligible_location_ids
 from app.models.engagement import Achievement, PointsLedger, UserAchievement
 from app.models.enums import Difficulty, Language, LocationStatus, PointsSourceType, SkipReason
 from app.models.game import GameSession, SessionLocation
@@ -43,6 +44,54 @@ def _is_perfect_session(session_id: UUID, required: int, db: Session) -> bool:
     return total == completed == required
 
 
+def _campus_progress(student_id: UUID, language: Language, db: Session) -> tuple[int, int]:
+    """Count distinct completed locations among the language's current drawable content."""
+    playable = eligible_location_ids(language, None, db)
+    if not playable:
+        return 0, 0
+    completed = (
+        db.scalar(
+            select(func.count(func.distinct(SessionLocation.location_id)))
+            .join(GameSession, GameSession.id == SessionLocation.session_id)
+            .where(
+                GameSession.student_id == student_id,
+                GameSession.target_language == language,
+                SessionLocation.status == LocationStatus.COMPLETED,
+                SessionLocation.location_id.in_(playable),
+            )
+        )
+        or 0
+    )
+    return completed, len(playable)
+
+
+def _completion_condition_met(
+    condition: dict[str, object],
+    student_id: UUID,
+    language: str,
+    completed_count: int,
+    session_id: UUID | None,
+    db: Session,
+) -> bool:
+    condition_type = condition.get("type")
+    if condition_type == "all_playable_locations":
+        completed, required = _campus_progress(student_id, Language(language), db)
+        return required > 0 and completed == required
+
+    threshold = condition.get("locations" if condition_type == "perfect_session" else "threshold")
+    if type(threshold) is not int or threshold < 1:
+        return False
+    if condition_type == "locations_completed":
+        return completed_count >= threshold
+    if condition_type == "challenging_locations_completed":
+        return _challenging_completion_count(student_id, language, db) >= threshold
+    return (
+        condition_type == "perfect_session"
+        and session_id is not None
+        and _is_perfect_session(session_id, threshold, db)
+    )
+
+
 def unlock_completion_badges(
     student_id: UUID,
     language: str,
@@ -77,24 +126,9 @@ def unlock_completion_badges(
     unlocked: list[str] = []
 
     for achievement in definitions:
-        condition = achievement.unlock_condition
-
-        condition_type = condition.get("type")
-        threshold = condition.get(
-            "locations" if condition_type == "perfect_session" else "threshold"
-        )
-        if type(threshold) is not int or threshold < 1:
-            continue
-
-        if condition_type == "locations_completed":
-            eligible = completed_count >= threshold
-        elif condition_type == "challenging_locations_completed":
-            eligible = _challenging_completion_count(student_id, language, db) >= threshold
-        elif condition_type == "perfect_session":
-            eligible = session_id is not None and _is_perfect_session(session_id, threshold, db)
-        else:
-            continue
-        if not eligible:
+        if not _completion_condition_met(
+            achievement.unlock_condition, student_id, language, completed_count, session_id, db
+        ):
             continue
 
         existing = db.scalar(
@@ -246,6 +280,10 @@ def list_unlocked_achievements(
         condition = achievement.unlock_condition
         progress: AchievementProgress | None = None
 
+        if condition.get("type") == "all_playable_locations":
+            current, required = _campus_progress(student_id, language, db)
+            if required > 0:
+                progress = AchievementProgress(current=current, required=required)
         threshold = condition.get("threshold")
         if type(threshold) is int and threshold > 0:
             if condition.get("type") == "locations_completed":
