@@ -114,6 +114,7 @@ __all__ = [
     "list_staff_classes",
     "require_active_enrolment",
     "update_class_settings",
+    "JoinedClass",
     "validate_code_and_enrol",
     "LanguageEngagementStats",
     "get_language_engagement_stats",
@@ -567,14 +568,20 @@ def _active_enrolment_for_language(
     )
 
 
+@dataclass(frozen=True)
+class JoinedClass:
+    class_id: UUID
+    language: Language
+
+
 def validate_code_and_enrol(
     student_id: UUID,
     code: str,
     db: Session,
-) -> UUID:
+) -> JoinedClass:
     """Validate an access code and enrol a student in its class.
 
-    Return the class ID on success and select it for a new or reactivated enrolment.
+    Return the class ID and language, selecting the class for a new or reactivated enrolment.
 
     A retry succeeds without consuming another code use when the student
     is already actively enrolled in the class using the same access code.
@@ -656,12 +663,13 @@ def validate_code_and_enrol(
 
     active_enrolment = _active_enrolment_for_language(student_id, school_class.target_language, db)
 
+    joined = JoinedClass(school_class.id, Language(school_class.target_language))
     if active_enrolment is not None:
         if (
             active_enrolment.class_id == school_class.id
             and active_enrolment.access_code_id == access_code.id
         ):
-            return school_class.id
+            return joined
 
         raise AppError(ErrorCode.ALREADY_IN_CLASS_FOR_LANGUAGE)
 
@@ -694,7 +702,7 @@ def validate_code_and_enrol(
     )
 
     db.flush()
-    return school_class.id
+    return joined
 
 
 def _next_current_class(student_id: UUID, class_id: UUID, db: Session) -> UUID | None:

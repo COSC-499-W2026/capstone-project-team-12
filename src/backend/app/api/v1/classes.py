@@ -26,18 +26,15 @@ from app.engagement.interface import (
     create_class,
     deactivate_access_code,
     generate_access_code,
-    get_class_language,
     get_class_leaderboard,
     get_class_location_analytics,
     get_class_participation,
     get_class_student_analytics,
-    leave_class,
     list_staff_classes,
     remove_student,
     require_active_enrolment,
     restore_student,
     update_class_settings,
-    validate_code_and_enrol,
 )
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.interface import end_open_sessions
@@ -45,7 +42,6 @@ from app.models.accounts import User
 from app.models.engagement import Class
 from app.models.enums import ClassStaffRole, Difficulty, DifficultySuggestion, Language
 
-classes_router = APIRouter(prefix="/me/classes", tags=["classes"])
 leaderboard_router = APIRouter(prefix="/classes", tags=["classes"])
 teacher_classes_router = APIRouter(
     prefix="/teacher/classes",
@@ -135,24 +131,6 @@ def get_class_leaderboard_endpoint(
         total=total,
         has_next_page=start + page_size < total,
     )
-
-
-class JoinClassRequest(BaseModel):
-    """Access code provided by a student joining a classroom."""
-
-    access_code: str = Field(
-        min_length=1,
-        max_length=32,
-        description="Eight-character classroom access code. Spaces and hyphens are accepted.",
-        examples=["K7PM-3QXD"],
-    )
-
-
-class JoinClassResponse(BaseModel):
-    """Classroom selected after successful enrolment."""
-
-    class_id: UUID
-    language: Language
 
 
 class CreateClassRequest(BaseModel):
@@ -660,88 +638,6 @@ def deactivate_class_access_code(
     """Deactivate an access code in the caller-owned transaction."""
     try:
         deactivate_access_code(code_id=code_id, db=db)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-
-
-@classes_router.post(
-    "/join",
-    response_model=JoinClassResponse,
-    operation_id="joinClass",
-    summary="Join a classroom",
-    description=(
-        "Enrol the authenticated student using a classroom access code. "
-        "A student may have only one active classroom per language. "
-        "Students who voluntarily left may rejoin, but students removed "
-        "by a teacher cannot. Teachers cannot join as students, and "
-        "teaching assistants cannot join classes they assist. "
-        "Successful enrolment also makes it the student's current class. "
-        "Repeating a successful request with the original access code "
-        "returns success without changing the current class or consuming another use, "
-        "even if the code "
-        "has expired or reached its usage limit. Deactivated codes are rejected."
-    ),
-    responses=error_responses(
-        HTTPStatus.BAD_REQUEST,
-        HTTPStatus.UNAUTHORIZED,
-        HTTPStatus.FORBIDDEN,
-        HTTPStatus.CONFLICT,
-    ),
-)
-def join_class(
-    request: JoinClassRequest,
-    user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> JoinClassResponse:
-    """Join a classroom and select it in one transaction."""
-    class_id = validate_code_and_enrol(
-        user.id,
-        request.access_code,
-        db,
-    )
-
-    language = get_class_language(class_id, db)
-
-    if language is None:
-        raise AppError(ErrorCode.INTERNAL_ERROR)
-
-    db.commit()
-
-    return JoinClassResponse(
-        class_id=class_id,
-        language=language,
-    )
-
-
-@classes_router.post(
-    "/{class_id}/leave",
-    status_code=HTTPStatus.NO_CONTENT,
-    operation_id="leaveClass",
-    summary="Leave a classroom",
-    description=(
-        "Leave an actively enrolled classroom. "
-        "The student may rejoin later using a valid access code. "
-        "If this was the student's current class, another active class "
-        "is selected when available; otherwise, the selection is cleared. "
-        "Leaving ends any open (active or paused) class game sessions."
-    ),
-    responses=error_responses(
-        HTTPStatus.UNAUTHORIZED,
-        HTTPStatus.FORBIDDEN,
-        HTTPStatus.NOT_FOUND,
-    ),
-)
-def leave_class_endpoint(
-    class_id: UUID,
-    user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> None:
-    """Leave a classroom and close its open games in one transaction."""
-    try:
-        leave_class(user.id, class_id, db)
-        end_open_sessions(class_id, db, student_id=user.id)
         db.commit()
     except Exception:
         db.rollback()
