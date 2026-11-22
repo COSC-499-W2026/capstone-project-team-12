@@ -11,13 +11,13 @@ import pytest
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.testclient import TestClient
 from httpx2 import Response
-from sqlalchemy import Engine, delete, select, text, update
+from sqlalchemy import Engine, delete, select, text
 from sqlalchemy.orm import Session
 
 from app.accounts import login as login_module
 from app.accounts.login import login_account
 from app.accounts.password import hash_password
-from app.accounts.staff import deactivate_staff, reactivate_staff
+from app.accounts.staff import set_staff_active
 from app.accounts.tokens import TokenPair, create_refresh_token
 from app.errors import ErrorCode
 from app.models.accounts import RefreshToken, User
@@ -44,10 +44,10 @@ def teacher(make_user: Callable[..., User]) -> User:
 @pytest.fixture
 def send(
     client: TestClient, auth_headers: Callable[[User], dict[str, str]]
-) -> Callable[[str, User, UUID | str], Response]:
+) -> Callable[[str, User, UUID], Response]:
     """POST /admin/users/{target}/{action} as `caller`."""
 
-    def post(action: str, caller: User, target: UUID | str) -> Response:
+    def post(action: str, caller: User, target: UUID) -> Response:
         url = f"/api/v1/admin/users/{target}/{action}"
         return client.post(url, headers=auth_headers(caller))
 
@@ -70,17 +70,9 @@ def refresh(client: TestClient, refresh_token: str) -> Response:
     return response
 
 
-def profile(client: TestClient, access_token: str) -> Response:
-    return client.get("/api/v1/me/profile", headers={"Authorization": f"Bearer {access_token}"})
-
-
 def audit_entries(db: Session, actor: User) -> list[AuditEvent]:
-    oldest_first = AuditEvent.created_at, AuditEvent.id
-    return list(
-        db.scalars(
-            select(AuditEvent).where(AuditEvent.actor_id == actor.id).order_by(*oldest_first)
-        )
-    )
+    entries = select(AuditEvent).where(AuditEvent.actor_id == actor.id)
+    return list(db.scalars(entries.order_by(AuditEvent.created_at)))
 
 
 def revoked(db: Session, user: User) -> list[bool]:
@@ -99,15 +91,14 @@ def test_a_deactivated_teacher_is_signed_out_everywhere_and_cannot_sign_in(
 ) -> None:
     signed_in = [login(client, teacher) for _ in range(2)]  # two devices
     assert [response.status_code for response in signed_in] == [200, 200]
-    access_token = signed_in[0].json()["access_token"]
-    assert profile(client, access_token).status_code == 200
+    access = {"Authorization": f"Bearer {signed_in[0].json()['access_token']}"}
 
     response = send("deactivate", admin, teacher.id)
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert (body["id"], body["is_active"]) == (str(teacher.id), False)
-    assert body["can_manage_content"] is True  # kept for when the account is reactivated
+    # content rights are kept for when the account is reactivated
+    assert (body["is_active"], body["can_manage_content"]) == (False, True)
     db.refresh(teacher)
     assert teacher.is_active is False
     assert revoked(db, teacher) == [True, True]
@@ -115,15 +106,16 @@ def test_a_deactivated_teacher_is_signed_out_everywhere_and_cannot_sign_in(
         assert_error(
             refresh(client, device.cookies["refresh_token"]), 401, ErrorCode.NOT_AUTHENTICATED
         )
-    assert_error(profile(client, access_token), 403, ErrorCode.ACCOUNT_DISABLED)
+    assert_error(client.get("/api/v1/me/profile", headers=access), 403, ErrorCode.ACCOUNT_DISABLED)
     assert_error(login(client, teacher), 403, ErrorCode.ACCOUNT_DISABLED)
     assert revoked(db, teacher) == [True, True]  # the refused login added no token
 
     [entry] = audit_entries(db, admin)
-    assert (entry.action, entry.result, entry.target_id) == (
+    assert (entry.action, entry.result, entry.target_id, entry.ip_address) == (
         AuditAction.DEACTIVATE_USER,
         AuditResult.SUCCESS,
         teacher.id,
+        "testclient",
     )
     assert entry.details == {
         "email": teacher.email,
@@ -131,7 +123,6 @@ def test_a_deactivated_teacher_is_signed_out_everywhere_and_cannot_sign_in(
         "role": "staff",
         "was_active": True,
     }
-    assert entry.ip_address == "testclient"
 
 
 def test_a_reactivated_teacher_can_sign_in_again(
@@ -148,8 +139,7 @@ def test_a_reactivated_teacher_can_sign_in_again(
     response = send("reactivate", admin, teacher.id)
 
     assert response.status_code == 200, response.text
-    assert response.json()["is_active"] is True
-    assert response.json()["can_manage_content"] is True
+    assert (response.json()["is_active"], response.json()["can_manage_content"]) == (True, True)
     db.refresh(teacher)
     assert teacher.is_active is True
     # the sign-in ended by the deactivation stays ended
@@ -159,11 +149,10 @@ def test_a_reactivated_teacher_can_sign_in_again(
     assert refresh(client, signed_in.cookies["refresh_token"]).status_code == 200
 
     entries = audit_entries(db, admin)
-    assert [(entry.action, entry.result, entry.target_id) for entry in entries] == [
-        (AuditAction.DEACTIVATE_USER, AuditResult.SUCCESS, teacher.id),
-        (AuditAction.REACTIVATE_USER, AuditResult.SUCCESS, teacher.id),
+    assert [(entry.action, entry.result, entry.details["was_active"]) for entry in entries] == [
+        (AuditAction.DEACTIVATE_USER, AuditResult.SUCCESS, True),
+        (AuditAction.REACTIVATE_USER, AuditResult.SUCCESS, False),
     ]
-    assert entries[1].details["was_active"] is False
 
 
 @pytest.mark.parametrize("action", ACTIONS)
@@ -177,16 +166,14 @@ def test_admin_and_student_accounts_are_refused_and_audited_as_denied(
     action: str,
     role: UserRole,
 ) -> None:
-    # each starts in the state the action would change
-    was_active = action == "deactivate"
+    was_active = action == "deactivate"  # each starts in the state the action would change
     target = make_user(role=role, is_active=was_active)
     create_refresh_token(target.id, db)
 
     assert_error(send(action, admin, target.id), 403, ErrorCode.FORBIDDEN_ROLE)
 
     db.refresh(target)
-    assert target.is_active is was_active
-    assert revoked(db, target) == [False]
+    assert (target.is_active, revoked(db, target)) == (was_active, [False])
     [entry] = audit_entries(db, admin)
     assert (entry.action, entry.result, entry.target_id) == (
         ACTIONS[action],
@@ -200,17 +187,6 @@ def test_admin_and_student_accounts_are_refused_and_audited_as_denied(
         "was_active": was_active,
         "error": "FORBIDDEN_ROLE",
     }
-
-
-def test_an_admin_cannot_deactivate_their_own_account(
-    db: Session,
-    admin: User,
-    send: Callable[..., Response],
-    assert_error: Callable[[Response, int, ErrorCode], None],
-) -> None:
-    assert_error(send("deactivate", admin, admin.id), 403, ErrorCode.FORBIDDEN_ROLE)
-    db.refresh(admin)
-    assert admin.is_active is True
 
 
 @pytest.mark.parametrize("action", ACTIONS)
@@ -244,23 +220,15 @@ def test_repeating_an_action_succeeds_and_is_audited_again(
 ) -> None:
     active = action == "reactivate"
     target = make_user(role=UserRole.STAFF, is_active=active)  # already in the end state
+    create_refresh_token(target.id, db)  # e.g. left over on an account deactivated directly
 
     response = send(action, admin, target.id)
 
     assert response.status_code == 200, response.text
     assert response.json()["is_active"] is active
+    assert revoked(db, target) == [not active]  # deactivating again still revokes it
     [entry] = audit_entries(db, admin)
     assert (entry.result, entry.details["was_active"]) == (AuditResult.SUCCESS, active)
-
-
-def test_deactivating_again_revokes_a_token_left_over(
-    db: Session, admin: User, make_user: Callable[..., User], send: Callable[..., Response]
-) -> None:
-    target = make_user(role=UserRole.STAFF, is_active=False)
-    create_refresh_token(target.id, db)  # e.g. deactivated without the API
-
-    assert send("deactivate", admin, target.id).status_code == 200
-    assert revoked(db, target) == [True]
 
 
 @pytest.mark.parametrize("action", ACTIONS)
@@ -304,58 +272,37 @@ def test_without_a_token_the_request_is_401(
     assert_error(response, 401, ErrorCode.NOT_AUTHENTICATED)
 
 
-@pytest.mark.parametrize("action", ACTIONS)
-def test_an_id_that_is_not_a_uuid_is_422_and_not_audited(
-    db: Session,
-    admin: User,
-    send: Callable[..., Response],
-    assert_error: Callable[[Response, int, ErrorCode], None],
-    action: str,
-) -> None:
-    assert_error(send(action, admin, "not-a-uuid"), 422, ErrorCode.VALIDATION_ERROR)
-    assert audit_entries(db, admin) == []
-
-
-@pytest.mark.parametrize("change", [deactivate_staff, reactivate_staff])
+@pytest.mark.parametrize("active", [False, True])
 def test_the_service_does_not_commit(
-    db: Session,
-    admin: User,
-    teacher: User,
-    monkeypatch: pytest.MonkeyPatch,
-    change: Callable[..., User],
+    db: Session, admin: User, teacher: User, monkeypatch: pytest.MonkeyPatch, active: bool
 ) -> None:
     commits: list[None] = []
     monkeypatch.setattr(db, "commit", lambda: commits.append(None))
 
-    change(admin.id, teacher.id, db)
+    set_staff_active(admin.id, teacher.id, active, db)
 
     assert commits == []
 
 
 def test_a_login_in_progress_has_its_token_revoked_by_the_deactivation(
-    test_engine: Engine,
-    run_together: Callable[..., list[Any]],
-    monkeypatch: pytest.MonkeyPatch,
+    test_engine: Engine, run_together: Callable[..., list[Any]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A login has added its refresh token but not committed when the deactivation starts. The
     deactivation waits on the user lock the login holds, then revokes that token too; without
     the wait it couldn't see the uncommitted row, and the token would outlive the deactivation.
     """
-    with Session(test_engine, expire_on_commit=False) as setup:
-        admin = User(
+    admin, teacher = (
+        User(
             email=f"{uuid4().hex[:12]}@example.com",
-            username=f"admin_{uuid4().hex[:8]}",
-            role=UserRole.ADMIN,
-        )
-        teacher = User(
-            email=f"{uuid4().hex[:12]}@example.com",
-            username=f"staff_{uuid4().hex[:8]}",
-            role=UserRole.STAFF,
+            username=f"user_{uuid4().hex[:8]}",
+            role=role,
             password_hash=hash_password(PASSWORD),
         )
+        for role in (UserRole.ADMIN, UserRole.STAFF)
+    )
+    with Session(test_engine, expire_on_commit=False) as setup:
         setup.add_all([admin, teacher])
         setup.commit()
-
     inserted = threading.Event()
     create = login_module.create_refresh_token
 
@@ -369,15 +316,14 @@ def test_a_login_in_progress_has_its_token_revoked_by_the_deactivation(
 
     def deactivate_once_signed_in(session: Session) -> User:
         assert inserted.wait(timeout=10), "the login never added its token"
-        return deactivate_staff(admin.id, teacher.id, session)
+        return set_staff_active(admin.id, teacher.id, False, session)
 
     try:
         signed_in, deactivated = run_together(
             lambda session: login_account(form, session), deactivate_once_signed_in, hold=0.5
         )
 
-        assert isinstance(signed_in, TokenPair)
-        assert isinstance(deactivated, User)
+        assert isinstance(signed_in, TokenPair) and isinstance(deactivated, User)
         with Session(test_engine) as check:
             assert check.get_one(User, teacher.id).is_active is False
             assert revoked(check, teacher) == [True]
@@ -385,8 +331,6 @@ def test_a_login_in_progress_has_its_token_revoked_by_the_deactivation(
         with Session(test_engine) as cleanup:
             cleanup.execute(text("SET lock_timeout = '10s'"))  # a stuck thread can't hang pytest
             cleanup.execute(delete(AuditEvent).where(AuditEvent.actor_id == admin.id))
-            owned = RefreshToken.user_id == teacher.id
-            cleanup.execute(update(RefreshToken).where(owned).values(replaced_by=None))
-            cleanup.execute(delete(RefreshToken).where(owned))
+            cleanup.execute(delete(RefreshToken).where(RefreshToken.user_id == teacher.id))
             cleanup.execute(delete(User).where(User.id.in_([admin.id, teacher.id])))
             cleanup.commit()

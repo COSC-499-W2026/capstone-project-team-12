@@ -6,7 +6,6 @@ here. Every change is recorded in the admin audit log; a refused request changes
 it records nothing, and reads are not recorded.
 """
 
-from collections.abc import Callable
 from datetime import datetime
 from http import HTTPStatus
 from typing import Annotated
@@ -22,7 +21,7 @@ from app.accounts.interface import (
     list_staff_accounts,
     require_admin,
 )
-from app.accounts.staff import deactivate_staff, reactivate_staff
+from app.accounts.staff import set_staff_active
 from app.api.pagination import Page, PageParams, page_params
 from app.db import get_db
 from app.errors import error_responses
@@ -144,15 +143,13 @@ def deactivate_user(
     db: Annotated[Session, Depends(get_db)],
 ) -> StaffAccount:
     """Stop a staff account from signing in and revoke all its refresh tokens, so it is signed
-    out on every device: its access tokens are refused with 403 ACCOUNT_DISABLED from the next
-    request on. Its content rights and classes are kept. Returns the account. Deactivating an
-    account again is allowed: it only revokes any refresh token the account has left.
+    out on every device; its access tokens get 403 ACCOUNT_DISABLED. Content rights and classes
+    are kept. Returns the account.
 
     403 FORBIDDEN_ROLE for an admin or student account, 404 USER_NOT_FOUND for an unknown id.
-    Each attempt is recorded in the audit log as user_deactivated: a success, a denial for an
-    admin or student account, or a failure for an unknown id.
+    Each attempt is recorded in the audit log as user_deactivated, a refused one with its code.
     """
-    return _set_status(deactivate_staff, user_id, request, admin, db)
+    return _set_active(user_id, False, request, admin, db)
 
 
 @admin_router.post(
@@ -168,22 +165,18 @@ def reactivate_user(
     admin: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> StaffAccount:
-    """Let a deactivated staff account sign in again. Sessions revoked by the deactivation stay
-    signed out, so the teacher signs in again. Returns the account. Reactivating an active
-    account changes nothing.
-
-    403 FORBIDDEN_ROLE for an admin or student account, 404 USER_NOT_FOUND for an unknown id.
-    Each attempt is recorded in the audit log as user_reactivated, like a deactivation.
+    """Let a deactivated staff account sign in again; sessions ended by the deactivation stay
+    ended. Returns the account. Errors and audit as for deactivating (user_reactivated).
     """
-    return _set_status(reactivate_staff, user_id, request, admin, db)
+    return _set_active(user_id, True, request, admin, db)
 
 
-def _set_status(
-    change: Callable[..., User], user_id: UUID, request: Request, admin: User, db: Session
+def _set_active(
+    user_id: UUID, active: bool, request: Request, admin: User, db: Session
 ) -> StaffAccount:
     ip_address = request.client.host if request.client else None
     try:
-        user = change(admin.id, user_id, db, ip_address=ip_address)
+        user = set_staff_active(admin.id, user_id, active, db, ip_address=ip_address)
     except AppError:
         db.commit()  # keeps the DENIED or FAILURE entry; nothing else was written
         raise
