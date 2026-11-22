@@ -1,15 +1,17 @@
-"""Staff (teacher) accounts created by an admin through the admin API.
+"""Staff (teacher) accounts as admins manage them through the admin API: creating and listing.
 
-The admin gives the address, the username and whether the teacher has content rights; the
-teacher then chooses a password from the emailed set-password link (valid 3 days), so the
-account has no password until then.
+To create one, the admin gives the address, the username and whether the teacher has content
+rights; the teacher then chooses a password from the emailed set-password link (valid 3 days),
+so the account has no password until then. The list holds both staff and admin accounts.
 
 Nothing here commits: the route commits the account, its email and its audit entry together,
-and a refused request rolls back with nothing written.
+and a refused request rolls back with nothing written. Reading the list writes nothing.
 """
 
+from dataclasses import dataclass
 from uuid import UUID
 
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
 from app.accounts.register import insert_user
@@ -43,3 +45,39 @@ def create_teacher(
         details={"can_manage_content": can_manage_content},
     )
     return user
+
+
+@dataclass(frozen=True)
+class StaffPage:
+    items: tuple[User, ...]
+    total: int  # matching accounts on every page
+
+
+LISTED_ROLES = (UserRole.STAFF, UserRole.ADMIN)
+
+
+def list_staff_accounts(
+    page: int, page_size: int, db: Session, *, email: str | None = None
+) -> StaffPage:
+    """One page of the staff and admin accounts, deactivated ones too, so they can be
+    reactivated. Students are never listed.
+
+    `email` keeps only the addresses that contain it, in any case; `%` and `_` in it match
+    themselves. Ordered by username in any case (the order of uq_users_username_lower), then
+    by id, so pages don't overlap. `page` starts at 1; a page past the end has no items.
+    """
+    matching: list[ColumnElement[bool]] = [User.role.in_(LISTED_ROLES)]
+    if email is not None:
+        # addresses are stored lowercase
+        matching.append(User.email.contains(email.strip().lower(), autoescape=True))
+    total = db.scalar(select(func.count()).select_from(User).where(*matching)) or 0
+    if (page - 1) * page_size >= total:
+        return StaffPage(items=(), total=total)
+    users = db.scalars(
+        select(User)
+        .where(*matching)
+        .order_by(func.lower(User.username), User.id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    return StaffPage(items=tuple(users), total=total)

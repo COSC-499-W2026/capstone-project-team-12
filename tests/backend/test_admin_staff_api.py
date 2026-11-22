@@ -1,7 +1,10 @@
-"""POST /api/v1/admin/staff: an admin creates a teacher account, its set-password email is
-queued and the new account is recorded in the admin audit log."""
+"""/api/v1/admin/staff: an admin creates a teacher account (its set-password email is queued
+and the new account is recorded in the admin audit log) and lists the staff and admin
+accounts."""
 
 from collections.abc import Callable
+from datetime import UTC, datetime
+from itertools import count
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -168,3 +171,155 @@ def test_invalid_fields_are_422_and_not_audited(
     assert_error(response, 422, ErrorCode.VALIDATION_ERROR)
     assert field in [detail["field"] for detail in response.json()["error"]["details"]]
     assert audit_entries(db, admin) == []
+
+
+def every_listed_account(
+    client: TestClient, headers: dict[str, str], **params: str
+) -> list[dict[str, Any]]:
+    """The items of every page of GET /admin/staff, in order."""
+    items: list[dict[str, Any]] = []
+    for page in count(1):
+        paging = {"page": page, "page_size": 100}
+        response = client.get(URL, params=params | paging, headers=headers)
+        assert response.status_code == 200, response.text
+        items += response.json()["items"]
+        if not response.json()["has_next_page"]:
+            break
+    return items
+
+
+LISTED = (UserRole.STAFF, UserRole.ADMIN)
+
+
+def staff_count(db: Session) -> int:
+    staff = select(func.count()).select_from(User).where(User.role.in_(LISTED))
+    return db.scalar(staff) or 0
+
+
+def test_a_created_teacher_shows_in_the_staff_list(
+    client: TestClient,
+    admin: User,
+    auth_headers: Callable[[User], dict[str, str]],
+    create_as: Callable[..., Response],
+) -> None:
+    created = create_as(admin, can_manage_content=True)
+    assert created.status_code == 201, created.text
+
+    assert created.json() in every_listed_account(client, auth_headers(admin))
+
+
+def test_the_list_has_every_staff_and_admin_account_by_username_in_any_case(
+    db: Session,
+    client: TestClient,
+    admin: User,
+    make_user: Callable[..., User],
+    auth_headers: Callable[[User], dict[str, str]],
+) -> None:
+    tag = uuid4().hex[:8]  # other tests' accounts may be listed too, so ours are told apart
+    signed_in = datetime(2026, 11, 20, 9, 30, tzinfo=UTC)
+    make_user(role=UserRole.STAFF, username=f"b_{tag}", last_login_at=signed_in)
+    make_user(role=UserRole.STAFF, username=f"C_{tag}", is_active=False)
+    make_user(role=UserRole.STAFF, username=f"a_{tag}", can_manage_content=True)
+    make_user(role=UserRole.STUDENT, username=f"s_{tag}")
+    make_user(role=UserRole.ADMIN, username=f"d_{tag}")
+
+    listed = every_listed_account(client, auth_headers(admin))
+
+    assert all(item["role"] in LISTED for item in listed)
+    assert len(listed) == staff_count(db)
+    ours = [item for item in listed if item["username"].endswith(tag)]
+    fields = ("username", "role", "can_manage_content", "is_active", "last_login_at")
+    # the deactivated teacher is listed, so it can be reactivated; the student is not
+    assert [tuple(item[field] for field in fields) for item in ours] == [
+        (f"a_{tag}", "staff", True, True, None),
+        (f"b_{tag}", "staff", False, True, "2026-11-20T09:30:00Z"),
+        (f"C_{tag}", "staff", False, False, None),
+        (f"d_{tag}", "admin", False, True, None),
+    ]
+    assert audit_entries(db, admin) == []  # reading the list is not audited
+
+
+def test_the_list_can_be_searched_by_part_of_the_email_in_any_case(
+    client: TestClient,
+    admin: User,
+    make_user: Callable[..., User],
+    auth_headers: Callable[[User], dict[str, str]],
+) -> None:
+    tag = uuid4().hex[:8]
+    teacher = make_user(role=UserRole.STAFF, email=f"tanaka.{tag}@school.example")
+    other_admin = make_user(role=UserRole.ADMIN, email=f"ops.{tag}@school.example")
+    make_user(role=UserRole.STAFF, email=f"tanaka.{tag}@other.example")
+    make_user(email=f"student.{tag}@school.example")  # students are never listed
+
+    found = every_listed_account(client, auth_headers(admin), email=f"{tag}@SCHOOL")
+
+    assert sorted(item["id"] for item in found) == sorted([str(teacher.id), str(other_admin.id)])
+    # % and _ are plain characters, not wildcards
+    assert every_listed_account(client, auth_headers(admin), email=f"%{tag}") == []
+    assert every_listed_account(client, auth_headers(admin), email=f"_{tag}") == []
+
+
+def test_the_list_is_paged(
+    db: Session,
+    client: TestClient,
+    admin: User,
+    make_user: Callable[..., User],
+    auth_headers: Callable[[User], dict[str, str]],
+) -> None:
+    for _ in range(3):
+        make_user(role=UserRole.STAFF)
+    total = staff_count(db)
+
+    def get_page(**params: int) -> dict[str, Any]:
+        response = client.get(URL, params=params, headers=auth_headers(admin))
+        assert response.status_code == 200, response.text
+        return dict(response.json())
+
+    first = get_page()  # page 1 of 20 by default
+    assert (first["page"], first["page_size"], first["total"]) == (1, 20, total)
+    assert (len(first["items"]), first["has_next_page"]) == (min(total, 20), total > 20)
+
+    pages = [get_page(page=number, page_size=1) for number in (1, total, total + 1)]
+    assert [(len(page["items"]), page["has_next_page"]) for page in pages] == [
+        (1, True),
+        (1, False),
+        (0, False),  # past the end
+    ]
+    assert pages[0]["items"] == first["items"][:1]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"page": 0}, {"page_size": 0}, {"page_size": 101}, {"page": "first"}, {"email": ""}],
+)
+def test_invalid_paging_is_422(
+    client: TestClient,
+    admin: User,
+    auth_headers: Callable[[User], dict[str, str]],
+    assert_error: Callable[[Response, int, ErrorCode], None],
+    params: dict[str, Any],
+) -> None:
+    response = client.get(URL, params=params, headers=auth_headers(admin))
+    assert_error(response, 422, ErrorCode.VALIDATION_ERROR)
+
+
+@pytest.mark.parametrize(
+    ("fields", "code"),
+    [
+        ({"role": UserRole.STUDENT}, ErrorCode.FORBIDDEN_ROLE),
+        ({"role": UserRole.STAFF}, ErrorCode.FORBIDDEN_ROLE),
+        ({"role": UserRole.STAFF, "can_manage_content": True}, ErrorCode.FORBIDDEN_ROLE),
+        ({"role": UserRole.ADMIN, "is_active": False}, ErrorCode.ACCOUNT_DISABLED),
+    ],
+    ids=["student", "teacher", "content-manager", "deactivated-admin"],
+)
+def test_only_active_admins_can_list_staff(
+    client: TestClient,
+    make_user: Callable[..., User],
+    auth_headers: Callable[[User], dict[str, str]],
+    assert_error: Callable[[Response, int, ErrorCode], None],
+    fields: dict[str, Any],
+    code: ErrorCode,
+) -> None:
+    response = client.get(URL, headers=auth_headers(make_user(**fields)))
+    assert_error(response, 403, code)

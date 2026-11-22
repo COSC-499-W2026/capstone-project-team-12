@@ -3,7 +3,7 @@
 Every route needs an admin account; anyone else gets 403 FORBIDDEN_ROLE, and a deactivated
 admin 403 ACCOUNT_DISABLED. Admin accounts are only created with the command-line tool, never
 here. Every change is recorded in the admin audit log; a refused request changes nothing, so
-it records nothing.
+it records nothing, and reads are not recorded.
 """
 
 from datetime import datetime
@@ -11,11 +11,12 @@ from http import HTTPStatus
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import create_teacher, get_current_user, require_admin
+from app.accounts.staff import list_staff_accounts
 from app.db import get_db
 from app.errors import error_responses
 from app.models.accounts import User
@@ -49,7 +50,7 @@ class CreateStaffRequest(BaseModel):
 
 
 class StaffAccount(BaseModel):
-    """A staff (teacher) account as the admin pages show it."""
+    """A staff (teacher) or admin account as the admin pages show it."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -59,7 +60,53 @@ class StaffAccount(BaseModel):
     role: UserRole
     can_manage_content: bool
     is_active: bool
+    last_login_at: datetime | None = Field(description="Null if the account never signed in.")
     created_at: datetime
+
+
+class StaffAccountPage(BaseModel):
+    """A page of staff and admin accounts (docs/api-conventions.md, Pagination)."""
+
+    items: list[StaffAccount]
+    page: int
+    page_size: int
+    total: int
+    has_next_page: bool
+
+
+@admin_router.get(
+    "/staff",
+    operation_id="listStaffAccounts",
+    summary="List staff and admin accounts",
+    # NOT_AUTHENTICATED; FORBIDDEN_ROLE, ACCOUNT_DISABLED
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
+)
+def get_staff_accounts(
+    db: Annotated[Session, Depends(get_db)],
+    email: Annotated[
+        str | None,
+        Query(
+            min_length=1,
+            max_length=254,
+            description="Only addresses that contain this text, in any case.",
+        ),
+    ] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> StaffAccountPage:
+    """Every staff and admin account with its role, content rights, status and last login,
+    deactivated ones too, by username in any case. Students are not listed. `email` searches
+    the addresses. Paged with page and page_size (default 20, at most 100); a page past the
+    end has no items.
+    """
+    staff = list_staff_accounts(page, page_size, db, email=email)
+    return StaffAccountPage(
+        items=[StaffAccount.model_validate(user) for user in staff.items],
+        page=page,
+        page_size=page_size,
+        total=staff.total,
+        has_next_page=page * page_size < staff.total,
+    )
 
 
 @admin_router.post(
