@@ -1,8 +1,35 @@
-"""The shared slowapi limiter. Decorate a route with @limiter.limit() to give it its own limit;
-the limit for every /api/v1 request is app.api.rate_limit.global_rate_limit.
+"""Rate-limit counters, kept in memory: the spec runs one API process.
+
+Each limit is a fixed one-minute window per (name, key). Routes reach them through the
+dependencies in app.api.rate_limit.
 """
 
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+import math
+import time
 
-limiter = Limiter(key_func=get_remote_address, headers_enabled=True)
+from limits import parse
+from limits.storage import MemoryStorage
+from limits.strategies import FixedWindowRateLimiter
+
+from app.errors import AppError, ErrorCode
+
+_storage = MemoryStorage()
+_counter = FixedWindowRateLimiter(_storage)
+
+
+def count_request(name: str, per_minute: int, key: str) -> None:
+    """Count one request against the limit; 429 RATE_LIMITED with Retry-After once it's over."""
+    limit = parse(f"{per_minute}/minute")
+    if _counter.hit(limit, name, key):
+        return
+    reset_at, _ = _counter.get_window_stats(limit, name, key)
+    retry_after = max(1, math.ceil(reset_at - time.time()))
+    raise AppError(
+        ErrorCode.RATE_LIMITED,
+        "Too many requests. Try again later.",
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+def reset_counts() -> None:
+    _storage.reset()
