@@ -188,14 +188,15 @@ def test_a_new_password_that_breaks_the_rules_changes_nothing(
     assert_nothing_changed(client, user, session)
 
 
-# bcrypt raises on more than 72 bytes; the second is only 40 characters
+# past bcrypt's 72 bytes, refused like any wrong password rather than a 500; the second is
+# only 40 characters
 @pytest.mark.parametrize("too_long", ["x" * 73, "é" * 40])
-def test_a_current_password_bcrypt_cant_take_is_a_validation_error(
+def test_a_current_password_bcrypt_cant_take_is_a_wrong_password(
     change: Callable[..., Any], user: User, too_long: str
 ) -> None:
     response = change(user, current=too_long)
 
-    assert_error(response, HTTPStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR)
+    assert_error(response, HTTPStatus.UNAUTHORIZED, ErrorCode.INVALID_CREDENTIALS)
 
 
 @pytest.mark.parametrize("field", ["current_password", "new_password"])

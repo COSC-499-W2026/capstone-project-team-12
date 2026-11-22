@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, Request, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -8,7 +8,12 @@ from sqlalchemy.orm import Session
 from app.accounts.login import get_login_form, get_login_key, login_account
 from app.accounts.logout import logout_session
 from app.accounts.register import RegisterRequest, RegisterResponse, register_account
-from app.accounts.tokens import REFRESH_TOKEN_LIFETIME, TokenResponse, rotate_tokens
+from app.accounts.tokens import (
+    TokenResponse,
+    delete_refresh_cookie,
+    rotate_tokens,
+    set_refresh_cookie,
+)
 from app.config import get_settings
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
@@ -55,7 +60,7 @@ def login(
     """
     tokens = login_account(form_data, db)
     db.commit()
-    _set_refresh_cookie(response, tokens.refresh_token)
+    set_refresh_cookie(response, tokens.refresh_token)
     return TokenResponse(access_token=tokens.access_token)
 
 
@@ -77,7 +82,7 @@ def refresh(
     else:
         try:
             tokens = rotate_tokens(refresh_token, db)
-            _set_refresh_cookie(response, tokens.refresh_token)
+            set_refresh_cookie(response, tokens.refresh_token)
             db.commit()
             return TokenResponse(access_token=tokens.access_token)
         except AppError:
@@ -105,29 +110,4 @@ def logout(
     """
     logout_session(refresh_token, db)
     db.commit()
-    _delete_refresh_cookie(response)
-
-
-def _refresh_cookie_options() -> dict[str, Any]:
-    """Options shared by setting and deleting the refresh cookie. A browser only deletes a cookie
-    when the delete matches the cookie it holds (path, domain, secure, samesite), so both must use
-    the same options."""
-    return {
-        "key": "refresh_token",
-        "path": "/api/v1/auth",
-        "httponly": True,
-        "secure": get_settings().refresh_cookie_secure,
-        "samesite": "strict",
-    }
-
-
-def _set_refresh_cookie(response: Response, token: str) -> None:
-    response.set_cookie(
-        value=token,
-        max_age=int(REFRESH_TOKEN_LIFETIME.total_seconds()),  # same lifetime as the DB row
-        **_refresh_cookie_options(),
-    )
-
-
-def _delete_refresh_cookie(response: Response) -> None:
-    response.delete_cookie(**_refresh_cookie_options())
+    delete_refresh_cookie(response)

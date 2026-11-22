@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+from fastapi import Response
 from jwt import encode
 from pydantic import BaseModel
 from sqlalchemy import insert, select, update
@@ -166,3 +167,30 @@ def revoke_token_family(family_id: UUID, db: Session) -> None:
 
 def now() -> datetime:
     return datetime.now(UTC)
+
+
+def _refresh_cookie_options() -> dict[str, Any]:
+    """Options shared by setting and deleting the refresh cookie. A browser only deletes a cookie
+    when the delete matches the cookie it holds (path, domain, secure, samesite), so both must use
+    the same options."""
+    return {
+        "key": "refresh_token",
+        "path": "/api/v1/auth",
+        "httponly": True,
+        "secure": get_settings().refresh_cookie_secure,
+        "samesite": "strict",
+    }
+
+
+def set_refresh_cookie(response: Response, token: str) -> None:
+    """Sends the refresh token to the browser as the refresh_token cookie."""
+    response.set_cookie(
+        value=token,
+        max_age=int(REFRESH_TOKEN_LIFETIME.total_seconds()),  # same lifetime as the DB row
+        **_refresh_cookie_options(),
+    )
+
+
+def delete_refresh_cookie(response: Response) -> None:
+    """Tells the browser to drop the refresh_token cookie."""
+    response.delete_cookie(**_refresh_cookie_options())

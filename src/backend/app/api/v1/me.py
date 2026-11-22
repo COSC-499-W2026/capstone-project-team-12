@@ -6,15 +6,14 @@ from typing import Annotated, Self
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.email_links import cancel_waiting_reset_mail
 from app.accounts.interface import get_current_user, revoke_all_refresh_tokens
 from app.accounts.password import hash_password, validate_password_security, verified_password_hash
 from app.accounts.profile import current_class_id, select_class, set_practice_language
-from app.accounts.tokens import create_refresh_token
-from app.api.v1.auth import _set_refresh_cookie
+from app.accounts.tokens import create_refresh_token, set_refresh_cookie
 from app.api.v1.email_links import StatusResponse
 from app.db import get_db
 from app.engagement.interface import (
@@ -37,8 +36,6 @@ from app.services.email import EmailService
 from app.services.locks import lock_user
 
 me_router = APIRouter(prefix="/me", tags=["me"])
-
-_BCRYPT_MAX_BYTES = 72
 
 
 class ProfileResponse(BaseModel):
@@ -88,14 +85,6 @@ class ChangePasswordRequest(BaseModel):
 
     current_password: str
     new_password: str = Field(max_length=200)  # the rules are checked by the service (422)
-
-    @field_validator("current_password")
-    @classmethod
-    def _fits_bcrypt(cls, value: str) -> str:
-        # bcrypt raises on anything longer, which would be a 500
-        if len(value.encode("utf-8")) > _BCRYPT_MAX_BYTES:
-            raise ValueError(f"must be at most {_BCRYPT_MAX_BYTES} bytes")
-        return value
 
 
 def _profile(user: User, db: Session) -> ProfileResponse:
@@ -192,7 +181,7 @@ def change_password(
     revoke_all_refresh_tokens(user.id, db)
     refresh_token, _ = create_refresh_token(user.id, db)
     db.commit()  # one transaction, so nothing is saved unless all of it is
-    _set_refresh_cookie(response, refresh_token)
+    set_refresh_cookie(response, refresh_token)
     return StatusResponse()
 
 
