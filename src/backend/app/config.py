@@ -86,7 +86,8 @@ class Settings(BaseSettings):
     # "today" for day-based rules, e.g. carry-over
     app_timezone: str = "America/Vancouver"
     # rate limits per minute (tech spec, Rate Limits)
-    global_rate_limit: PositiveInt = 100  # per IP, shared by all routes
+    # per user with a valid access token, otherwise per IP; shared by all routes
+    global_rate_limit: PositiveInt = 120
     login_attempts_per_email: PositiveInt = 5  # per (email, IP)
     login_attempts_per_ip: PositiveInt = 100
 
