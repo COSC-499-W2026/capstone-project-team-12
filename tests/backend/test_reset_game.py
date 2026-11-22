@@ -16,7 +16,6 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game import control
 from app.game.control import reset_game
@@ -38,6 +37,9 @@ from app.services.locks import lock_user
 
 # the modules whose clock reset reads
 CLOCK = ("app.game.control", "app.game.status", "app.game.sessions")
+
+# most games here are ja/basic; a test in another mode asks for its own content
+pytestmark = pytest.mark.usefixtures("ja_basic_content")
 
 
 class _WithoutRecordings(UploadedAudioService):
@@ -93,8 +95,10 @@ def test_reset_starts_a_new_game_with_the_same_settings(
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
     freeze_clock: Callable[..., None],
+    playable_location_ids: Callable[..., list[UUID]],
     in_class: bool,
 ) -> None:
+    playable_location_ids(Language.JA, Difficulty.ADVANCING)
     student = make_user()
     class_id = make_class().id if in_class else None
     old = make_game_session(
@@ -173,14 +177,14 @@ def test_reset_does_not_bring_back_a_quit_games_locations(
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
+    playable_location_ids: Callable[..., list[UUID]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     student = make_user()
-    eligible = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
     quit_earlier = make_game_session(
         student, state=SessionState.ABANDONED, end_reason=SessionEndReason.QUIT
     )
-    unplayed = eligible[:2]
+    unplayed = playable_location_ids(count=2)
     for position, location_id in enumerate(unplayed, start=1):
         make_session_location(
             quit_earlier,
@@ -295,13 +299,12 @@ def test_not_enough_content_leaves_the_game_as_it_is(
     db: Session,
     make_user: Callable[..., User],
     make_game_session: Callable[..., GameSession],
-    monkeypatch: pytest.MonkeyPatch,
+    limit_playable_locations: Callable[[int], None],
 ) -> None:
     student = make_user()
     played_at = datetime.now(UTC) - timedelta(hours=1)
     game = make_game_session(student, last_activity_at=played_at)
-    four = frozenset(uuid4() for _ in range(4))
-    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: four)
+    limit_playable_locations(4)
 
     with pytest.raises(AppError) as error:
         reset_game(student.id, game.id, db)
@@ -373,10 +376,14 @@ def test_reset_does_not_commit(
     assert calls == []
 
 
-def test_reset_holds_the_students_lock_until_the_transaction_ends(test_engine: Engine) -> None:
+def test_reset_holds_the_students_lock_until_the_transaction_ends(
+    test_engine: Engine, committed_location_ids: Callable[..., list[UUID]]
+) -> None:
     """A start or a class switch takes the student's lock first, so a reset has to take it too,
     in the same order (the student, then the game), or the two could deadlock. The setup
-    commits, unlike the other tests, so the lock is visible to another connection."""
+    commits, unlike the other tests, so the lock is visible to another connection. It plays
+    Spanish because this file's `db` content is Japanese (see committed_location_ids)."""
+    committed_location_ids(Language.ES, Difficulty.BASIC)
     student_id = game_id = None
     holder: Session | None = None
     try:
@@ -390,7 +397,7 @@ def test_reset_holds_the_students_lock_until_the_transaction_ends(test_engine: E
             setup.flush()
             game = GameSession(
                 student_id=student.id,
-                target_language=Language.JA,
+                target_language=Language.ES,
                 difficulty=Difficulty.BASIC,
                 last_activity_at=datetime.now(UTC),
             )

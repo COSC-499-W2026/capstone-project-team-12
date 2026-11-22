@@ -4,13 +4,13 @@ before the photo is read, then counting the attempt, scoring and moving on."""
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 import pytest
 from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.content import interface as content
 from app.errors import AppError, ErrorCode
 from app.game.control import quit_game
 from app.game.current_location import Stage
@@ -31,9 +31,10 @@ def verifying_game(
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
     freeze_clock: Callable[..., None],
+    playable_location_ids: Callable[..., list[UUID]],
 ) -> Callable[..., GameSession]:
     """A game with `locations` locations, at the first one, which is in Stage 2; the others are
-    pending. All are active (stub) locations, so moving on doesn't skip them. The last game
+    pending. All are playable ja/basic locations, so moving on doesn't skip them. The last game
     action was an hour ago; the clock is frozen at NOW. Other keywords are for the game."""
 
     def make(locations: int = 2, attempts_used: int = 0, **fields: Any) -> GameSession:
@@ -41,7 +42,7 @@ def verifying_game(
         if fields.get("state") == SessionState.PAUSED:
             fields.setdefault("paused_at", AN_HOUR_AGO)
         game = make_game_session(last_activity_at=AN_HOUR_AGO, **fields)
-        active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
+        active = playable_location_ids(Language.JA, Difficulty.BASIC)
         make_session_location(
             game,
             1,

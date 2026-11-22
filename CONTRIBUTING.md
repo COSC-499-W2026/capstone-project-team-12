@@ -60,7 +60,7 @@ CI automatically checks:
 
 ## API changes
 
-The API reference is generated from the FastAPI routes and published on GitHub Pages after each merge to main (https://cosc-499-w2026.github.io/capstone-project-team-12/api.html). The file (`docs/api/openapi.json`) is git-ignored, so do not commit it. To see your changes locally, run this from `src/backend`:
+The API reference is generated from the FastAPI routes and published on Netlify after each merge to main (https://cosc499-team12.netlify.app/api.html). The file (`docs/api/openapi.json`) is git-ignored, so do not commit it. To see your changes locally, run this from `src/backend`:
 
 ```
 pip install -r requirements-dev.txt   # pinned versions; use Python 3.11 like CI (3.13 names 422 differently)

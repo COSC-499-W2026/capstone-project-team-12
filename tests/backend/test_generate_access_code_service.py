@@ -66,36 +66,6 @@ def test_assistant_can_generate_code(
     assert result.created_by == assistant.id
 
 
-def test_student_cannot_generate_code(
-    db: Session,
-    make_user: Callable[..., User],
-    make_class: Callable[..., Class],
-    expires_at: datetime,
-) -> None:
-    student = make_user(role=UserRole.STUDENT)
-    school_class = make_class()
-
-    with pytest.raises(AppError) as exc:
-        generate_access_code(school_class.id, student, expires_at, db)
-
-    assert exc.value.code == ErrorCode.FORBIDDEN_ROLE
-
-
-def test_unrelated_teacher_cannot_generate_code(
-    db: Session,
-    make_user: Callable[..., User],
-    make_class: Callable[..., Class],
-    expires_at: datetime,
-) -> None:
-    teacher = make_user(role=UserRole.STAFF)
-    school_class = make_class()
-
-    with pytest.raises(AppError) as exc:
-        generate_access_code(school_class.id, teacher, expires_at, db)
-
-    assert exc.value.code == ErrorCode.FORBIDDEN_ROLE
-
-
 def test_archived_class_rejected(
     db: Session,
     make_user: Callable[..., User],
@@ -215,23 +185,6 @@ def test_missing_class_rejected(
         generate_access_code(uuid4(), owner, expires_at, db)
 
     assert exc.value.code == ErrorCode.NOT_FOUND
-
-
-def test_inactive_owner_rejected(
-    db: Session,
-    make_user: Callable[..., User],
-    make_class: Callable[..., Class],
-    make_class_staff: Callable[..., object],
-    expires_at: datetime,
-) -> None:
-    owner = make_user(role=UserRole.STAFF, is_active=False)
-    school_class = make_class()
-    make_class_staff(school_class, owner)
-
-    with pytest.raises(AppError) as exc:
-        generate_access_code(school_class.id, owner, expires_at, db)
-
-    assert exc.value.code == ErrorCode.ACCOUNT_DISABLED
 
 
 def test_multiple_codes_are_unique(

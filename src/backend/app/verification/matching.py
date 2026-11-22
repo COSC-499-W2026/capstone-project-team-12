@@ -137,16 +137,33 @@ def decide(
     ]
     if not judged:
         return Decision(PhotoResult.NO_MATCH, None)
-    result, best = max(
-        judged,
-        key=lambda item: (
-            RANK[item[0]],
-            item[1].text in answers,
-            not item[1].text.isdigit(),  # a room number before a number alone
-            item[1].confidence,
-        ),
-    )
+    result, best = max(judged, key=lambda item: _strength(item[0], item[1], answers))
     return Decision(result, best)
+
+
+def better(first: Decision, second: Decision, accepted_answers: Collection[str]) -> Decision:
+    """The better of two decisions on reads of the same photo, ranked as `decide` ranks
+    candidates; `first` when they are equal.
+
+    Each read is decided on its own: deciding the boxes of two reads together would join the last
+    word of one with the first word of the other into a room that neither read contains.
+    """
+    answers = frozenset(accepted_answers)
+    return max((first, second), key=lambda one: _strength(one.result, one.candidate, answers))
+
+
+def _strength(
+    result: PhotoResult, candidate: Candidate | None, answers: frozenset[str]
+) -> tuple[int, bool, bool, float]:
+    """Sort key of a result and its candidate: the result, then the earlier row of the table."""
+    if candidate is None:
+        return RANK[result], False, False, 0.0
+    return (
+        RANK[result],
+        candidate.text in answers,
+        not candidate.text.isdigit(),  # a room number before a number alone
+        candidate.confidence,
+    )
 
 
 def _words(boxes: Sequence[TextBox]) -> list[list[Candidate]]:

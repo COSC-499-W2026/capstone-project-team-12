@@ -10,7 +10,7 @@ Implemented:
 
 Implemented in part:
 - Issue #15: Location scoring, per-language levels, and completion badges.
-  Streaks, daily challenges, and advanced achievements are pending.
+  Streak milestones and advanced achievements are pending.
 - Issue #86: Points, levels, and completion badge unlocking.
   Student engagement, achievements, and statistics API endpoints are pending.
 - Issue #47 (A23): what one game added (level as of the game, level_up, its badges),
@@ -24,7 +24,7 @@ responsible for committing or rolling back the entire operation.
 """
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 from sqlalchemy import select, update
@@ -34,6 +34,15 @@ from app.engagement.badges import (
     UnlockedAchievement,
     list_unlocked_achievements,
     unlock_completion_badges,
+    unlock_streak_badges,
+)
+from app.engagement.challenge_progress import record_challenge_progress
+from app.engagement.class_statistics import (
+    LocationAnalytics,
+    StudentAnalytics,
+    get_class_location_analytics,
+    get_class_participation,
+    get_class_student_analytics,
 )
 from app.engagement.classes import (
     create_class,
@@ -42,6 +51,8 @@ from app.engagement.classes import (
     list_staff_classes,
     update_class_settings,
 )
+from app.engagement.daily_challenges import ensure_daily_challenges
+from app.engagement.leaderboard import LeaderboardEntry, get_class_leaderboard
 from app.engagement.stats import (
     GameEngagement,
     LanguageEngagementStats,
@@ -51,6 +62,13 @@ from app.engagement.stats import (
 from app.engagement.stats import (
     level_for_points as _level_for_points,
 )
+from app.engagement.streaks import (
+    app_calendar_date,
+    award_streak_milestones,
+    challenge_expiry,
+    record_active_day,
+    visible_streak,
+)
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff
 from app.models.engagement import (
@@ -59,6 +77,7 @@ from app.models.engagement import (
     ClassEnrollment,
     PointsLedger,
     UserLanguageStats,
+    UserStats,
 )
 from app.models.enums import (
     ClassStaffRole,
@@ -67,11 +86,17 @@ from app.models.enums import (
     PointsSourceType,
     UserRole,
 )
+from app.models.game import GameSession, SessionLocation
 from app.services.locks import lock_user
 
 LOCATION_COMPLETION_POINTS = 100
 
 __all__ = [
+    "app_calendar_date",
+    "challenge_expiry",
+    "ensure_daily_challenges",
+    "get_and_report_streak",
+    "visible_streak",
     "EngagementResult",
     "apply_location_result",
     "create_class",
@@ -93,7 +118,34 @@ __all__ = [
     "get_game_engagement",
     "UnlockedAchievement",
     "list_unlocked_achievements",
+    "LeaderboardEntry",
+    "get_class_leaderboard",
+    "LocationAnalytics",
+    "get_class_location_analytics",
+    "get_class_participation",
+    "StudentAnalytics",
+    "get_class_student_analytics",
 ]
+
+
+def get_and_report_streak(student_id: UUID, db: Session, *, today: date) -> tuple[int, int, bool]:
+    """Return the visible and best streaks and report an expiration once."""
+    if lock_user(student_id, db) is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    stats = db.get(UserStats, student_id)
+    if stats is None:
+        return 0, 0, False
+
+    current = visible_streak(stats, today=today)
+    broken = (
+        current == 0
+        and stats.current_streak_days > 0
+        and stats.last_active_date != stats.reported_break_date
+    )
+    if broken:
+        stats.reported_break_date = stats.last_active_date
+    return current, stats.best_streak_days, broken
 
 
 @dataclass(frozen=True)
@@ -101,8 +153,8 @@ class EngagementResult:
     """Engagement information returned after processing a location result.
 
     Defines the engagement response contract for Issue #15.
-    Completion badges are implemented. Streaks, daily challenges,
-    and advanced achievements are pending implementation.
+    Completion badges, daily streaks, and daily challenge progress are implemented.
+    Streak milestones and advanced achievements are pending implementation.
 
     Attributes:
         location_points_awarded: New location points awarded by this call.
@@ -282,12 +334,9 @@ def apply_location_result(
         remain consistent within the caller's transaction.
 
     Pending functionality:
-        Streak tracking, daily challenges, streak milestones, and
-        advanced achievement types are not yet implemented.
-
-        Until implemented, streak_days is zero and
-        challenges_completed is empty. Completion badges can be
-        unlocked by successful locations.
+        Streak milestones are awarded once at 7 days (100 points) and
+        30 days (300 points). Advanced achievement types are pending.
+        Completion badges can be unlocked by successful locations.
 
     Args:
         session_location_id: UUID of the finished session location.
@@ -348,9 +397,46 @@ def apply_location_result(
             awarded = LOCATION_COMPLETION_POINTS
             db.flush()
 
+    challenges_completed: tuple[str, ...] = ()
+    if awarded > 0:
+        # Use the finalized location's game difficulty; challenge progress is
+        # recorded only for a newly awarded completion, never for retries.
+        game_difficulty = db.scalar(
+            select(GameSession.difficulty)
+            .join(SessionLocation, SessionLocation.session_id == GameSession.id)
+            .where(
+                SessionLocation.id == session_location_id,
+                GameSession.student_id == student_id,
+            )
+        )
+        if game_difficulty is None:
+            raise AppError(ErrorCode.NOT_FOUND)
+        challenges_completed = record_challenge_progress(
+            student_id,
+            difficulty=game_difficulty,
+            language=target_language,
+            class_id=class_id,
+            db=db,
+        )
+
     achievements_unlocked = (
         unlock_completion_badges(student_id, target_language, db) if awarded > 0 else ()
     )
+
+    if awarded > 0:
+        streak_days = record_active_day(student_id, db)
+        award_streak_milestones(
+            student_id,
+            streak_days,
+            language=target_language,
+            class_id=class_id,
+            db=db,
+        )
+        achievements_unlocked = tuple(
+            sorted((*achievements_unlocked, *unlock_streak_badges(student_id, streak_days, db)))
+        )
+    else:
+        streak_days = visible_streak(db.get(UserStats, student_id))
 
     total_points = stats.total_points if stats is not None else 0
     level = _level_for_points(total_points)
@@ -360,8 +446,8 @@ def apply_location_result(
         total_points=total_points,
         level=level,
         level_up=level > previous_level,
-        streak_days=0,
-        challenges_completed=(),
+        streak_days=streak_days,
+        challenges_completed=challenges_completed,
         achievements_unlocked=achievements_unlocked,
     )
 

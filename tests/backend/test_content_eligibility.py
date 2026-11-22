@@ -1,26 +1,32 @@
 import math
-import re
+from collections.abc import Callable
 from itertools import combinations, product
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.content.coverage import coverage_report
 from app.content.interface import (
     Difficulty,
     GpsPoint,
     Language,
     LocationNotEligibleError,
+    LocationSnapshot,
     eligible_location_ids,
     is_location_active,
     location_snapshot,
 )
+from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
+from app.models.enums import FeedbackCode
+from app.models.game import GameSession
 from app.services.audio import MediaNotFoundError, UploadedAudioService, get_audio_service
 
 ALL_MODES = list(product(Language, Difficulty))
-ANSWER_FORMAT = re.compile(r"[A-Z]{3}\d{3,4}")
-LOCATIONS_PER_LANGUAGE_AND_DIFFICULTY = 30
+FR_2 = (Language.FR, Difficulty.ADVANCING)
 METERS_PER_DEGREE_OF_LATITUDE = 111_320
 
 
@@ -38,115 +44,207 @@ class WithoutRecordings(UploadedAudioService):
         raise MediaNotFoundError
 
 
-class MissingAPhraseIn(UploadedAudioService):
-    """Every feedback phrase exists, except that `language` lacks at least one."""
-
-    def __init__(self, language: Language) -> None:
-        self.language = language
-
-    def has_all_feedback_phrases(self, language: Language, db: Session) -> bool:
-        return language != self.language
-
-
 def use_audio_service(monkeypatch: pytest.MonkeyPatch, service: UploadedAudioService) -> None:
     monkeypatch.setattr("app.content.interface.get_audio_service", lambda: service)
 
 
-@pytest.mark.parametrize(("language", "difficulty"), ALL_MODES)
-def test_eligible_locations_are_repeatable_for_each_language_and_difficulty(
-    db: Session, language: Language, difficulty: Difficulty
+@pytest.fixture(autouse=True)
+def every_feedback_phrase(feedback_phrases: Callable[[Language], None]) -> None:
+    """Every phrase in every language, so only the locations decide what is eligible."""
+    for language in Language:
+        feedback_phrases(language)
+
+
+@pytest.fixture
+def drawable_clue(
+    make_location: Callable[..., Location],
+    make_clue: Callable[..., Clue],
+    make_audio_asset: Callable[..., AudioAsset],
+) -> Callable[..., Clue]:
+    """make(language=FR, difficulty=ADVANCING, primary=True, **location_fields): the clue of a new
+    location in that language and difficulty, with one recording (primary unless told)."""
+
+    def make(
+        language: Language = FR_2[0],
+        difficulty: Difficulty = FR_2[1],
+        primary: bool = True,
+        **fields: Any,
+    ) -> Clue:
+        clue = make_clue(make_location(**fields), language=language, difficulty=difficulty)
+        make_audio_asset(clue, is_primary=primary)
+        return clue
+
+    return make
+
+
+# Each makes a location that fr/advancing games must not draw. A location without a room number
+# cannot be stored (Stage 2 reads the room number), so it has no case here.
+INELIGIBLE: dict[str, Callable[[Callable[..., Clue], Callable[..., Location]], UUID]] = {
+    "inactive": lambda clue, _: clue(is_active=False).location_id,
+    "clue in another language": lambda clue, _: clue(language=Language.JA).location_id,
+    "clue at another difficulty": lambda clue, _: clue(difficulty=Difficulty.BASIC).location_id,
+    "recording not primary": lambda clue, _: clue(primary=False).location_id,
+    "no clue": lambda _, location: location().id,
+}
+
+
+def test_a_drawable_location_is_eligible(db: Session, drawable_clue: Callable[..., Clue]) -> None:
+    clue = drawable_clue()
+    assert clue.location_id in eligible_location_ids(*FR_2, db)
+
+
+@pytest.mark.parametrize("case", INELIGIBLE)
+def test_an_ineligible_location_is_neither_eligible_nor_snapshotted(
+    db: Session,
+    drawable_clue: Callable[..., Clue],
+    make_location: Callable[..., Location],
+    case: str,
 ) -> None:
-    ids = eligible_location_ids(language, difficulty, db)
-    assert len(ids) == LOCATIONS_PER_LANGUAGE_AND_DIFFICULTY
-    assert ids == eligible_location_ids(language, difficulty, db)
+    location_id = INELIGIBLE[case](drawable_clue, make_location)
+    assert location_id not in eligible_location_ids(*FR_2, db)
+    with pytest.raises(LocationNotEligibleError):
+        location_snapshot(location_id, *FR_2, db)
 
 
-def test_eligible_locations_are_active(db: Session) -> None:
-    ids = eligible_location_ids(Language.FR, Difficulty.ADVANCING, db)
-    assert all(is_location_active(location_id, db) for location_id in ids)
+def test_a_language_missing_a_feedback_phrase_has_no_eligible_locations(
+    db: Session, drawable_clue: Callable[..., Clue]
+) -> None:
+    # one difficulty: the phrase check comes before difficulty matters
+    difficulty = Difficulty.ADVANCING
+    korean = drawable_clue(Language.KO, difficulty).location_id
+    japanese = drawable_clue(Language.JA, difficulty).location_id
+    assert korean in eligible_location_ids(Language.KO, difficulty, db)
+    db.execute(
+        delete(FeedbackAudio).where(
+            FeedbackAudio.code == FeedbackCode.NAV_GPS_WEAK, FeedbackAudio.language == Language.KO
+        )
+    )
+    assert eligible_location_ids(Language.KO, difficulty, db) == frozenset()
+    assert japanese in eligible_location_ids(Language.JA, difficulty, db)
 
 
-def test_unknown_location_is_not_active(db: Session) -> None:
+def test_eligible_locations_agree_with_the_coverage_report(
+    db: Session, drawable_clue: Callable[..., Clue], make_location: Callable[..., Location]
+) -> None:
+    for make_ineligible in INELIGIBLE.values():
+        make_ineligible(drawable_clue, make_location)
+    for language in (Language.FR, Language.JA, Language.KO):
+        drawable_clue(language, Difficulty.ADVANCING)
+    # without its phrases, Korean's drawable location is not playable
+    db.execute(delete(FeedbackAudio).where(FeedbackAudio.language == Language.KO))
+    report = coverage_report(db)
+    for language, difficulty in ALL_MODES:
+        playable = {
+            location.id
+            for location in report.locations
+            for combination in location.combinations
+            if (combination.language, combination.difficulty, combination.playable)
+            == (language, difficulty, True)
+        }
+        assert eligible_location_ids(language, difficulty, db) == playable
+
+
+def test_only_an_active_location_is_active(
+    db: Session, make_location: Callable[..., Location]
+) -> None:
+    assert is_location_active(make_location().id, db)
+    assert not is_location_active(make_location(is_active=False).id, db)
     assert not is_location_active(uuid4(), db)
 
 
-def test_snapshot_holds_answers_entrances_and_radius(db: Session) -> None:
-    location_id = next(iter(eligible_location_ids(Language.KO, Difficulty.CHALLENGING, db)))
-    snapshot = location_snapshot(location_id, Language.KO, Difficulty.CHALLENGING, db)
-    assert snapshot.location_id == location_id
-    assert snapshot.accepted_answers
-    assert all(ANSWER_FORMAT.fullmatch(answer) for answer in snapshot.accepted_answers)
-    assert snapshot.gps_points
-    assert snapshot.radius_meters == get_settings().gps_radius_meters
+def test_snapshot_holds_the_locations_answers_entrances_radius_clue_and_primary_recording(
+    db: Session, drawable_clue: Callable[..., Clue], make_audio_asset: Callable[..., AudioAsset]
+) -> None:
+    radius = get_settings().gps_radius_meters + 15  # not the setting: the location's own
+    entrances = [{"lat": 49.9401, "lng": -119.3952}, {"lat": 49.9398, "lng": -119.3961}]
+    clue = drawable_clue(
+        primary=False,
+        accepted_answers=["SCI333", "SCI3330"],
+        gps_points=entrances,
+        gps_radius_meters=radius,
+    )
+    primary = make_audio_asset(clue, is_primary=True)
+
+    snapshot = location_snapshot(clue.location_id, *FR_2, db)
+
+    assert snapshot == LocationSnapshot(
+        location_id=clue.location_id,
+        clue_id=clue.id,
+        audio_asset_id=primary.id,
+        accepted_answers=("SCI333", "SCI3330"),
+        gps_points=(GpsPoint(49.9401, -119.3952), GpsPoint(49.9398, -119.3961)),
+        radius_meters=radius,
+    )
 
 
-def test_snapshot_repr_hides_answers_and_entrances(db: Session) -> None:
-    location_id = next(iter(eligible_location_ids(Language.ZH, Difficulty.BASIC, db)))
-    snapshot = location_snapshot(location_id, Language.ZH, Difficulty.BASIC, db)
+def test_snapshot_repr_hides_answers_and_entrances(
+    db: Session, drawable_clue: Callable[..., Clue]
+) -> None:
+    location_id = drawable_clue().location_id
+    snapshot = location_snapshot(location_id, *FR_2, db)
     coordinates = [str(value) for point in snapshot.gps_points for value in (point.lat, point.lng)]
     hidden = [*snapshot.accepted_answers, *coordinates]
     assert not any(value in repr(snapshot) for value in hidden)
     assert str(snapshot.location_id) in repr(snapshot)
 
 
-def test_snapshot_is_repeatable_with_its_own_clue_per_language_and_difficulty(
-    db: Session,
+def test_snapshot_of_an_unknown_location_is_refused(db: Session) -> None:
+    with pytest.raises(LocationNotEligibleError):
+        location_snapshot(uuid4(), *FR_2, db)
+
+
+def test_snapshot_of_a_location_without_a_recording_is_refused(
+    db: Session, drawable_clue: Callable[..., Clue], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    location_id = next(iter(eligible_location_ids(Language.JA, Difficulty.BASIC, db)))
-    snapshots = [location_snapshot(location_id, *mode, db) for mode in ALL_MODES]
-    assert snapshots == [location_snapshot(location_id, *mode, db) for mode in ALL_MODES]
-    assert len({snapshot.clue_id for snapshot in snapshots}) == len(ALL_MODES)
-    assert len({snapshot.audio_asset_id for snapshot in snapshots}) == len(ALL_MODES)
+    location_id = drawable_clue().location_id
+    use_audio_service(monkeypatch, WithoutRecordings())
+    with pytest.raises(LocationNotEligibleError):
+        location_snapshot(location_id, *FR_2, db)
 
 
-def test_snapshot_recording_is_one_audio_service_can_play(db: Session) -> None:
-    location_id = next(iter(eligible_location_ids(Language.FR, Difficulty.BASIC, db)))
-    snapshot = location_snapshot(location_id, Language.FR, Difficulty.BASIC, db)
-    audio = get_audio_service()
-    assert audio.clue_audio_url(snapshot.audio_asset_id, db)
-    assert snapshot.audio_asset_id == audio.clue_audio_asset_id(snapshot.clue_id, db)
-
-
-def test_stub_arrival_circles_never_overlap(db: Session) -> None:
-    ids = eligible_location_ids(Language.JA, Difficulty.BASIC, db)
+def test_playable_test_locations_have_no_overlapping_arrival_circles(
+    db: Session, playable_location_ids: Callable[..., list[UUID]]
+) -> None:
+    """Game tests rely on this: a point is never inside two locations' circles."""
+    ids = playable_location_ids(Language.JA, Difficulty.BASIC)
     snapshots = [location_snapshot(i, Language.JA, Difficulty.BASIC, db) for i in ids]
     entrances = [(point, s.radius_meters) for s in snapshots for point in s.gps_points]
     for (a, radius_a), (b, radius_b) in combinations(entrances, 2):
         assert distance_meters(a, b) > radius_a + radius_b
 
 
-def test_snapshot_of_an_ineligible_location_is_refused(db: Session) -> None:
-    with pytest.raises(LocationNotEligibleError):
-        location_snapshot(uuid4(), Language.DE, Difficulty.BASIC, db)
-
-
-def test_snapshot_of_a_location_without_a_recording_is_refused(
-    db: Session, monkeypatch: pytest.MonkeyPatch
+def test_session_rows_point_at_real_content_and_never_widen_a_draw(
+    db: Session,
+    make_game_session: Callable[..., GameSession],
+    playable_location_ids: Callable[..., list[UUID]],
+    snapshot_ids: Callable[..., tuple[UUID, UUID, UUID]],
 ) -> None:
-    use_audio_service(monkeypatch, WithoutRecordings())
-    location_id = next(iter(eligible_location_ids(Language.DE, Difficulty.BASIC, db)))
-    with pytest.raises(LocationNotEligibleError):
-        location_snapshot(location_id, Language.DE, Difficulty.BASIC, db)
+    """Game tests rely on this: a row at a playable location has the IDs a draw would give it,
+    and a row with its own location adds nothing a game could draw."""
+    game = make_game_session()  # ja/basic
+    [playable] = playable_location_ids(Language.JA, Difficulty.BASIC, count=1)
+    drawn = location_snapshot(playable, Language.JA, Difficulty.BASIC, db)
+    assert snapshot_ids(game, playable) == (drawn.location_id, drawn.clue_id, drawn.audio_asset_id)
+
+    location_id, _, audio_asset_id = snapshot_ids(game)
+    assert location_id not in eligible_location_ids(Language.JA, Difficulty.BASIC, db)
+    get_audio_service().clue_audio_url(audio_asset_id, db)  # a recording that exists
 
 
-@pytest.mark.parametrize("difficulty", Difficulty)
-def test_a_language_missing_a_feedback_phrase_has_no_eligible_locations(
-    db: Session, monkeypatch: pytest.MonkeyPatch, difficulty: Difficulty
+def test_content_lookups_never_commit_flush_roll_back_or_load_a_location(
+    db: Session, drawable_clue: Callable[..., Clue], transaction_calls: list[str]
 ) -> None:
-    use_audio_service(monkeypatch, MissingAPhraseIn(Language.KO))
-    assert eligible_location_ids(Language.KO, difficulty, db) == frozenset()
-    assert len(eligible_location_ids(Language.JA, difficulty, db)) == (
-        LOCATIONS_PER_LANGUAGE_AND_DIFFICULTY
-    )
+    location_id = drawable_clue().location_id
+    db.expunge_all()
+    transaction_calls.clear()  # the factories flushed what they made
 
+    assert location_id in eligible_location_ids(*FR_2, db)
+    assert is_location_active(location_id, db)
+    location_snapshot(location_id, *FR_2, db)
 
-def test_content_lookups_never_commit_flush_or_roll_back_the_callers_session(
-    db: Session, transaction_calls: list[str]
-) -> None:
-    for location_id in eligible_location_ids(Language.ES, Difficulty.ADVANCING, db):
-        is_location_active(location_id, db)
-        location_snapshot(location_id, Language.ES, Difficulty.ADVANCING, db)
     assert transaction_calls == []
     # With autoflush off nothing is flushed, but the caller's next commit would still save
     # anything a lookup added, changed or deleted.
     assert not (db.new or db.dirty or db.deleted)
+    # the answers and entrances stay out of the caller's session
+    assert not any(isinstance(row, Location) for row in db.identity_map.values())

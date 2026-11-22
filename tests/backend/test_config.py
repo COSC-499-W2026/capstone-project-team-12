@@ -212,13 +212,21 @@ def test_unsafe_token_settings(
 
 def test_rate_limits_default_to_the_spec_values() -> None:
     settings = Settings(_env_file=None)
-    assert settings.global_rate_limit == 100
+    assert settings.global_rate_limit == 120
     assert settings.login_attempts_per_email == 5
     assert settings.login_attempts_per_ip == 100
+    assert settings.register_attempts_per_ip == 100
+    assert settings.photo_uploads_per_user == 10
 
 
 @pytest.mark.parametrize(
-    "name", ["GLOBAL_RATE_LIMIT", "LOGIN_ATTEMPTS_PER_EMAIL", "LOGIN_ATTEMPTS_PER_IP"]
+    "name",
+    [
+        "GLOBAL_RATE_LIMIT",
+        "LOGIN_ATTEMPTS_PER_EMAIL",
+        "LOGIN_ATTEMPTS_PER_IP",
+        "REGISTER_ATTEMPTS_PER_IP",
+    ],
 )
 @pytest.mark.parametrize("value", ["0", "-5"])
 def test_rate_limits_must_be_positive(

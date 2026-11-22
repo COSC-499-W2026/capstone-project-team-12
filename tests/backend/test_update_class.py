@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.errors import ErrorCode
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import Class
-from app.models.enums import UserRole
+from app.models.enums import ClassStaffRole, UserRole
 
 URL = "/api/v1/teacher/classes"
 
@@ -149,44 +149,34 @@ def test_invalid_settings_rejected(
     assert school_class.semester == original_semester
 
 
-def test_student_cannot_update_class(
+@pytest.mark.parametrize(
+    "role, staff_role",
+    [
+        (UserRole.STUDENT, None),
+        (UserRole.STAFF, None),
+        (UserRole.STAFF, ClassStaffRole.ASSISTANT),
+        (UserRole.STUDENT, ClassStaffRole.ASSISTANT),
+    ],
+    ids=["student", "other teacher", "staff TA", "student TA"],
+)
+def test_only_the_owner_can_update_class(
     client: TestClient,
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
     make_class_staff: Callable[..., ClassStaff],
     auth_headers: Callable[[User], dict[str, str]],
+    role: UserRole,
+    staff_role: ClassStaffRole | None,
 ) -> None:
-    owner = make_user(role=UserRole.STAFF)
-    student = make_user(role=UserRole.STUDENT)
+    user = make_user(role=role)
     school_class = make_class()
-    make_class_staff(school_class, owner)
+    if staff_role is not None:
+        make_class_staff(school_class, user, role=staff_role)
 
     response = client.patch(
         f"{URL}/{school_class.id}",
         json={"name": "Unauthorized Change"},
-        headers=auth_headers(student),
-    )
-
-    assert response.status_code == 403, response.text
-    assert response.json()["error"]["code"] == ErrorCode.FORBIDDEN_ROLE.value
-
-
-def test_non_owner_staff_cannot_update_class(
-    client: TestClient,
-    make_user: Callable[..., User],
-    make_class: Callable[..., Class],
-    make_class_staff: Callable[..., ClassStaff],
-    auth_headers: Callable[[User], dict[str, str]],
-) -> None:
-    owner = make_user(role=UserRole.STAFF)
-    other_staff = make_user(role=UserRole.STAFF)
-    school_class = make_class()
-    make_class_staff(school_class, owner)
-
-    response = client.patch(
-        f"{URL}/{school_class.id}",
-        json={"name": "Unauthorized Change"},
-        headers=auth_headers(other_staff),
+        headers=auth_headers(user),
     )
 
     assert response.status_code == 403, response.text

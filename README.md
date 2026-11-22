@@ -123,9 +123,9 @@ python utils/dep_graph.py --graph --check   # draw the graph and fail if a rule 
 python utils/dep_graph.py --graph           # only draw docs/architecture/dependency-graph.md
 ```
 
-The graph is generated from the imports and published on GitHub Pages after each merge to main, at [https://cosc-499-w2026.github.io/capstone-project-team-12/graph.html](https://cosc-499-w2026.github.io/capstone-project-team-12/graph.html). `docs/architecture/dependency-graph.md` is git-ignored, so there is no file to commit.
+The graph is generated from the imports and published on Netlify after each merge to main, at [https://cosc499-team12.netlify.app/graph.html](https://cosc499-team12.netlify.app/graph.html). `docs/architecture/dependency-graph.md` is git-ignored, so there is no file to commit.
 
-The API reference is generated from the FastAPI routes in the same way and published at [https://cosc-499-w2026.github.io/capstone-project-team-12/api.html](https://cosc-499-w2026.github.io/capstone-project-team-12/api.html).
+The API reference is generated from the FastAPI routes in the same way and published at [https://cosc499-team12.netlify.app/api.html](https://cosc499-team12.netlify.app/api.html).
 
 ### GPS replay
 

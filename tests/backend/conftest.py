@@ -8,9 +8,9 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta, tzinfo
 from itertools import count
 from pathlib import Path
-from typing import Any, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar
 from urllib.parse import parse_qs, unquote, urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import av
 import pytest
@@ -22,9 +22,9 @@ from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.content import interface as content
 from app.content.clue_audio import UPLOAD_PROVIDER
 from app.db import DB_CONNECT_ARGS, get_db
+from app.engagement import daily_challenges
 from app.errors import AppError, ErrorCode
 from app.main import create_app
 from app.models.accounts import ClassStaff, User
@@ -41,9 +41,14 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.game import GameSession, SessionLocation
-from app.services.audio import UploadedAudioService
-from app.services.limiter import limiter
+from app.services.limiter import reset_counts
 from app.services.storage import MEDIA_URL_PREFIX, get_storage_service
+
+if TYPE_CHECKING:  # only for the annotation, so pytest_plugins below still imports it first
+    from content_fixtures import SnapshotIds
+
+# playable content for game tests; importing content_fixtures here would skip assert rewriting
+pytest_plugins = ["content_fixtures"]
 
 
 @pytest.fixture(scope="session")
@@ -152,7 +157,7 @@ def split_media_url() -> Callable[[str], tuple[str, int, str]]:
 @pytest.fixture(autouse=True)
 def reset_rate_limits() -> None:
     """Every test client sends from the same IP, so counts from one test must not reach the next."""
-    limiter.reset()
+    reset_counts()
 
 
 @pytest.fixture
@@ -415,16 +420,16 @@ def open_game(make_game_session: Callable[..., GameSession]) -> Callable[..., Ga
 
 
 @pytest.fixture
-def make_session_location(db: Session) -> Callable[..., SessionLocation]:
-    """A pending location in the game with a valid content snapshot (a random location id)."""
+def make_session_location(
+    db: Session, snapshot_ids: Callable[[GameSession, UUID | None], "SnapshotIds"]
+) -> Callable[..., SessionLocation]:
+    """A pending location in the game with a valid content snapshot (IDs from snapshot_ids)."""
 
     def make(game: GameSession, position: int, **fields: Any) -> SessionLocation:
         values: dict[str, Any] = {
             "session_id": game.id,
-            "location_id": uuid4(),
             "position": position,
-            "clue_id": uuid4(),
-            "audio_asset_id": UploadedAudioService().clue_audio_asset_id(uuid4(), db),
+            **snapshot_ids(game, fields.get("location_id"))._asdict(),
             "accepted_answers_snapshot": ["SCI333"],
             "gps_points_snapshot": [{"lat": 49.9394, "lng": -119.3948}],
             "radius_snapshot": 30,
@@ -481,6 +486,7 @@ def replay_route(
     auth_headers: Callable[[User], dict[str, str]],
     navigating_game: Callable[..., tuple[GameSession, SessionLocation]],
     freeze_clock: Callable[..., None],
+    playable_location_ids: Callable[..., list[UUID]],
 ) -> Callable[..., tuple[int, list[str], SessionLocation]]:
     """Plays a route with utils/gps_replay.py against a new game through the API: the game is at
     an active ja/basic location (entrance and radius of make_session_location), in Stage 1 since
@@ -495,9 +501,8 @@ def replay_route(
         after_ping: Callable[[TestClient, str, str], None] | None = None,
         **kwargs: Any,
     ) -> tuple[int, list[str], SessionLocation]:
-        active = sorted(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))
-        assert active, "needs an active ja/basic location"
-        game, row = navigating_game(now, *_REPLAY_CLOCKS, location_id=active[0])
+        location_id = playable_location_ids(count=1)[0]
+        game, row = navigating_game(now, *_REPLAY_CLOCKS, location_id=location_id)
         db.commit()  # so an error the route rolls back keeps the game
         student = db.get(User, game.student_id)
         assert student is not None
@@ -537,21 +542,27 @@ def replay_route(
     return run
 
 
+def location_row(room_number: str, /, **fields: Any) -> Location:
+    """An active location with that room number, its answer and one entrance, not yet added
+    (make_location adds one to `db`; content_fixtures also commits some). `fields` win, a
+    `room_number` among them too."""
+    values: dict[str, Any] = {
+        "name": f"Test room {room_number}",
+        "building_name": "Test Building",
+        "room_number": room_number,
+        "accepted_answers": [room_number.replace(" ", "")],
+        "gps_points": [{"lat": 49.9394, "lng": -119.3948}],
+        "gps_radius_meters": get_settings().gps_radius_meters,
+    }
+    return Location(**(values | fields))
+
+
 @pytest.fixture
 def make_location(db: Session) -> Callable[..., Location]:
-    """An active location with a new room number, its answer and one entrance."""
+    """An active location with a new "TST" room number (see location_row), added to `db`."""
 
     def make(**fields: Any) -> Location:
-        room_number = f"TST {next(_room_numbers)}"
-        values: dict[str, Any] = {
-            "name": f"Test room {room_number}",
-            "building_name": "Test Building",
-            "room_number": room_number,
-            "accepted_answers": [room_number.replace(" ", "")],
-            "gps_points": [{"lat": 49.9394, "lng": -119.3948}],
-            "gps_radius_meters": get_settings().gps_radius_meters,
-        }
-        return _add(db, Location(**(values | fields)))
+        return _add(db, location_row(f"TST {next(_room_numbers)}", **fields))
 
     return make
 
@@ -657,3 +668,19 @@ def stored_media_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterato
     # the next caller builds both again from the restored environment
     get_settings.cache_clear()
     get_storage_service.cache_clear()
+
+
+@pytest.fixture
+def fixed_daily_challenge_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use known targets for scoring and API tests that assert exact point totals."""
+
+    fixed_keys = {
+        "complete_1_location",
+        "complete_3_locations",
+        "complete_1_challenging_location",
+    }
+
+    def pick(available: list[daily_challenges.ChallengeTarget]) -> daily_challenges.ChallengeTarget:
+        return next(target for target in available if target.description_key in fixed_keys)
+
+    monkeypatch.setattr(daily_challenges, "_pick_target", pick)

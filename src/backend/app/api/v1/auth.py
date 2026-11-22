@@ -1,11 +1,11 @@
 from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, Request, Response
+from fastapi import APIRouter, Cookie, Depends, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-from app.accounts.login import get_login_form, get_login_key, login_account
+from app.accounts.login import login_account
 from app.accounts.logout import logout_session
 from app.accounts.register import RegisterRequest, RegisterResponse, register_account
 from app.accounts.tokens import (
@@ -14,10 +14,9 @@ from app.accounts.tokens import (
     rotate_tokens,
     set_refresh_cookie,
 )
-from app.config import get_settings
+from app.api.rate_limit import login_rate_limit, register_rate_limit
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
-from app.services.limiter import limiter
 
 auth_router = APIRouter(prefix="/auth")
 
@@ -31,6 +30,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
     operation_id="registerUser",
     # EMAIL_TAKEN, USERNAME_TAKEN, INVALID_ACCESS_CODE
     responses=error_responses(HTTPStatus.CONFLICT, HTTPStatus.BAD_REQUEST),
+    dependencies=[Depends(register_rate_limit)],
 )
 def register(request: RegisterRequest, db: Annotated[Session, Depends(get_db)]) -> RegisterResponse:
     """Student sign-up: email, username, password, optional access code."""
@@ -45,13 +45,11 @@ def register(request: RegisterRequest, db: Annotated[Session, Depends(get_db)]) 
     status_code=200,
     operation_id="loginUser",
     responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
+    dependencies=[Depends(login_rate_limit)],
 )
-@limiter.limit(lambda: f"{get_settings().login_attempts_per_email}/minute", key_func=get_login_key)
-@limiter.limit(lambda: f"{get_settings().login_attempts_per_ip}/minute")
 def login(
-    request: Request,
     response: Response,
-    form_data: Annotated[OAuth2PasswordRequestForm, Depends(get_login_form)],
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: Annotated[Session, Depends(get_db)],
 ) -> TokenResponse:
     """Sign in with email and password (all roles)

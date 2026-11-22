@@ -23,6 +23,13 @@ class PointsSourceType(StrEnum):
     STREAK_MILESTONE = "streak_milestone"
 
 
+class DailyChallengeType(StrEnum):
+    """Types of daily challenges available to students."""
+
+    COMPLETION = "completion"
+    DIFFICULTY = "difficulty"
+
+
 class AchievementCategory(StrEnum):
     """Categories of unlockable achievements."""
 
@@ -35,6 +42,11 @@ class Difficulty(IntEnum):
     BASIC = 1  # numbers only
     ADVANCING = 2  # numbers and a simple description
     CHALLENGING = 3  # description only
+
+
+class DifficultySuggestion(StrEnum):
+    EASIER = "suggest_easier"
+    HARDER = "suggest_harder"
 
 
 class FeedbackCode(StrEnum):

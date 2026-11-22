@@ -1,6 +1,6 @@
 """The signed-in user's own profile."""
 
-from datetime import datetime
+from datetime import UTC, date, datetime
 from http import HTTPStatus
 from typing import Annotated, Self
 from uuid import UUID
@@ -17,7 +17,11 @@ from app.accounts.tokens import create_refresh_token, set_refresh_cookie
 from app.api.v1.email_links import StatusResponse
 from app.db import get_db
 from app.engagement.interface import (
+    app_calendar_date,
+    challenge_expiry,
+    ensure_daily_challenges,
     get_active_class_ids,
+    get_and_report_streak,
     get_language_engagement_stats,
     list_unlocked_achievements,
 )
@@ -25,6 +29,7 @@ from app.errors import AppError, ErrorCode, error_responses
 from app.game.history import list_history
 from app.models.accounts import User
 from app.models.enums import (
+    DailyChallengeType,
     Difficulty,
     EmailKind,
     Language,
@@ -214,6 +219,30 @@ class RecentBadgeResponse(BaseModel):
     unlocked_at: datetime
 
 
+class DailyChallengeResponse(BaseModel):
+    """One daily challenge and its current progress."""
+
+    id: UUID
+    challenge_date: date
+    slot: int = Field(ge=1, le=3)
+    challenge_type: DailyChallengeType
+    params: dict[str, object]
+    description_key: str
+    reward_points: int = Field(ge=0)
+    progress_current: int = Field(ge=0)
+    progress_required: int = Field(gt=0)
+    completed: bool
+    completed_at: datetime | None
+
+
+class DailyChallengesResponse(BaseModel):
+    """The three challenges assigned to the signed-in user for today."""
+
+    challenge_date: date
+    expires_at: datetime = Field(description="Next local midnight, expressed in UTC.")
+    challenges: list[DailyChallengeResponse] = Field(min_length=3, max_length=3)
+
+
 class EngagementStatsResponse(BaseModel):
     """The signed-in user's cumulative statistics for one language."""
 
@@ -234,6 +263,17 @@ class EngagementStatsResponse(BaseModel):
     recent_badges: list[RecentBadgeResponse] = Field(
         description="Recent unlocks for this language, including global badges."
     )
+    current_streak_days: int = Field(
+        ge=0,
+        description="Current global streak across languages, using the app's local calendar.",
+    )
+    best_streak_days: int = Field(
+        ge=0,
+        description="Longest global streak achieved across languages.",
+    )
+
+    streak_broken: bool = Field(description="True once when a previously active streak expires.")
+    daily_challenges: DailyChallengesResponse
 
 
 @me_router.get(
@@ -243,12 +283,11 @@ class EngagementStatsResponse(BaseModel):
     summary="Get my engagement statistics",
     description=(
         "Return the authenticated user's cumulative points, level, "
-        "points needed for the next level, and recently unlocked badges "
-        "for the requested target language. Points are tracked separately "
-        "for each language, while global badges are included across languages. "
-        "Users without previous activity start at zero points and level one. "
-        "Students and staff can play and earn points. "
-        "Streaks and daily challenges will be added separately."
+        "points needed for the next level, recently unlocked badges, and global streak "
+        "statistics for the requested target language. Points are tracked separately "
+        "for each language, while streaks and global badges are shared across languages. "
+        "Includes today’s challenges, their expiry, and a one-time streak expiration flag. "
+        "Students and staff can play and earn points. Streaks follow the app's local calendar."
     ),
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
@@ -264,9 +303,16 @@ def get_my_engagement(
     if user.role == UserRole.ADMIN:
         raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
 
+    now = datetime.now(UTC)
+    daily_challenges = _daily_challenges_response(user.id, db, now)
     stats = get_language_engagement_stats(user.id, language, db)
+    current_streak, best_streak, streak_broken = get_and_report_streak(
+        user.id, db, today=daily_challenges.challenge_date
+    )
 
-    return EngagementStatsResponse(
+    response = EngagementStatsResponse(
+        daily_challenges=daily_challenges,
+        streak_broken=streak_broken,
         language=stats.language,
         total_points=stats.total_points,
         level=stats.level,
@@ -279,6 +325,38 @@ def get_my_engagement(
                 unlocked_at=badge.unlocked_at,
             )
             for badge in stats.recent_badges
+        ],
+        current_streak_days=current_streak,
+        best_streak_days=best_streak,
+    )
+    db.commit()
+    return response
+
+
+def _daily_challenges_response(
+    user_id: UUID, db: Session, now: datetime
+) -> DailyChallengesResponse:
+    today = app_calendar_date(now)
+    challenges = ensure_daily_challenges(user_id, db, now=now)
+
+    return DailyChallengesResponse(
+        challenge_date=today,
+        expires_at=challenge_expiry(today),
+        challenges=[
+            DailyChallengeResponse(
+                id=challenge.id,
+                challenge_date=challenge.challenge_date,
+                slot=challenge.slot,
+                challenge_type=DailyChallengeType(challenge.challenge_type),
+                params=challenge.params,
+                description_key=challenge.description_key,
+                reward_points=challenge.reward_points,
+                progress_current=challenge.progress_current,
+                progress_required=challenge.progress_required,
+                completed=challenge.completed_at is not None,
+                completed_at=challenge.completed_at,
+            )
+            for challenge in challenges
         ],
     )
 
