@@ -86,18 +86,18 @@ def test_teacher_creates_class_with_initial_code(
     assert access_code.uses_count == 0
 
 
-def test_student_cannot_create_class(
+@pytest.mark.parametrize("role", [UserRole.STUDENT, UserRole.ADMIN])
+def test_only_staff_can_create_class(
     client: TestClient,
     db: Session,
     make_user: Callable[..., User],
     auth_headers: Callable[[User], dict[str, str]],
+    role: UserRole,
 ) -> None:
-    student = make_user(role=UserRole.STUDENT)
-
     response = client.post(
         URL,
         json=payload(),
-        headers=auth_headers(student),
+        headers=auth_headers(make_user(role=role)),
     )
 
     assert response.status_code == 403, response.text
