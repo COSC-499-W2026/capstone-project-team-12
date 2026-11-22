@@ -108,6 +108,15 @@ def out_of_step(game: GameSession) -> AppError:
     )
 
 
+def moved_on(game: GameSession) -> AppError:
+    """409 STATE_CHANGED: the app's position is out of date (e.g. a very late retry)."""
+    return AppError(
+        ErrorCode.STATE_CHANGED,
+        "The game has moved on since this location",
+        details=[game_details(game)],
+    )
+
+
 def inactive_location(game: GameSession) -> AppError:
     """409 STATE_CHANGED: the location was deactivated, and nothing is written."""
     return AppError(
