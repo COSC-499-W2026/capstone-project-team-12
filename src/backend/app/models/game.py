@@ -158,6 +158,7 @@ class SessionLocation(Base):
         CheckConstraint("last_lng BETWEEN -180 AND 180", name="last_lng"),
         CheckConstraint("last_accuracy_m >= 0", name="last_accuracy_m"),
         CheckConstraint("weak_pings_in_row >= 0", name="weak_pings_in_row"),
+        CheckConstraint("clue_plays >= 0", name="clue_plays"),
     )
 
     id: Mapped[UUID] = uuid_pk()
@@ -192,6 +193,8 @@ class SessionLocation(Base):
     )
 
     attempts_used: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    # times the student played or replayed this location's clue (feedback phrases don't count)
+    clue_plays: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     # copy of the points_ledger row, written in the same transaction
     points_awarded: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     # e.g. ["speed_anomaly", "similar_photo", "not_in_app_capture", "gps_override"]
