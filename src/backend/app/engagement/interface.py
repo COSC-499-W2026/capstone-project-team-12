@@ -543,6 +543,30 @@ def _lock_class(class_id: UUID, db: Session) -> Class:
     ).scalar_one()
 
 
+def _reject_assistant(student_id: UUID, class_id: UUID, db: Session) -> None:
+    assistant = db.scalar(
+        select(ClassStaff.user_id).where(
+            ClassStaff.user_id == student_id,
+            ClassStaff.class_id == class_id,
+            ClassStaff.role == ClassStaffRole.ASSISTANT,
+        )
+    )
+    if assistant is not None:
+        raise AppError(ErrorCode.TA_SAME_CLASS_CONFLICT)
+
+
+def _active_enrolment_for_language(
+    student_id: UUID, language: str, db: Session
+) -> ClassEnrollment | None:
+    return db.scalar(
+        select(ClassEnrollment).where(
+            ClassEnrollment.student_id == student_id,
+            ClassEnrollment.language == language,
+            ClassEnrollment.is_active.is_(True),
+        )
+    )
+
+
 def validate_code_and_enrol(
     student_id: UUID,
     code: str,
@@ -618,15 +642,7 @@ def validate_code_and_enrol(
     if school_class.archived_at is not None:
         raise AppError(ErrorCode.CLASS_ARCHIVED)
 
-    assistant = db.scalar(
-        select(ClassStaff.user_id).where(
-            ClassStaff.user_id == student_id,
-            ClassStaff.class_id == school_class.id,
-            ClassStaff.role == ClassStaffRole.ASSISTANT,
-        )
-    )
-    if assistant is not None:
-        raise AppError(ErrorCode.TA_SAME_CLASS_CONFLICT)
+    _reject_assistant(student_id, school_class.id, db)
 
     existing = db.scalar(
         select(ClassEnrollment).where(
@@ -638,13 +654,7 @@ def validate_code_and_enrol(
     if existing is not None and existing.end_reason == EnrollmentEndReason.REMOVED:
         raise AppError(ErrorCode.REMOVED_FROM_CLASS)
 
-    active_enrolment = db.scalar(
-        select(ClassEnrollment).where(
-            ClassEnrollment.student_id == student_id,
-            ClassEnrollment.language == school_class.target_language,
-            ClassEnrollment.is_active.is_(True),
-        )
-    )
+    active_enrolment = _active_enrolment_for_language(student_id, school_class.target_language, db)
 
     if active_enrolment is not None:
         if (
@@ -752,17 +762,10 @@ def _lock_class_enrolment(
     student_id: UUID, class_id: UUID, db: Session
 ) -> tuple[User, ClassEnrollment]:
     student = lock_user(student_id, db)
-    if student is None or student.role != UserRole.STUDENT:
+    if student is None:
         raise AppError(ErrorCode.NOT_FOUND)
 
-    school_class = db.scalar(
-        select(Class)
-        .where(Class.id == class_id)
-        .with_for_update(key_share=True)
-        .execution_options(populate_existing=True)
-    )
-    if school_class is None:
-        raise AppError(ErrorCode.NOT_FOUND)
+    school_class = _lock_class(class_id, db)
     if school_class.archived_at is not None:
         raise AppError(ErrorCode.CLASS_ARCHIVED)
 
@@ -795,28 +798,8 @@ def restore_student(student_id: UUID, class_id: UUID, db: Session) -> None:
     if enrolment.end_reason != EnrollmentEndReason.REMOVED:
         raise AppError(ErrorCode.NOT_FOUND)
 
-    if (
-        db.scalar(
-            select(ClassStaff.user_id).where(
-                ClassStaff.user_id == student_id,
-                ClassStaff.class_id == class_id,
-                ClassStaff.role == ClassStaffRole.ASSISTANT,
-            )
-        )
-        is not None
-    ):
-        raise AppError(ErrorCode.TA_SAME_CLASS_CONFLICT)
-
-    if (
-        db.scalar(
-            select(ClassEnrollment.id).where(
-                ClassEnrollment.student_id == student_id,
-                ClassEnrollment.language == enrolment.language,
-                ClassEnrollment.is_active.is_(True),
-            )
-        )
-        is not None
-    ):
+    _reject_assistant(student_id, class_id, db)
+    if _active_enrolment_for_language(student_id, enrolment.language, db) is not None:
         raise AppError(ErrorCode.ALREADY_IN_CLASS_FOR_LANGUAGE)
 
     enrolment.is_active = True
