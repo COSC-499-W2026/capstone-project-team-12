@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
+from app.api.rate_limit import photo_rate_limit
 from app.api.v1.game_actions import play
 from app.api.v1.game_responses import FeedbackResponse, GameSummaryResponse, summary_response
 from app.db import get_db
@@ -79,6 +80,7 @@ class PhotoResponse(BaseModel):
     "/{game_id}/verification/photo",
     operation_id="uploadPhoto",
     response_model=PhotoResponse,
+    dependencies=[Depends(photo_rate_limit)],
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
         HTTPStatus.FORBIDDEN,
@@ -117,7 +119,7 @@ def upload_photo(
     is left. 413 FILE_TOO_LARGE over the size limit. 415 UNSUPPORTED_MEDIA_TYPE for a file that
     isn't a readable JPEG or PNG, or has more than 25 megapixels (by default). 404 NOT_FOUND for
     another student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
-    account.
+    account. 429 RATE_LIMITED over 10 uploads a minute (by default), refused files included.
     """
     return play(lambda: _check_photo(user.id, game_id, photo, db), user, db)
 

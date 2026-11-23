@@ -19,8 +19,12 @@ from app.api.v1.media import media_router
 from app.api.v1.verification import verification_router
 from app.errors import error_responses
 
-# every route can fail validation; this replaces FastAPI's default 422 schema with ours
-api_router = APIRouter(prefix="/api/v1", responses=error_responses(HTTPStatus.UNPROCESSABLE_ENTITY))
+# every route can fail validation and hit the global rate limit; this replaces FastAPI's default
+# 422 schema with ours
+api_router = APIRouter(
+    prefix="/api/v1",
+    responses=error_responses(HTTPStatus.UNPROCESSABLE_ENTITY, HTTPStatus.TOO_MANY_REQUESTS),
+)
 api_router.include_router(auth_router)
 api_router.include_router(classes_router)
 api_router.include_router(leaderboard_router)

@@ -18,7 +18,7 @@ from app.models.engagement import (
     AccessCode,
     Class,
 )
-from app.models.enums import ClassStaffRole, Language, UserRole
+from app.models.enums import ClassStaffRole, Language
 
 SEMESTER_PATTERN = re.compile(r"[0-9]{4}(W1|W2|S1|S2)\Z")
 
@@ -72,14 +72,9 @@ def create_class(
 ) -> Class:
     """Create a classroom and assign its teacher as the owner.
 
-    The caller owns the transaction. This function never commits.
+    The caller checks that the teacher is a staff account and owns the transaction; this
+    function never commits.
     """
-    if not teacher.is_active:
-        raise AppError(ErrorCode.ACCOUNT_DISABLED)
-
-    if teacher.role != UserRole.STAFF:
-        raise AppError(ErrorCode.FORBIDDEN_ROLE)
-
     normalized_name = name.strip()
 
     if not normalized_name:
@@ -144,26 +139,13 @@ def generate_access_code(
 ) -> AccessCode:
     """Generate an access code for a class.
 
-    Class owners and assistants may generate codes.
+    The caller checks that the creator is an owner or assistant of the class.
     When expiration is omitted, default to the end of the class's semester.
     The caller owns the transaction; this function never commits.
     """
-    if not creator.is_active:
-        raise AppError(ErrorCode.ACCOUNT_DISABLED)
-
     school_class = db.get(Class, class_id)
     if school_class is None:
         raise AppError(ErrorCode.NOT_FOUND)
-
-    role = db.execute(
-        select(ClassStaff.role).where(
-            ClassStaff.class_id == class_id,
-            ClassStaff.user_id == creator.id,
-        )
-    ).scalar_one_or_none()
-
-    if role not in (ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT):
-        raise AppError(ErrorCode.FORBIDDEN_ROLE)
 
     if school_class.archived_at is not None:
         raise AppError(ErrorCode.CLASS_ARCHIVED)
@@ -242,7 +224,6 @@ def generate_access_code(
 
 def update_class_settings(
     class_id: UUID,
-    actor: User,
     db: Session,
     *,
     name: str | None = None,
@@ -250,25 +231,12 @@ def update_class_settings(
 ) -> Class:
     """Update owner-editable classroom settings without changing its language.
 
-    The caller owns the transaction. This function never commits.
+    The caller checks that the user owns the class and owns the transaction; this function
+    never commits.
     """
-    if not actor.is_active:
-        raise AppError(ErrorCode.ACCOUNT_DISABLED)
-
     school_class = db.get(Class, class_id)
-
     if school_class is None:
         raise AppError(ErrorCode.NOT_FOUND)
-
-    role = db.execute(
-        select(ClassStaff.role).where(
-            ClassStaff.class_id == class_id,
-            ClassStaff.user_id == actor.id,
-        )
-    ).scalar_one_or_none()
-
-    if role != ClassStaffRole.OWNER:
-        raise AppError(ErrorCode.FORBIDDEN_ROLE)
 
     if school_class.archived_at is not None:
         raise AppError(ErrorCode.CLASS_ARCHIVED)
@@ -324,35 +292,18 @@ def list_class_access_codes(class_id: UUID, db: Session) -> list[AccessCode]:
 
 def deactivate_access_code(
     code_id: UUID,
-    actor: User,
     db: Session,
 ) -> AccessCode:
     """Deactivate a classroom access code without deleting it.
 
-    Classroom owners and assistants may deactivate codes.
+    The caller checks that the user is an owner or assistant of the code's class.
     The caller owns the transaction; this function never commits.
     """
-    if not actor.is_active:
-        raise AppError(ErrorCode.ACCOUNT_DISABLED)
-
     access_code = db.get(AccessCode, code_id)
     if access_code is None:
         raise AppError(ErrorCode.NOT_FOUND)
 
-    school_class = db.get(Class, access_code.class_id)
-    if school_class is None:
-        raise AppError(ErrorCode.NOT_FOUND)
-
-    role = db.execute(
-        select(ClassStaff.role).where(
-            ClassStaff.class_id == school_class.id,
-            ClassStaff.user_id == actor.id,
-        )
-    ).scalar_one_or_none()
-
-    if role not in (ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT):
-        raise AppError(ErrorCode.FORBIDDEN_ROLE)
-
+    school_class = db.get_one(Class, access_code.class_id)
     if school_class.archived_at is not None:
         raise AppError(ErrorCode.CLASS_ARCHIVED)
 
