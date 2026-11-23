@@ -1,8 +1,8 @@
-"""Record administrative actions taken by admin accounts, and read them back.
+"""Record the changes admin accounts make, and read them back.
 
-Nothing here commits: the caller owns the transaction, so an entry is saved only if the
-action it describes is. To keep a FAILURE or DENIED entry when the action is rolled back,
-record it after the rollback and commit it.
+Only changes that succeed are recorded. Nothing here commits: the caller owns the transaction,
+so an entry is saved together with the change it describes, and a change that is rolled back
+leaves no entry.
 """
 
 from datetime import datetime
@@ -13,7 +13,7 @@ from sqlalchemy import func, insert, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditEvent
-from app.models.enums import AuditAction, AuditResult
+from app.models.enums import AuditAction
 
 MAX_PAGE_SIZE = 200
 
@@ -23,24 +23,21 @@ def record(
     action: AuditAction,
     db: Session,
     *,
-    result: AuditResult = AuditResult.SUCCESS,
-    target_id: UUID | None = None,
+    target_user_id: UUID,
+    target_class_id: UUID | None = None,
     details: dict[str, Any] | None = None,
-    ip_address: str | None = None,
-    trace_id: str | None = None,
 ) -> AuditEvent:
     """Add one entry and return it, with its id and created_at already set.
 
-    An action or result that isn't one of the enum values raises ValueError.
+    For a class transfer, `target_user_id` is the new owner. An action that isn't one of the
+    enum values raises ValueError.
     """
     values = {
         "actor_id": actor_id,
         "action": AuditAction(action),
-        "result": AuditResult(result),
-        "target_id": target_id,
+        "target_user_id": target_user_id,
+        "target_class_id": target_class_id,
         "details": details or {},
-        "ip_address": ip_address,
-        "trace_id": trace_id,
         # the clock, not now() (the start of the transaction), so two entries made in
         # one transaction are listed in the order they were recorded
         "created_at": func.clock_timestamp(),
@@ -53,8 +50,8 @@ def list_events(
     *,
     actor_id: UUID | None = None,
     action: AuditAction | None = None,
-    result: AuditResult | None = None,
-    target_id: UUID | None = None,
+    target_user_id: UUID | None = None,
+    target_class_id: UUID | None = None,
     since: datetime | None = None,
     until: datetime | None = None,
     limit: int = 50,
@@ -74,10 +71,10 @@ def list_events(
         query = query.where(AuditEvent.actor_id == actor_id)
     if action is not None:
         query = query.where(AuditEvent.action == AuditAction(action))
-    if result is not None:
-        query = query.where(AuditEvent.result == AuditResult(result))
-    if target_id is not None:
-        query = query.where(AuditEvent.target_id == target_id)
+    if target_user_id is not None:
+        query = query.where(AuditEvent.target_user_id == target_user_id)
+    if target_class_id is not None:
+        query = query.where(AuditEvent.target_class_id == target_class_id)
     if since is not None:
         query = query.where(AuditEvent.created_at >= since)
     if until is not None:

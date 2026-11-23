@@ -154,19 +154,15 @@ class EmailStatus(StrEnum):
 
 
 class AuditAction(StrEnum):
-    """Administrative actions recorded in audit_log."""
+    """Changes an admin makes, recorded in admin_audit_log once they succeed."""
 
-    CREATE_USER = "user_created"
-    DEACTIVATE_USER = "user_deactivated"
-    REACTIVATE_USER = "user_reactivated"
-    UPDATE_USER = "user_updated"
-    PERMISSIONS_CHANGED = "permissions_changed"
-    TRANSFER_CLASS = "class_transferred"
-
-
-class AuditResult(StrEnum):
-    """How an audited action ended."""
-
-    SUCCESS = "success"
-    FAILURE = "failure"  # attempted, but an error stopped it
-    DENIED = "denied"  # refused because the actor lacked permission
+    CREATE_STAFF = "create_staff"
+    DEACTIVATE = "deactivate"
+    REACTIVATE = "reactivate"
+    CHANGE_CONTENT_RIGHTS = "change_content_rights"
+    SEND_RESET_LINK = "send_reset_link"
+    TRANSFER_CLASS = "transfer_class"
+    CHANGE_EMAIL = "change_email"
+    # privacy requests
+    EXPORT_USER = "export_user"
+    DELETE_USER = "delete_user"
