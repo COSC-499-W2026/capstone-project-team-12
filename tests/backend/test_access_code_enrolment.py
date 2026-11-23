@@ -33,7 +33,8 @@ def test_valid_code_enrols_student(
         )
     )
 
-    assert result == school_class.id
+    assert result.class_id == school_class.id
+    assert result.language == school_class.target_language
     assert enrollment is not None
     assert enrollment.is_active is True
     assert enrollment.access_code_id == code.id
@@ -52,7 +53,8 @@ def test_code_is_case_and_separator_insensitive(
 
     result = validate_code_and_enrol(student.id, " k7pm-3qxd ", db)
 
-    assert result == school_class.id
+    assert result.class_id == school_class.id
+    assert result.language == school_class.target_language
 
 
 @pytest.mark.parametrize("invalid_code", ["", "INVALID!", "UNKNOWN1"])
@@ -234,7 +236,8 @@ def test_previously_left_student_can_rejoin(
         )
     )
 
-    assert result == school_class.id
+    assert result.class_id == school_class.id
+    assert result.language == school_class.target_language
     assert enrollment.id == original_id
     assert enrollment.is_active is True
     assert enrollment.end_reason is None

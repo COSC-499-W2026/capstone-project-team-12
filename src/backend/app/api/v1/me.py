@@ -23,10 +23,13 @@ from app.engagement.interface import (
     get_active_class_ids,
     get_and_report_streak,
     get_language_engagement_stats,
+    leave_class,
     list_unlocked_achievements,
+    validate_code_and_enrol,
 )
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.history import list_history
+from app.game.interface import end_open_sessions
 from app.models.accounts import User
 from app.models.enums import (
     DailyChallengeType,
@@ -41,6 +44,7 @@ from app.services.email import EmailService
 from app.services.locks import lock_user
 
 me_router = APIRouter(prefix="/me", tags=["me"])
+me_classes_router = APIRouter(prefix="/me/classes", tags=["classes"])
 
 
 class ProfileResponse(BaseModel):
@@ -504,3 +508,89 @@ def list_my_games(
         total=history.total,
         has_next_page=page * page_size < history.total,
     )
+
+
+class JoinClassRequest(BaseModel):
+    """Access code provided by a student joining a classroom."""
+
+    access_code: str = Field(
+        min_length=1,
+        max_length=32,
+        description="Eight-character classroom access code. Spaces and hyphens are accepted.",
+        examples=["K7PM-3QXD"],
+    )
+
+
+class JoinClassResponse(BaseModel):
+    """Classroom selected after successful enrolment."""
+
+    class_id: UUID
+    language: Language
+
+
+@me_classes_router.post(
+    "/join",
+    response_model=JoinClassResponse,
+    operation_id="joinClass",
+    summary="Join a classroom",
+    description=(
+        "Enrol the authenticated student using a classroom access code. "
+        "A student may have only one active classroom per language. "
+        "Students who voluntarily left may rejoin, but students removed "
+        "by a teacher cannot. Teachers cannot join as students, and "
+        "teaching assistants cannot join classes they assist. "
+        "Successful enrolment also makes it the student's current class. "
+        "Repeating a successful request with the original access code "
+        "returns success without changing the current class or consuming another use, "
+        "even if the code "
+        "has expired or reached its usage limit. Deactivated codes are rejected."
+    ),
+    responses=error_responses(
+        HTTPStatus.BAD_REQUEST,
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.CONFLICT,
+    ),
+)
+def join_class(
+    request: JoinClassRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> JoinClassResponse:
+    """Join a classroom and select it in one transaction."""
+    joined = validate_code_and_enrol(user.id, request.access_code, db)
+    db.commit()
+    return JoinClassResponse(class_id=joined.class_id, language=joined.language)
+
+
+@me_classes_router.post(
+    "/{class_id}/leave",
+    status_code=HTTPStatus.NO_CONTENT,
+    operation_id="leaveClass",
+    summary="Leave a classroom",
+    description=(
+        "Leave an actively enrolled classroom. "
+        "The student may rejoin later using a valid access code. "
+        "If this was the student's current class, another active class "
+        "is selected when available; otherwise, the selection is cleared. "
+        "Leaving ends any open (active or paused) class game sessions."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+    ),
+)
+def leave_class_endpoint(
+    class_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Leave a classroom and close its open games in one transaction."""
+    try:
+        leave_class(user.id, class_id, db)
+        end_open_sessions(class_id, db, student_id=user.id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
