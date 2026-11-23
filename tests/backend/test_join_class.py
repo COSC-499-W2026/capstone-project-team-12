@@ -4,13 +4,16 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from time import time
 from typing import Any
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
 from jwt import encode
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.engagement import interface as engagement
 from app.errors import ErrorCode
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import AccessCode, Class, ClassEnrollment
@@ -102,7 +105,67 @@ def test_disabled_account(
     )
 
 
-@pytest.mark.parametrize("state", ["unknown", "expired", "exhausted"])
+def test_join_checks_the_user_row_after_locking(
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_access_code: Callable[..., AccessCode],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    student = make_user()
+    access_code = make_access_code(make_class())
+    lock_user = engagement.lock_user
+
+    def disable_before_lock(student_id: UUID, session: Session) -> User | None:
+        # Bypass the ORM so the authenticated User still has its old value.
+        assert student.is_active
+        session.connection().execute(
+            update(User).where(User.id == student_id).values(is_active=False)
+        )
+        assert student.is_active
+        return lock_user(student_id, session)
+
+    monkeypatch.setattr(engagement, "lock_user", disable_before_lock)
+
+    assert_error(join_as(client, student, access_code.code), 403, ErrorCode.ACCOUNT_DISABLED)
+    assert (
+        db.scalar(select(ClassEnrollment.id).where(ClassEnrollment.student_id == student.id))
+        is None
+    )
+
+
+@pytest.mark.parametrize("switch_to_practice", [False, True])
+def test_join_retry_keeps_the_current_selection(
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_access_code: Callable[..., AccessCode],
+    switch_to_practice: bool,
+) -> None:
+    student = make_user()
+    first_code = make_access_code(make_class(target_language=Language.JA))
+    second_class = make_class(target_language=Language.FR)
+    second_code = make_access_code(second_class)
+
+    assert join_as(client, student, second_code.code).status_code == 200
+    assert join_as(client, student, first_code.code).status_code == 200
+
+    selected = None if switch_to_practice else str(second_class.id)
+    response = client.patch("/api/v1/me/profile", json={"current_class_id": selected})
+    assert response.status_code == 200, response.text
+    assert response.json()["current_class_id"] == selected
+
+    retry = join_as(client, student, first_code.code)
+    assert retry.status_code == 200, retry.text
+    db.refresh(student)
+    db.refresh(first_code)
+    assert student.current_class_id == (None if switch_to_practice else second_class.id)
+    assert first_code.uses_count == 1
+
+
+@pytest.mark.parametrize("state", ["unknown", "expired", "exhausted", "deactivated"])
 def test_invalid_code_states(
     client: TestClient,
     db: Session,
@@ -120,6 +183,8 @@ def test_invalid_code_states(
 
         if state == "expired":
             access_code.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        elif state == "deactivated":
+            access_code.is_active = False
         else:
             access_code.max_uses = 1
             access_code.uses_count = 1
@@ -141,13 +206,24 @@ def test_archived_class(
 ) -> None:
     school_class = make_class()
     access_code = make_access_code(school_class)
+    student = make_user()
+    current_class = make_class(target_language=Language.FR)
+    assert join_as(client, student, make_access_code(current_class).code).status_code == 200
     school_class.archived_at = datetime.now(UTC)
-    db.flush()
+    db.commit()
 
     assert_error(
-        join_as(client, make_user(), access_code.code),
+        join_as(client, student, access_code.code),
         409,
         ErrorCode.CLASS_ARCHIVED,
+    )
+    db.refresh(student)
+    db.refresh(access_code)
+    assert student.current_class_id == current_class.id
+    assert access_code.uses_count == 0
+    assert (
+        db.scalar(select(ClassEnrollment.id).where(ClassEnrollment.class_id == school_class.id))
+        is None
     )
 
 
@@ -169,15 +245,7 @@ def test_same_language_conflict(
     )
 
 
-@pytest.mark.parametrize(
-    ("state", "expected_status"),
-    [
-        ("valid", 200),
-        ("expired", 200),
-        ("exhausted", 200),
-        ("deactivated", 400),
-    ],
-)
+@pytest.mark.parametrize("state", ["valid", "expired", "exhausted", "deactivated"])
 def test_retry_does_not_consume_code(
     client: TestClient,
     db: Session,
@@ -185,7 +253,6 @@ def test_retry_does_not_consume_code(
     make_class: Callable[..., Class],
     make_access_code: Callable[..., AccessCode],
     state: str,
-    expected_status: int,
 ) -> None:
     student = make_user()
     school_class = make_class()
@@ -206,25 +273,25 @@ def test_retry_does_not_consume_code(
     db.flush()
 
     retry = join_as(client, student, access_code.code)
-    assert retry.status_code == expected_status, retry.text
-
-    if expected_status == 200:
-        assert retry.json()["class_id"] == str(school_class.id)
-    else:
-        assert_error(retry, 400, ErrorCode.INVALID_ACCESS_CODE)
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["class_id"] == str(school_class.id)
 
     db.refresh(access_code)
     assert access_code.uses_count == original_uses
+    enrollment = (
+        db.query(ClassEnrollment).filter_by(student_id=student.id, class_id=school_class.id).one()
+    )
+    assert enrollment.is_active
+    assert enrollment.access_code_id == access_code.id
 
 
-def test_same_class_different_valid_code_conflict(
+def test_same_class_different_code_succeeds(
     client: TestClient,
     db: Session,
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
     make_access_code: Callable[..., AccessCode],
 ) -> None:
-    """A different valid code cannot be used to rejoin the same class."""
     student = make_user()
     school_class = make_class()
     original_code = make_access_code(school_class)
@@ -234,7 +301,8 @@ def test_same_class_different_valid_code_conflict(
     assert first.status_code == 200, first.text
 
     response = join_as(client, student, other_code.code)
-    assert_error(response, 409, ErrorCode.ALREADY_IN_CLASS_FOR_LANGUAGE)
+    assert response.status_code == 200, response.text
+    assert response.json()["class_id"] == str(school_class.id)
 
     db.refresh(original_code)
     db.refresh(other_code)
@@ -244,6 +312,7 @@ def test_same_class_different_valid_code_conflict(
     enrollment = (
         db.query(ClassEnrollment).filter_by(student_id=student.id, class_id=school_class.id).one()
     )
+    assert enrollment.is_active
     assert enrollment.access_code_id == original_code.id
 
 

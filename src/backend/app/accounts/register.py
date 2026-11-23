@@ -2,7 +2,7 @@ import re
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import func, insert, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -68,8 +68,7 @@ def register_account(request: RegisterRequest, db: Session) -> User:
         EmailService.queue_email(user, EmailKind.VERIFY_EMAIL, db)  # spec: sign-up sends it
 
         if access_code is not None:
-            class_id = validate_code_and_enrol(user.id, access_code, db)
-            db.execute(update(User).where(User.id == user.id).values(current_class_id=class_id))
+            validate_code_and_enrol(user.id, access_code, db)
         return user
 
     except IntegrityError as err:

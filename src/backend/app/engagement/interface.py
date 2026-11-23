@@ -71,7 +71,7 @@ from app.engagement.streaks import (
     visible_streak,
 )
 from app.errors import AppError, ErrorCode
-from app.models.accounts import ClassStaff
+from app.models.accounts import ClassStaff, User
 from app.models.engagement import (
     AccessCode,
     Class,
@@ -110,9 +110,13 @@ __all__ = [
     "is_class_archived",
     "leave_class",
     "list_class_access_codes",
+    "remove_student",
+    "restore_student",
+    "archive_class",
     "list_staff_classes",
     "require_active_enrolment",
     "update_class_settings",
+    "JoinedClass",
     "validate_code_and_enrol",
     "LanguageEngagementStats",
     "get_language_engagement_stats",
@@ -532,20 +536,58 @@ def require_active_enrolment(student_id: UUID, class_id: UUID, db: Session) -> L
     return language
 
 
+def _lock_class(class_id: UUID, db: Session) -> Class:
+    """Lock and refresh a classroom whose existence has been established."""
+    return db.execute(
+        select(Class)
+        .where(Class.id == class_id)
+        .with_for_update(key_share=True)
+        .execution_options(populate_existing=True)
+    ).scalar_one()
+
+
+def _reject_assistant(student_id: UUID, class_id: UUID, db: Session) -> None:
+    assistant = db.scalar(
+        select(ClassStaff.user_id).where(
+            ClassStaff.user_id == student_id,
+            ClassStaff.class_id == class_id,
+            ClassStaff.role == ClassStaffRole.ASSISTANT,
+        )
+    )
+    if assistant is not None:
+        raise AppError(ErrorCode.TA_SAME_CLASS_CONFLICT)
+
+
+def _active_enrolment_for_language(
+    student_id: UUID, language: str, db: Session
+) -> ClassEnrollment | None:
+    return db.scalar(
+        select(ClassEnrollment).where(
+            ClassEnrollment.student_id == student_id,
+            ClassEnrollment.language == language,
+            ClassEnrollment.is_active.is_(True),
+        )
+    )
+
+
+@dataclass(frozen=True)
+class JoinedClass:
+    class_id: UUID
+    language: Language
+
+
 def validate_code_and_enrol(
     student_id: UUID,
     code: str,
     db: Session,
-) -> UUID:
+) -> JoinedClass:
     """Validate an access code and enrol a student in its class.
 
-    Return the class ID on success.
+    Return the class ID and language, selecting the class for a new or reactivated enrolment.
 
-    A retry succeeds without consuming another code use when the student
-    is already actively enrolled in the class using the same access code.
-
-    Expired or exhausted codes are accepted for this retry only.
-    Deactivated codes remain invalid.
+    An active enrolment can be retried with any code for its class, including
+    expired, exhausted, or deactivated codes, without changing the enrolment,
+    current class selection, or code usage.
 
     Raises:
         INVALID_ACCESS_CODE: Code is unknown, inactive, expired, or used up
@@ -555,13 +597,13 @@ def validate_code_and_enrol(
         CLASS_ARCHIVED: Class is archived.
         TA_SAME_CLASS_CONFLICT: Student assists the target class.
         ALREADY_IN_CLASS_FOR_LANGUAGE: Student already has an active class
-            in the same language and is not retrying with the original code.
+            in the same language in a different classroom.
         REMOVED_FROM_CLASS: Student was removed from this class.
 
     Input is normalized by removing spaces and hyphens and converting
     to uppercase.
 
-    The function locks the student row to serialize concurrent joins.
+    Locks are acquired in student, access code, then class order.
     It does not commit. The caller owns the transaction.
     """
     normalized_code = "".join(code.upper().split()).replace("-", "")
@@ -582,70 +624,40 @@ def validate_code_and_enrol(
         select(AccessCode).where(AccessCode.code == normalized_code).with_for_update()
     )
 
-    if access_code is None or not access_code.is_active:
+    if access_code is None:
         raise AppError(ErrorCode.INVALID_ACCESS_CODE)
-
-    # Check expiry and usage limits before exposing class or enrolment state.
-    # Only an active enrolment using this exact code qualifies for a retry.
-    code_unavailable = access_code.expires_at <= now or (
-        access_code.max_uses is not None and access_code.uses_count >= access_code.max_uses
-    )
-
-    if code_unavailable:
-        retry_enrolment = db.scalar(
-            select(ClassEnrollment.id).where(
-                ClassEnrollment.student_id == student_id,
-                ClassEnrollment.class_id == access_code.class_id,
-                ClassEnrollment.access_code_id == access_code.id,
-                ClassEnrollment.is_active.is_(True),
-            )
-        )
-        if retry_enrolment is None:
-            raise AppError(ErrorCode.INVALID_ACCESS_CODE)
-
-    school_class = db.get(Class, access_code.class_id)
-
-    if school_class is None:
-        raise AppError(ErrorCode.INVALID_ACCESS_CODE)
-
-    if school_class.archived_at is not None:
-        raise AppError(ErrorCode.CLASS_ARCHIVED)
-
-    assistant = db.scalar(
-        select(ClassStaff.user_id).where(
-            ClassStaff.user_id == student_id,
-            ClassStaff.class_id == school_class.id,
-            ClassStaff.role == ClassStaffRole.ASSISTANT,
-        )
-    )
-    if assistant is not None:
-        raise AppError(ErrorCode.TA_SAME_CLASS_CONFLICT)
 
     existing = db.scalar(
         select(ClassEnrollment).where(
             ClassEnrollment.student_id == student_id,
-            ClassEnrollment.class_id == school_class.id,
+            ClassEnrollment.class_id == access_code.class_id,
         )
     )
+
+    is_retry = existing is not None and existing.is_active
+    # Unavailable codes may only be used to retry an active enrolment in this class.
+    if not is_retry and (
+        not access_code.is_active
+        or access_code.expires_at <= now
+        or (access_code.max_uses is not None and access_code.uses_count >= access_code.max_uses)
+    ):
+        raise AppError(ErrorCode.INVALID_ACCESS_CODE)
+
+    school_class = _lock_class(access_code.class_id, db)
+    if school_class.archived_at is not None:
+        raise AppError(ErrorCode.CLASS_ARCHIVED)
+
+    _reject_assistant(student_id, school_class.id, db)
+
+    joined = JoinedClass(school_class.id, Language(school_class.target_language))
+    if is_retry:
+        return joined
 
     if existing is not None and existing.end_reason == EnrollmentEndReason.REMOVED:
         raise AppError(ErrorCode.REMOVED_FROM_CLASS)
 
-    active_enrolment = db.scalar(
-        select(ClassEnrollment).where(
-            ClassEnrollment.student_id == student_id,
-            ClassEnrollment.language == school_class.target_language,
-            ClassEnrollment.is_active.is_(True),
-        )
-    )
-
+    active_enrolment = _active_enrolment_for_language(student_id, school_class.target_language, db)
     if active_enrolment is not None:
-        if (
-            active_enrolment.class_id == school_class.id
-            and active_enrolment.access_code_id == access_code.id
-        ):
-            return school_class.id
-
         raise AppError(ErrorCode.ALREADY_IN_CLASS_FOR_LANGUAGE)
 
     if existing is not None:
@@ -667,6 +679,8 @@ def validate_code_and_enrol(
             )
         )
 
+    user.current_class_id = school_class.id
+
     # Increment atomically without committing the caller's transaction.
     db.execute(
         update(AccessCode)
@@ -675,7 +689,22 @@ def validate_code_and_enrol(
     )
 
     db.flush()
-    return school_class.id
+    return joined
+
+
+def _next_current_class(student_id: UUID, class_id: UUID, db: Session) -> UUID | None:
+    return db.scalar(
+        select(ClassEnrollment.class_id)
+        .join(Class, Class.id == ClassEnrollment.class_id)
+        .where(
+            ClassEnrollment.student_id == student_id,
+            ClassEnrollment.class_id != class_id,
+            ClassEnrollment.is_active.is_(True),
+            Class.archived_at.is_(None),
+        )
+        .order_by(ClassEnrollment.joined_at.desc(), ClassEnrollment.class_id)
+        .limit(1)
+    )
 
 
 def leave_class(student_id: UUID, class_id: UUID, db: Session) -> None:
@@ -707,22 +736,114 @@ def leave_class(student_id: UUID, class_id: UUID, db: Session) -> None:
     if enrollment is None:
         raise AppError(ErrorCode.NOT_FOUND)
 
+    _end_enrolment(student, enrollment, EnrollmentEndReason.LEFT, db)
+
+
+def _end_enrolment(
+    student: User, enrollment: ClassEnrollment, reason: EnrollmentEndReason, db: Session
+) -> None:
+    class_id = enrollment.class_id
     enrollment.is_active = False
-    enrollment.end_reason = EnrollmentEndReason.LEFT
+    enrollment.end_reason = reason
     enrollment.left_at = datetime.now(UTC)
 
     if student.current_class_id == class_id:
-        student.current_class_id = db.scalar(
-            select(ClassEnrollment.class_id)
-            .join(Class, Class.id == ClassEnrollment.class_id)
-            .where(
-                ClassEnrollment.student_id == student_id,
-                ClassEnrollment.class_id != class_id,
-                ClassEnrollment.is_active.is_(True),
-                Class.archived_at.is_(None),
-            )
-            .order_by(ClassEnrollment.joined_at.desc(), ClassEnrollment.class_id)
-            .limit(1)
-        )
+        student.current_class_id = _next_current_class(student.id, class_id, db)
 
+    db.flush()
+
+
+def _lock_class_enrolment(
+    student_id: UUID, class_id: UUID, db: Session
+) -> tuple[User, ClassEnrollment]:
+    student = lock_user(student_id, db)
+    if student is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    school_class = _lock_class(class_id, db)
+    if school_class.archived_at is not None:
+        raise AppError(ErrorCode.CLASS_ARCHIVED)
+
+    enrolment = db.scalar(
+        select(ClassEnrollment)
+        .where(ClassEnrollment.student_id == student_id, ClassEnrollment.class_id == class_id)
+        .execution_options(populate_existing=True)
+    )
+    if enrolment is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+    return student, enrolment
+
+
+def remove_student(student_id: UUID, class_id: UUID, db: Session) -> bool:
+    """End an active enrolment and return whether it changed. Does not commit."""
+    student, enrolment = _lock_class_enrolment(student_id, class_id, db)
+    if enrolment.end_reason == EnrollmentEndReason.REMOVED:
+        return False
+    if not enrolment.is_active:
+        raise AppError(ErrorCode.NOT_FOUND)
+    _end_enrolment(student, enrolment, EnrollmentEndReason.REMOVED, db)
+    return True
+
+
+def restore_student(student_id: UUID, class_id: UUID, db: Session) -> None:
+    """Reactivate a removed enrolment in place. Does not consume a code or commit."""
+    _, enrolment = _lock_class_enrolment(student_id, class_id, db)
+    if enrolment.is_active:
+        return
+    if enrolment.end_reason != EnrollmentEndReason.REMOVED:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    _reject_assistant(student_id, class_id, db)
+    if _active_enrolment_for_language(student_id, enrolment.language, db) is not None:
+        raise AppError(ErrorCode.ALREADY_IN_CLASS_FOR_LANGUAGE)
+
+    enrolment.is_active = True
+    enrolment.end_reason = None
+    enrolment.left_at = None
+    db.flush()
+
+
+def archive_class(class_id: UUID, db: Session) -> None:
+    """Archive a class and end its enrolments without committing.
+
+    Lock enrolled students before the class, matching join and serializing
+    against game start, reset, leave and class selection. A join that committed
+    while these locks were being acquired requires a fresh pass.
+    """
+    enrolled_students = select(ClassEnrollment.student_id).where(
+        ClassEnrollment.class_id == class_id,
+        ClassEnrollment.is_active.is_(True),
+    )
+    while True:
+        locks = db.begin_nested()
+        students = db.scalars(
+            select(User)
+            .where(User.id.in_(enrolled_students) | (User.current_class_id == class_id))
+            .order_by(User.id)
+            .with_for_update(key_share=True)
+            .execution_options(populate_existing=True)
+        ).all()
+        school_class = _lock_class(class_id, db)
+        if school_class.archived_at is not None:
+            locks.commit()
+            return
+
+        if set(db.scalars(enrolled_students)).issubset(student.id for student in students):
+            locks.commit()
+            break
+        locks.rollback()
+
+    now = datetime.now(UTC)
+    school_class.archived_at = now
+    db.execute(
+        update(ClassEnrollment)
+        .where(
+            ClassEnrollment.class_id == class_id,
+            ClassEnrollment.is_active.is_(True),
+        )
+        .values(is_active=False, end_reason=EnrollmentEndReason.ARCHIVED, left_at=now)
+    )
+    for student in students:
+        if student.current_class_id == class_id:
+            student.current_class_id = _next_current_class(student.id, class_id, db)
     db.flush()
