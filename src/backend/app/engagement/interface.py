@@ -531,6 +531,16 @@ def require_active_enrolment(student_id: UUID, class_id: UUID, db: Session) -> L
     return language
 
 
+def _lock_class(class_id: UUID, db: Session) -> Class:
+    """Lock and refresh a classroom whose existence has been established."""
+    return db.execute(
+        select(Class)
+        .where(Class.id == class_id)
+        .with_for_update(key_share=True)
+        .execution_options(populate_existing=True)
+    ).scalar_one()
+
+
 def validate_code_and_enrol(
     student_id: UUID,
     code: str,
@@ -602,16 +612,7 @@ def validate_code_and_enrol(
         if retry_enrolment is None:
             raise AppError(ErrorCode.INVALID_ACCESS_CODE)
 
-    school_class = db.scalar(
-        select(Class)
-        .where(Class.id == access_code.class_id)
-        .with_for_update(key_share=True)
-        .execution_options(populate_existing=True)
-    )
-
-    if school_class is None:
-        raise AppError(ErrorCode.INVALID_ACCESS_CODE)
-
+    school_class = _lock_class(access_code.class_id, db)
     if school_class.archived_at is not None:
         raise AppError(ErrorCode.CLASS_ARCHIVED)
 
@@ -758,15 +759,7 @@ def archive_class(class_id: UUID, db: Session) -> None:
             .with_for_update(key_share=True)
             .execution_options(populate_existing=True)
         ).all()
-        school_class = db.scalar(
-            select(Class)
-            .where(Class.id == class_id)
-            .with_for_update(key_share=True)
-            .execution_options(populate_existing=True)
-        )
-        if school_class is None:
-            locks.rollback()
-            raise AppError(ErrorCode.NOT_FOUND)
+        school_class = _lock_class(class_id, db)
         if school_class.archived_at is not None:
             locks.commit()
             return
