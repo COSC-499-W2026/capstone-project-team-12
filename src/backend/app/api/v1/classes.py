@@ -676,7 +676,8 @@ def deactivate_class_access_code(
         "teaching assistants cannot join classes they assist. "
         "Successful enrolment also makes it the student's current class. "
         "Repeating a successful request with the original access code "
-        "returns success without consuming another use, even if the code "
+        "returns success without changing the current class or consuming another use, "
+        "even if the code "
         "has expired or reached its usage limit. Deactivated codes are rejected."
     ),
     responses=error_responses(
@@ -703,7 +704,6 @@ def join_class(
     if language is None:
         raise AppError(ErrorCode.INTERNAL_ERROR)
 
-    user.current_class_id = class_id
     db.commit()
 
     return JoinClassResponse(
