@@ -1,12 +1,19 @@
 """An admin's export of what is stored about one account, as a single JSON document.
 
 The export holds the profile, the class enrolments, the classes the user assists as a TA and
-the classes they own. It leaves out what only the system needs: the password hash, refresh
-tokens and emailed links.
+the classes they own, every game with its locations, the points (the total per language and
+each award) and the photos not yet purged. It leaves out what only the system needs: the
+password hash, refresh tokens, emailed links, and the content snapshot a game keeps of each
+location (its answers and entrances), which is campus content rather than the user's data.
+
+No photo is kept yet: verification reads an upload and drops it, and the photo attempts store
+(D6) that will keep photos until the purge job removes them is still to come. Until then
+`photos` is always empty.
 
 Each export is recorded in the admin audit log as export_user. Nothing here commits.
 """
 
+from collections import defaultdict
 from datetime import datetime
 from uuid import UUID
 
@@ -17,8 +24,22 @@ from sqlalchemy.orm import Session
 from app.accounts.staff import USER_NOT_FOUND_MESSAGE
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
-from app.models.engagement import Class, ClassEnrollment
-from app.models.enums import AuditAction, ClassStaffRole, EnrollmentEndReason, Language, UserRole
+from app.models.engagement import Class, ClassEnrollment, PointsLedger, UserLanguageStats
+from app.models.enums import (
+    ArrivalOverride,
+    AuditAction,
+    ClassStaffRole,
+    Difficulty,
+    EnrollmentEndReason,
+    Language,
+    LocationStatus,
+    PointsSourceType,
+    SessionEndReason,
+    SessionState,
+    SkipReason,
+    UserRole,
+)
+from app.models.game import GameSession, SessionLocation
 from app.services import audit
 
 
@@ -61,6 +82,83 @@ class ExportedStaffClass(_FromRow):
     added_at: datetime
 
 
+class ExportedSessionLocation(_FromRow):
+    location_id: UUID
+    position: int
+    status: LocationStatus
+    skip_reason: SkipReason | None
+    started_at: datetime | None
+    arrived_at: datetime | None
+    arrival_override: ArrivalOverride | None
+    attempts_used: int
+    points_awarded: int
+    flags: list[str]
+    completed_at: datetime | None
+    last_lat: float | None = Field(
+        description="The last GPS position sent at this location; no track is kept."
+    )
+    last_lng: float | None
+    last_accuracy_m: float | None
+    last_ping_at: datetime | None
+
+
+class ExportedSession(_FromRow):
+    # `locations` has a default only so a game row validates before its locations are added;
+    # it is always sent, so the response schema lists it as required
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
+    id: UUID
+    class_id: UUID | None = Field(description="Null for a Practice game.")
+    target_language: Language
+    difficulty: Difficulty
+    state: SessionState
+    end_reason: SessionEndReason | None
+    started_at: datetime
+    paused_at: datetime | None
+    completed_at: datetime | None
+    last_activity_at: datetime
+    resume_count: int
+    shuffles_used: int
+    total_score: int
+    locations: list[ExportedSessionLocation] = Field(
+        default_factory=list,
+        description="In game order; where a shuffle replaced a location, the replaced one "
+        "comes first.",
+    )
+
+
+class ExportedPointsTotal(_FromRow):
+    language: Language
+    total_points: int
+
+
+class ExportedPointsAward(_FromRow):
+    source_type: PointsSourceType
+    source_ref: str = Field(
+        description="What earned them: the game location's id, the daily challenge's id or the "
+        "streak milestone in days."
+    )
+    class_id: UUID | None = Field(description="Null for Practice and streak milestones.")
+    language: Language
+    points: int
+    created_at: datetime
+
+
+class ExportedPoints(BaseModel):
+    totals: list[ExportedPointsTotal] = Field(description="The total in each language.")
+    awards: list[ExportedPointsAward] = Field(description="Every award, oldest first.")
+
+
+class ExportedPhoto(BaseModel):
+    """A sign photo that hasn't been purged yet. Provisional: photos are not stored yet."""
+
+    session_id: UUID
+    position: int = Field(description="The location in the game the photo was taken at.")
+    attempt: int
+    uploaded_at: datetime
+    url: str = Field(description="A signed link to the photo, valid for a few minutes.")
+
+
 class UserExport(BaseModel):
     """What is stored about one account. Lists are oldest first unless noted."""
 
@@ -71,6 +169,11 @@ class UserExport(BaseModel):
     )
     ta_roles: list[ExportedStaffClass] = Field(description="The classes the user assists as a TA.")
     owned_classes: list[ExportedStaffClass] = Field(description="The classes the user owns.")
+    sessions: list[ExportedSession] = Field(description="Every game, finished ones too.")
+    points: ExportedPoints
+    photos: list[ExportedPhoto] = Field(
+        description="The photos not yet purged. Always empty for now: photos are not stored yet."
+    )
 
 
 def export_user(admin_id: UUID, user_id: UUID, db: Session) -> UserExport:
@@ -92,6 +195,9 @@ def export_user(admin_id: UUID, user_id: UUID, db: Session) -> UserExport:
         class_enrolments=_enrolments(user.id, db),
         ta_roles=_staff_classes(user.id, ClassStaffRole.ASSISTANT, db),
         owned_classes=_staff_classes(user.id, ClassStaffRole.OWNER, db),
+        sessions=_sessions(user.id, db),
+        points=_points(user.id, db),
+        photos=[],  # see the module docstring
     )
 
 
@@ -127,3 +233,49 @@ def _staff_classes(user_id: UUID, role: ClassStaffRole, db: Session) -> list[Exp
         .order_by(ClassStaff.added_at, ClassStaff.class_id)
     )
     return [ExportedStaffClass.model_validate(row) for row in rows]
+
+
+def _sessions(user_id: UUID, db: Session) -> list[ExportedSession]:
+    games = list(
+        db.scalars(
+            select(GameSession)
+            .where(GameSession.student_id == user_id)
+            .order_by(GameSession.started_at, GameSession.id)
+        )
+    )
+    # every game's locations in one query, not one per game
+    rows = db.scalars(
+        select(SessionLocation)
+        .join(GameSession, GameSession.id == SessionLocation.session_id)
+        .where(GameSession.student_id == user_id)
+        .order_by(
+            SessionLocation.position,
+            # a shuffle keeps the replaced row at the same position: false sorts first
+            SessionLocation.skip_reason.is_distinct_from(SkipReason.SHUFFLED),
+            SessionLocation.id,
+        )
+    )
+    locations: defaultdict[UUID, list[ExportedSessionLocation]] = defaultdict(list)
+    for row in rows:
+        locations[row.session_id].append(ExportedSessionLocation.model_validate(row))
+    return [
+        ExportedSession.model_validate(game).model_copy(update={"locations": locations[game.id]})
+        for game in games
+    ]
+
+
+def _points(user_id: UUID, db: Session) -> ExportedPoints:
+    totals = db.scalars(
+        select(UserLanguageStats)
+        .where(UserLanguageStats.user_id == user_id)
+        .order_by(UserLanguageStats.language)
+    )
+    awards = db.scalars(
+        select(PointsLedger)
+        .where(PointsLedger.user_id == user_id)
+        .order_by(PointsLedger.created_at, PointsLedger.id)
+    )
+    return ExportedPoints(
+        totals=[ExportedPointsTotal.model_validate(row) for row in totals],
+        awards=[ExportedPointsAward.model_validate(row) for row in awards],
+    )
