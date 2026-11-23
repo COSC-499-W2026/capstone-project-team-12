@@ -5,12 +5,13 @@
 ```
 .
 ├── docs                      # Documentation
-│   ├── architecture          # Dependency graph between backend components
 │   ├── contract              # Team contract
 │   ├── minutes               # Minutes from team meetings
 │   ├── proposal              # Project proposal
+│   ├── a13-daily-challenges.md  # How A13 daily challenges are generated
 │   ├── api-conventions.md    # API naming, error format and pagination
-│   └── ocr-spike.md          # OCR spike findings
+│   ├── ocr-spike.md          # OCR spike findings
+│   └── ocr-spike-labels.csv  # Expected room for each OCR spike photo
 ├── src
 │   ├── backend               # FastAPI service (M1)
 │   └── frontend              # React + TypeScript web app (M2)
@@ -19,7 +20,7 @@
 │   ├── utils                 # pytest for the scripts in utils/
 │   ├── frontend              # Vitest component tests (M2)
 │   └── e2e                   # Playwright end-to-end tests (M2)
-├── utils                     # Scripts: dependency check (dep_graph.py), OCR spike (ocr_spike.py)
+├── utils                     # Scripts: dependency check (dep_graph.py), OpenAPI export (export_openapi.py), GPS replay (gps_replay.py), OCR spike (ocr_spike.py)
 └── README.md
 ```
 
@@ -31,9 +32,9 @@ All diagrams are drawn in draw.io. The source files are in our shared Google Dri
 
 [System architecture diagram](https://drive.google.com/file/d/1frQja1HkuoyBKi2M8U8e4mutHEq50EL-/view?usp=sharing)
 
-Milestone 1 is the backend only. API consumers (Swagger UI, a Postman collection, and GPS replay and photo-set simulation scripts) call the FastAPI backend over HTTPS with a JWT. In Milestone 2 the React web app (student app, teacher portal and admin panel) is added behind nginx.
+Milestone 1 is the backend only. API consumers (Swagger UI, the GPS replay script, and a Postman collection and photo-set simulation script (planned)) call the FastAPI backend over HTTPS with a JWT. In Milestone 2 the React web app (student app, teacher portal and admin panel) is added behind nginx.
 
-Inside the backend container, the routers under `/api/v1` handle requests and pass them to five components. The components share a core (`config`, `db`, `errors`, `models` and shared `services` such as storage, email, audio and rate limiting), and they only call each other through each component's `interface.py`, which `utils/dep_graph.py --check` enforces in CI. Data lives in PostgreSQL 16 (stores D1 to D7) and a media volume (D8) for clue audio, feedback audio and photos. A scheduler container runs the CLI jobs (send emails, expire idle sessions, purge old photos) and emails go out through an SMTP provider.
+Inside the backend container, the routers under `/api/v1` handle requests and pass them to five components. The components share a core (`config`, `db`, `errors`, `models` and shared `services` such as storage, email, audio and rate limiting), and they only call each other through each component's `interface.py`, which `utils/dep_graph.py --check` enforces in CI. Data lives in PostgreSQL 16 (stores D1 to D7) and a media volume (D8) for clue audio, feedback audio and photos. A scheduler container runs the CLI jobs (send emails, expire idle sessions, and purge old photos (planned)) and emails go out through an SMTP provider.
 
 Each major component has its own Level 2 DFD. In the architecture diagram, clicking a component box opens it, and clicking the backend container opens the Level 1 overview.
 
@@ -99,7 +100,7 @@ pytest                               # tests (in tests/backend)
 ruff check . ../../tests ../../utils   # lint
 ruff format . ../../tests ../../utils  # format
 mypy                                 # type check (strict)
-python ../../utils/dep_graph.py      # dependency rules between components
+python ../../utils/dep_graph.py --check  # dependency rules between components
 alembic revision --autogenerate -m "describe change"   # new migration
 ```
 
@@ -126,8 +127,8 @@ Never commit `.venv/`.
 Feature code goes in one package per component from the architecture diagram: `accounts` (1.0),
 `game` (2.0), `verification` (3.0), `engagement` (4.0) and `content` (5.0). Shared code sits next
 to them: `config`, `db`, `errors` (`AppError` and the error codes), `models` (all ORM models, since
-the schema is shared) and `services` (services used by several components, such as storage and
-email). So does the entry layer (`main`, `api`, and `cli` for the scheduled jobs). A component may
+the schema is shared) and `services` (services used by several components, such as storage, email
+and rate limiting). So does the entry layer (`main`, `api`, and `cli` for the scheduled jobs). A component may
 use another component only through its `interface.py`; when two components need to notify each
 other, the router or CLI command calls both.
 
@@ -136,7 +137,7 @@ python utils/dep_graph.py --graph --check   # draw the graph and fail if a rule 
 python utils/dep_graph.py --graph           # only draw docs/architecture/dependency-graph.md
 ```
 
-The graph is generated from the imports and published on Netlify after each merge to main, at [https://cosc499-team12.netlify.app/graph.html](https://cosc499-team12.netlify.app/graph.html). `docs/architecture/dependency-graph.md` is git-ignored, so there is no file to commit.
+The graph is generated from the imports and published on Netlify when a merge to main changes the site (at most 19 deploys a billing cycle, the free plan's limit), at [https://cosc499-team12.netlify.app/graph.html](https://cosc499-team12.netlify.app/graph.html). `docs/architecture/dependency-graph.md` is git-ignored, so there is no file to commit.
 
 The API reference is generated from the FastAPI routes in the same way and published at [https://cosc499-team12.netlify.app/api.html](https://cosc499-team12.netlify.app/api.html).
 
@@ -167,7 +168,7 @@ Our team contract can be found [here](docs/contract/team-contract.docx).
 
 ## Project Proposal
 
-Our project proposal can be found [here](docs/proposal/project-proposal.docx)
+Our project proposal can be found [here](docs/proposal/project-proposal.docx).
 
 ## Weekly Logs
 
