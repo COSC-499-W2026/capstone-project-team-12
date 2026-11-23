@@ -5,12 +5,16 @@ from http import HTTPStatus
 from typing import Annotated, Self
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import get_current_user
+from app.accounts.email_links import cancel_waiting_reset_mail
+from app.accounts.interface import get_current_user, revoke_all_refresh_tokens
+from app.accounts.password import hash_password, validate_password_security, verified_password_hash
 from app.accounts.profile import current_class_id, select_class, set_practice_language
+from app.accounts.tokens import create_refresh_token, set_refresh_cookie
+from app.api.v1.email_links import StatusResponse
 from app.db import get_db
 from app.engagement.interface import (
     app_calendar_date,
@@ -27,11 +31,14 @@ from app.models.accounts import User
 from app.models.enums import (
     DailyChallengeType,
     Difficulty,
+    EmailKind,
     Language,
     SessionEndReason,
     SessionState,
     UserRole,
 )
+from app.services.email import EmailService
+from app.services.locks import lock_user
 
 me_router = APIRouter(prefix="/me", tags=["me"])
 
@@ -76,6 +83,13 @@ class UpdateProfileRequest(BaseModel):
         if "current_class_id" not in self.model_fields_set and self.preferred_language is None:
             raise ValueError("Send current_class_id, preferred_language or both")
         return self
+
+
+class ChangePasswordRequest(BaseModel):
+    """The password the user has now and the one they want."""
+
+    current_password: str
+    new_password: str = Field(max_length=200)  # the rules are checked by the service (422)
 
 
 def _profile(user: User, db: Session) -> ProfileResponse:
@@ -129,6 +143,51 @@ def update_profile(
     response = _profile(user, db)
     db.commit()
     return response
+
+
+@me_router.post(
+    "/password",
+    operation_id="changePassword",
+    summary="Change the signed-in user's password",
+    description=(
+        "Needs the current password: a wrong one is 401 INVALID_CREDENTIALS. A new password that "
+        "breaks the password rules or is the same as the current one is 422 VALIDATION_ERROR. "
+        "Nothing is saved if the request is refused. On success, unused reset and set-password "
+        "links stop working and every refresh token is revoked, so other devices are signed out "
+        "when their access token expires. This device gets a new refresh_token cookie."
+    ),
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
+)
+def change_password(
+    request: ChangePasswordRequest,
+    response: Response,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> StatusResponse:
+    """Replace the password, then sign out every session but this one."""
+    verified = verified_password_hash(user.email, request.current_password, db)
+    if verified is None:
+        raise AppError(ErrorCode.INVALID_CREDENTIALS)
+    validate_password_security(request.new_password)
+    if request.new_password == request.current_password:
+        raise AppError(
+            ErrorCode.VALIDATION_ERROR,
+            "The new password must be different from your current password.",
+        )
+    password_hash = hash_password(request.new_password)  # slow (bcrypt), so before the lock
+    lock_user(user.id, db)  # reloads user; email_tokens are only touched with the user locked
+    if user.password_hash != verified:  # changed by another request while bcrypt ran unlocked
+        raise AppError(ErrorCode.INVALID_CREDENTIALS)
+    user.password_hash = password_hash
+    # a link sent before this change could otherwise overwrite the new password
+    cancel_waiting_reset_mail(user.id, db)
+    EmailService.invalidate_user_tokens(user.id, EmailKind.RESET_PASSWORD, db)
+    EmailService.invalidate_user_tokens(user.id, EmailKind.SET_PASSWORD, db)
+    revoke_all_refresh_tokens(user.id, db)
+    refresh_token, _ = create_refresh_token(user.id, db)
+    db.commit()  # one transaction, so nothing is saved unless all of it is
+    set_refresh_cookie(response, refresh_token)
+    return StatusResponse()
 
 
 @me_router.get(
