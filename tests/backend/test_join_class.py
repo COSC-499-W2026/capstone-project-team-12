@@ -165,7 +165,7 @@ def test_join_retry_keeps_the_current_selection(
     assert first_code.uses_count == 1
 
 
-@pytest.mark.parametrize("state", ["unknown", "expired", "exhausted"])
+@pytest.mark.parametrize("state", ["unknown", "expired", "exhausted", "deactivated"])
 def test_invalid_code_states(
     client: TestClient,
     db: Session,
@@ -183,6 +183,8 @@ def test_invalid_code_states(
 
         if state == "expired":
             access_code.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        elif state == "deactivated":
+            access_code.is_active = False
         else:
             access_code.max_uses = 1
             access_code.uses_count = 1
@@ -243,15 +245,7 @@ def test_same_language_conflict(
     )
 
 
-@pytest.mark.parametrize(
-    ("state", "expected_status"),
-    [
-        ("valid", 200),
-        ("expired", 200),
-        ("exhausted", 200),
-        ("deactivated", 400),
-    ],
-)
+@pytest.mark.parametrize("state", ["valid", "expired", "exhausted", "deactivated"])
 def test_retry_does_not_consume_code(
     client: TestClient,
     db: Session,
@@ -259,7 +253,6 @@ def test_retry_does_not_consume_code(
     make_class: Callable[..., Class],
     make_access_code: Callable[..., AccessCode],
     state: str,
-    expected_status: int,
 ) -> None:
     student = make_user()
     school_class = make_class()
@@ -280,25 +273,25 @@ def test_retry_does_not_consume_code(
     db.flush()
 
     retry = join_as(client, student, access_code.code)
-    assert retry.status_code == expected_status, retry.text
-
-    if expected_status == 200:
-        assert retry.json()["class_id"] == str(school_class.id)
-    else:
-        assert_error(retry, 400, ErrorCode.INVALID_ACCESS_CODE)
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["class_id"] == str(school_class.id)
 
     db.refresh(access_code)
     assert access_code.uses_count == original_uses
+    enrollment = (
+        db.query(ClassEnrollment).filter_by(student_id=student.id, class_id=school_class.id).one()
+    )
+    assert enrollment.is_active
+    assert enrollment.access_code_id == access_code.id
 
 
-def test_same_class_different_valid_code_conflict(
+def test_same_class_different_code_succeeds(
     client: TestClient,
     db: Session,
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
     make_access_code: Callable[..., AccessCode],
 ) -> None:
-    """A different valid code cannot be used to rejoin the same class."""
     student = make_user()
     school_class = make_class()
     original_code = make_access_code(school_class)
@@ -308,7 +301,8 @@ def test_same_class_different_valid_code_conflict(
     assert first.status_code == 200, first.text
 
     response = join_as(client, student, other_code.code)
-    assert_error(response, 409, ErrorCode.ALREADY_IN_CLASS_FOR_LANGUAGE)
+    assert response.status_code == 200, response.text
+    assert response.json()["class_id"] == str(school_class.id)
 
     db.refresh(original_code)
     db.refresh(other_code)
@@ -318,6 +312,7 @@ def test_same_class_different_valid_code_conflict(
     enrollment = (
         db.query(ClassEnrollment).filter_by(student_id=student.id, class_id=school_class.id).one()
     )
+    assert enrollment.is_active
     assert enrollment.access_code_id == original_code.id
 
 

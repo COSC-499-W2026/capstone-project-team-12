@@ -583,11 +583,9 @@ def validate_code_and_enrol(
 
     Return the class ID and language, selecting the class for a new or reactivated enrolment.
 
-    A retry succeeds without consuming another code use when the student
-    is already actively enrolled in the class using the same access code.
-
-    Expired or exhausted codes are accepted for this retry only.
-    Deactivated codes remain invalid.
+    An active enrolment can be retried with any code for its class, including
+    expired, exhausted, or deactivated codes, without changing the enrolment,
+    current class selection, or code usage.
 
     Raises:
         INVALID_ACCESS_CODE: Code is unknown, inactive, expired, or used up
@@ -597,7 +595,7 @@ def validate_code_and_enrol(
         CLASS_ARCHIVED: Class is archived.
         TA_SAME_CLASS_CONFLICT: Student assists the target class.
         ALREADY_IN_CLASS_FOR_LANGUAGE: Student already has an active class
-            in the same language and is not retrying with the original code.
+            in the same language in a different classroom.
         REMOVED_FROM_CLASS: Student was removed from this class.
 
     Input is normalized by removing spaces and hyphens and converting
@@ -624,26 +622,24 @@ def validate_code_and_enrol(
         select(AccessCode).where(AccessCode.code == normalized_code).with_for_update()
     )
 
-    if access_code is None or not access_code.is_active:
+    if access_code is None:
         raise AppError(ErrorCode.INVALID_ACCESS_CODE)
 
-    # Check expiry and usage limits before exposing class or enrolment state.
-    # Only an active enrolment using this exact code qualifies for a retry.
-    code_unavailable = access_code.expires_at <= now or (
-        access_code.max_uses is not None and access_code.uses_count >= access_code.max_uses
+    existing = db.scalar(
+        select(ClassEnrollment).where(
+            ClassEnrollment.student_id == student_id,
+            ClassEnrollment.class_id == access_code.class_id,
+        )
     )
 
-    if code_unavailable:
-        retry_enrolment = db.scalar(
-            select(ClassEnrollment.id).where(
-                ClassEnrollment.student_id == student_id,
-                ClassEnrollment.class_id == access_code.class_id,
-                ClassEnrollment.access_code_id == access_code.id,
-                ClassEnrollment.is_active.is_(True),
-            )
-        )
-        if retry_enrolment is None:
-            raise AppError(ErrorCode.INVALID_ACCESS_CODE)
+    is_retry = existing is not None and existing.is_active
+    # Unavailable codes may only be used to retry an active enrolment in this class.
+    if not is_retry and (
+        not access_code.is_active
+        or access_code.expires_at <= now
+        or (access_code.max_uses is not None and access_code.uses_count >= access_code.max_uses)
+    ):
+        raise AppError(ErrorCode.INVALID_ACCESS_CODE)
 
     school_class = _lock_class(access_code.class_id, db)
     if school_class.archived_at is not None:
@@ -651,26 +647,15 @@ def validate_code_and_enrol(
 
     _reject_assistant(student_id, school_class.id, db)
 
-    existing = db.scalar(
-        select(ClassEnrollment).where(
-            ClassEnrollment.student_id == student_id,
-            ClassEnrollment.class_id == school_class.id,
-        )
-    )
+    joined = JoinedClass(school_class.id, Language(school_class.target_language))
+    if is_retry:
+        return joined
 
     if existing is not None and existing.end_reason == EnrollmentEndReason.REMOVED:
         raise AppError(ErrorCode.REMOVED_FROM_CLASS)
 
     active_enrolment = _active_enrolment_for_language(student_id, school_class.target_language, db)
-
-    joined = JoinedClass(school_class.id, Language(school_class.target_language))
     if active_enrolment is not None:
-        if (
-            active_enrolment.class_id == school_class.id
-            and active_enrolment.access_code_id == access_code.id
-        ):
-            return joined
-
         raise AppError(ErrorCode.ALREADY_IN_CLASS_FOR_LANGUAGE)
 
     if existing is not None:

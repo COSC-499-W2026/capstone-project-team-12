@@ -540,10 +540,12 @@ class JoinClassResponse(BaseModel):
         "by a teacher cannot. Teachers cannot join as students, and "
         "teaching assistants cannot join classes they assist. "
         "Successful enrolment also makes it the student's current class. "
-        "Repeating a successful request with the original access code "
-        "returns success without changing the current class or consuming another use, "
-        "even if the code "
-        "has expired or reached its usage limit. Deactivated codes are rejected."
+        "A student already actively enrolled in the code's class can retry with any code "
+        "for that class, including an expired, exhausted, or deactivated code. The retry "
+        "returns 200 and preserves the enrolment, current class selection, and code usage. "
+        "An unknown code or a retry-ineligible expired, exhausted, or deactivated code "
+        "returns 400 INVALID_ACCESS_CODE. Joining a different class in the same language "
+        "with a valid code returns 409 ALREADY_IN_CLASS_FOR_LANGUAGE."
     ),
     responses=error_responses(
         HTTPStatus.BAD_REQUEST,
