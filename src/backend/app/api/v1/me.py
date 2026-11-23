@@ -5,12 +5,16 @@ from http import HTTPStatus
 from typing import Annotated, Self
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import get_current_user
+from app.accounts.email_links import cancel_waiting_reset_mail
+from app.accounts.interface import get_current_user, revoke_all_refresh_tokens
+from app.accounts.password import hash_password, validate_password_security, verified_password_hash
 from app.accounts.profile import current_class_id, select_class, set_practice_language
+from app.accounts.tokens import create_refresh_token, set_refresh_cookie
+from app.api.v1.email_links import StatusResponse
 from app.db import get_db
 from app.engagement.interface import (
     app_calendar_date,
@@ -19,21 +23,28 @@ from app.engagement.interface import (
     get_active_class_ids,
     get_and_report_streak,
     get_language_engagement_stats,
+    leave_class,
     list_unlocked_achievements,
+    validate_code_and_enrol,
 )
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.history import list_history
+from app.game.interface import end_open_sessions
 from app.models.accounts import User
 from app.models.enums import (
     DailyChallengeType,
     Difficulty,
+    EmailKind,
     Language,
     SessionEndReason,
     SessionState,
     UserRole,
 )
+from app.services.email import EmailService
+from app.services.locks import lock_user
 
 me_router = APIRouter(prefix="/me", tags=["me"])
+me_classes_router = APIRouter(prefix="/me/classes", tags=["classes"])
 
 
 class ProfileResponse(BaseModel):
@@ -76,6 +87,13 @@ class UpdateProfileRequest(BaseModel):
         if "current_class_id" not in self.model_fields_set and self.preferred_language is None:
             raise ValueError("Send current_class_id, preferred_language or both")
         return self
+
+
+class ChangePasswordRequest(BaseModel):
+    """The password the user has now and the one they want."""
+
+    current_password: str
+    new_password: str = Field(max_length=200)  # the rules are checked by the service (422)
 
 
 def _profile(user: User, db: Session) -> ProfileResponse:
@@ -129,6 +147,51 @@ def update_profile(
     response = _profile(user, db)
     db.commit()
     return response
+
+
+@me_router.post(
+    "/password",
+    operation_id="changePassword",
+    summary="Change the signed-in user's password",
+    description=(
+        "Needs the current password: a wrong one is 401 INVALID_CREDENTIALS. A new password that "
+        "breaks the password rules or is the same as the current one is 422 VALIDATION_ERROR. "
+        "Nothing is saved if the request is refused. On success, unused reset and set-password "
+        "links stop working and every refresh token is revoked, so other devices are signed out "
+        "when their access token expires. This device gets a new refresh_token cookie."
+    ),
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
+)
+def change_password(
+    request: ChangePasswordRequest,
+    response: Response,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> StatusResponse:
+    """Replace the password, then sign out every session but this one."""
+    verified = verified_password_hash(user.email, request.current_password, db)
+    if verified is None:
+        raise AppError(ErrorCode.INVALID_CREDENTIALS)
+    validate_password_security(request.new_password)
+    if request.new_password == request.current_password:
+        raise AppError(
+            ErrorCode.VALIDATION_ERROR,
+            "The new password must be different from your current password.",
+        )
+    password_hash = hash_password(request.new_password)  # slow (bcrypt), so before the lock
+    lock_user(user.id, db)  # reloads user; email_tokens are only touched with the user locked
+    if user.password_hash != verified:  # changed by another request while bcrypt ran unlocked
+        raise AppError(ErrorCode.INVALID_CREDENTIALS)
+    user.password_hash = password_hash
+    # a link sent before this change could otherwise overwrite the new password
+    cancel_waiting_reset_mail(user.id, db)
+    EmailService.invalidate_user_tokens(user.id, EmailKind.RESET_PASSWORD, db)
+    EmailService.invalidate_user_tokens(user.id, EmailKind.SET_PASSWORD, db)
+    revoke_all_refresh_tokens(user.id, db)
+    refresh_token, _ = create_refresh_token(user.id, db)
+    db.commit()  # one transaction, so nothing is saved unless all of it is
+    set_refresh_cookie(response, refresh_token)
+    return StatusResponse()
 
 
 @me_router.get(
@@ -445,3 +508,91 @@ def list_my_games(
         total=history.total,
         has_next_page=page * page_size < history.total,
     )
+
+
+class JoinClassRequest(BaseModel):
+    """Access code provided by a student joining a classroom."""
+
+    access_code: str = Field(
+        min_length=1,
+        max_length=32,
+        description="Eight-character classroom access code. Spaces and hyphens are accepted.",
+        examples=["K7PM-3QXD"],
+    )
+
+
+class JoinClassResponse(BaseModel):
+    """Classroom selected after successful enrolment."""
+
+    class_id: UUID
+    language: Language
+
+
+@me_classes_router.post(
+    "/join",
+    response_model=JoinClassResponse,
+    operation_id="joinClass",
+    summary="Join a classroom",
+    description=(
+        "Enrol the authenticated student using a classroom access code. "
+        "A student may have only one active classroom per language. "
+        "Students who voluntarily left may rejoin, but students removed "
+        "by a teacher cannot. Teachers cannot join as students, and "
+        "teaching assistants cannot join classes they assist. "
+        "Successful enrolment also makes it the student's current class. "
+        "A student already actively enrolled in the code's class can retry with any code "
+        "for that class, including an expired, exhausted, or deactivated code. The retry "
+        "returns 200 and preserves the enrolment, current class selection, and code usage. "
+        "An unknown code or a retry-ineligible expired, exhausted, or deactivated code "
+        "returns 400 INVALID_ACCESS_CODE. Joining a different class in the same language "
+        "with a valid code returns 409 ALREADY_IN_CLASS_FOR_LANGUAGE."
+    ),
+    responses=error_responses(
+        HTTPStatus.BAD_REQUEST,
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.CONFLICT,
+    ),
+)
+def join_class(
+    request: JoinClassRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> JoinClassResponse:
+    """Join a classroom and select it in one transaction."""
+    joined = validate_code_and_enrol(user.id, request.access_code, db)
+    db.commit()
+    return JoinClassResponse(class_id=joined.class_id, language=joined.language)
+
+
+@me_classes_router.post(
+    "/{class_id}/leave",
+    status_code=HTTPStatus.NO_CONTENT,
+    operation_id="leaveClass",
+    summary="Leave a classroom",
+    description=(
+        "Leave an actively enrolled classroom. "
+        "The student may rejoin later using a valid access code. "
+        "If this was the student's current class, another active class "
+        "is selected when available; otherwise, the selection is cleared. "
+        "Leaving ends any open (active or paused) class game sessions."
+    ),
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+    ),
+)
+def leave_class_endpoint(
+    class_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Leave a classroom and close its open games in one transaction."""
+    try:
+        leave_class(user.id, class_id, db)
+        end_open_sessions(class_id, db, student_id=user.id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise

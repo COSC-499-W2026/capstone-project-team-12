@@ -22,19 +22,20 @@ from app.accounts.interface import (
 )
 from app.db import get_db
 from app.engagement.interface import (
+    archive_class,
     create_class,
     deactivate_access_code,
     generate_access_code,
-    get_class_language,
     get_class_leaderboard,
     get_class_location_analytics,
     get_class_participation,
     get_class_student_analytics,
-    leave_class,
+    list_class_access_codes,
     list_staff_classes,
+    remove_student,
     require_active_enrolment,
+    restore_student,
     update_class_settings,
-    validate_code_and_enrol,
 )
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.interface import end_open_sessions
@@ -42,7 +43,6 @@ from app.models.accounts import User
 from app.models.engagement import Class
 from app.models.enums import ClassStaffRole, Difficulty, DifficultySuggestion, Language
 
-classes_router = APIRouter(prefix="/me/classes", tags=["classes"])
 leaderboard_router = APIRouter(prefix="/classes", tags=["classes"])
 teacher_classes_router = APIRouter(
     prefix="/teacher/classes",
@@ -134,24 +134,6 @@ def get_class_leaderboard_endpoint(
     )
 
 
-class JoinClassRequest(BaseModel):
-    """Access code provided by a student joining a classroom."""
-
-    access_code: str = Field(
-        min_length=1,
-        max_length=32,
-        description="Eight-character classroom access code. Spaces and hyphens are accepted.",
-        examples=["K7PM-3QXD"],
-    )
-
-
-class JoinClassResponse(BaseModel):
-    """Classroom selected after successful enrolment."""
-
-    class_id: UUID
-    language: Language
-
-
 class CreateClassRequest(BaseModel):
     """Details for a new classroom and its initial access code."""
 
@@ -191,6 +173,7 @@ class CreateClassResponse(BaseModel):
     semester: str
     language: Language
     access_code: str
+    access_code_id: UUID = Field(description="Identifier used to deactivate the initial code.")
 
 
 class UpdateClassRequest(BaseModel):
@@ -245,6 +228,41 @@ class CreateAccessCodeResponse(BaseModel):
     code: str
     expires_at: datetime
     max_uses: int | None
+
+
+class ListedAccessCodeResponse(BaseModel):
+    """An access code and its usage information."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    code: str
+    expires_at: datetime
+    is_active: bool = Field(description="Whether the code is enabled, independent of expiry.")
+    max_uses: int | None = Field(description="Maximum uses, or null for unlimited.")
+    uses_count: int
+    created_at: datetime
+
+
+@teacher_classes_router.get(
+    "/{class_id}/access-codes",
+    response_model=list[ListedAccessCodeResponse],
+    operation_id="listClassAccessCodes",
+    summary="List classroom access codes",
+    description=(
+        "Class owners and teaching assistants can list all classroom access codes newest first, "
+        "including expired and deactivated codes. Archived classrooms remain readable."
+    ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT))],
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND),
+)
+def list_class_access_codes_endpoint(
+    class_id: UUID, db: Annotated[Session, Depends(get_db)]
+) -> list[ListedAccessCodeResponse]:
+    return [
+        ListedAccessCodeResponse.model_validate(code)
+        for code in list_class_access_codes(class_id, db)
+    ]
 
 
 @teacher_classes_router.post(
@@ -533,7 +551,8 @@ def list_teacher_classes(
         "Create a classroom with a fixed target language and generate "
         "its initial eight-character access code. Only active staff "
         "accounts may create classrooms. The classroom, owner assignment, "
-        "and initial access code are saved in one transaction. "
+        "and initial access code are saved in one transaction. The response includes the "
+        "initial code ID for deactivation. "
         "If no expiration is provided, the access code expires at the "
         "end of the classroom's semester."
     ),
@@ -572,6 +591,7 @@ def create_class_endpoint(
             semester=school_class.semester,
             language=Language(school_class.target_language),
             access_code=access_code.code,
+            access_code_id=access_code.id,
         )
 
         db.commit()
@@ -663,82 +683,89 @@ def deactivate_class_access_code(
         raise
 
 
-@classes_router.post(
-    "/join",
-    response_model=JoinClassResponse,
-    operation_id="joinClass",
-    summary="Join a classroom",
-    description=(
-        "Enrol the authenticated student using a classroom access code. "
-        "A student may have only one active classroom per language. "
-        "Students who voluntarily left may rejoin, but students removed "
-        "by a teacher cannot. Teachers cannot join as students, and "
-        "teaching assistants cannot join classes they assist. "
-        "Successful enrolment also makes it the student's current class. "
-        "Repeating a successful request with the original access code "
-        "returns success without consuming another use, even if the code "
-        "has expired or reached its usage limit. Deactivated codes are rejected."
-    ),
-    responses=error_responses(
-        HTTPStatus.BAD_REQUEST,
-        HTTPStatus.UNAUTHORIZED,
-        HTTPStatus.FORBIDDEN,
-        HTTPStatus.CONFLICT,
-    ),
-)
-def join_class(
-    request: JoinClassRequest,
-    user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> JoinClassResponse:
-    """Join a classroom and select it in one transaction."""
-    class_id = validate_code_and_enrol(
-        user.id,
-        request.access_code,
-        db,
-    )
-
-    language = get_class_language(class_id, db)
-
-    if language is None:
-        raise AppError(ErrorCode.INTERNAL_ERROR)
-
-    user.current_class_id = class_id
-    db.commit()
-
-    return JoinClassResponse(
-        class_id=class_id,
-        language=language,
-    )
-
-
-@classes_router.post(
-    "/{class_id}/leave",
+@teacher_classes_router.post(
+    "/{class_id}/archive",
     status_code=HTTPStatus.NO_CONTENT,
-    operation_id="leaveClass",
-    summary="Leave a classroom",
+    operation_id="archiveClass",
+    summary="Archive a classroom",
     description=(
-        "Leave an actively enrolled classroom. "
-        "The student may rejoin later using a valid access code. "
-        "If this was the student's current class, another active class "
-        "is selected when available; otherwise, the selection is cleared. "
-        "Leaving ends any open (active or paused) class game sessions."
+        "Only the classroom owner can archive it. Archiving ends active enrolments "
+        "and open class games, preserves earned points, and prevents future joins "
+        "and games. Repeating the request succeeds."
     ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER))],
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
         HTTPStatus.FORBIDDEN,
         HTTPStatus.NOT_FOUND,
     ),
 )
-def leave_class_endpoint(
+def archive_class_endpoint(
     class_id: UUID,
-    user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
-    """Leave a classroom and close its open games in one transaction."""
+    """Archive the classroom and end its games in one transaction."""
     try:
-        leave_class(user.id, class_id, db)
-        end_open_sessions(class_id, db, student_id=user.id)
+        archive_class(class_id, db)
+        end_open_sessions(class_id, db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+@teacher_classes_router.delete(
+    "/{class_id}/students/{student_id}",
+    status_code=HTTPStatus.NO_CONTENT,
+    operation_id="removeClassStudent",
+    summary="Remove a student from a classroom",
+    description=(
+        "Only the owner can remove a student. Removal ends the student's open games in this "
+        "class, preserves earned points, and prevents the student from rejoining with a code "
+        "until restored. Archived classes cannot be modified."
+    ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER))],
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def remove_class_student_endpoint(
+    class_id: UUID,
+    student_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    try:
+        if remove_student(student_id, class_id, db):
+            end_open_sessions(class_id, db, student_id=student_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+@teacher_classes_router.post(
+    "/{class_id}/students/{student_id}/restore",
+    status_code=HTTPStatus.NO_CONTENT,
+    operation_id="restoreClassStudent",
+    summary="Restore a removed student",
+    description=(
+        "Only the owner can restore a removed student. Restores the original enrolment without "
+        "consuming an access code or changing the student's class selection. Returns 409 if "
+        "the class is archived, the student assists it, or the student already has an active "
+        "class in the same language."
+    ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER))],
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def restore_class_student_endpoint(
+    class_id: UUID,
+    student_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    try:
+        restore_student(student_id, class_id, db)
         db.commit()
     except Exception:
         db.rollback()

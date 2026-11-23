@@ -173,3 +173,16 @@ Paginated collection responses must use the following structure:
 |page_size|Effective page size|
 |total|Total number of resources matching request filter|
 |has_next_page|Indicates whether another page is available|
+
+## Teacher API: classroom access codes
+
+| Method and path | Who | Purpose |
+| --- | --- | --- |
+| `POST /teacher/classes` | Staff | Create a class and return the initial access code and its `access_code_id`. |
+| `POST /teacher/classes/{id}/access-codes` | Owner, TA | Create an additional code for an active class. |
+| `GET /teacher/classes/{id}/access-codes` | Owner, TA | List all codes newest first, including expired and deactivated codes. Archived classes stay readable. Each entry includes `id`, `code`, `expires_at`, `is_active`, `max_uses`, `uses_count`, and `created_at`. |
+| `PATCH /teacher/access-codes/{id}` | Owner, TA | Deactivate an access code for an active class. |
+
+## Join-class retries
+
+For `POST /api/v1/me/classes/join`, a student with an active enrolment in the code's class can retry with any code for that class and receive `200`, including with an expired, exhausted, or deactivated code. The retry preserves the enrolment, code usage, and current class selection. An unknown code always returns `400 INVALID_ACCESS_CODE`. Expired, exhausted, or deactivated codes also return that error when the student has no active enrolment in the code's class. A valid code for a different class in the same language returns `409 ALREADY_IN_CLASS_FOR_LANGUAGE` when the student already has an active class in that language.
