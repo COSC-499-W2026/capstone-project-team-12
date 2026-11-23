@@ -334,7 +334,6 @@ class AnalyticsTotalsResponse(BaseModel):
 
 class LocationAnalyticsResponse(AnalyticsTotalsResponse):
     location_id: UUID
-    label: str
 
 
 class ClassAnalyticsResponse(BaseModel):
@@ -353,7 +352,8 @@ class ClassAnalyticsResponse(BaseModel):
         "Return class totals and per-location success rates, photo attempts, completion "
         "times, flags, and GPS overrides. Only completed and failed "
         "classroom location results are included. Practice sessions "
-        "are excluded. Class owners and assigned teaching assistants "
+        "are excluded. Per-location rows are identified by location ID. "
+        "Class owners and assigned teaching assistants "
         "may access statistics, including for archived classrooms."
     ),
     dependencies=[Depends(require_class_role(ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT))],

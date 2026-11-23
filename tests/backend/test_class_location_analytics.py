@@ -65,7 +65,6 @@ def test_location_statistics_and_time_cap(
     assert len(results) == 1
     result = results[0]
     assert result.location_id == location_id
-    assert result.label == "Location 1"
     assert result.finished == 2
     assert result.completed == 1
     assert result.failed == 1
@@ -74,6 +73,23 @@ def test_location_statistics_and_time_cap(
     assert result.average_time_seconds == 1800.0
     assert result.flagged_results == 1
     assert result.gps_overrides == 1
+
+
+def test_rooms_in_the_same_game_position_have_distinct_rows(
+    db: Session,
+    make_class: Callable[..., Class],
+    make_game_session: Callable[..., object],
+    make_session_location: Callable[..., object],
+    make_location: Callable[..., Location],
+) -> None:
+    school_class = make_class()
+    rooms = [make_location(), make_location()]
+    for room in rooms:
+        game = make_game_session(class_id=school_class.id)
+        make_session_location(game, 1, location_id=room.id, status=LocationStatus.FAILED)
+
+    rows = get_class_location_analytics(school_class.id, db).locations
+    assert [row.location_id for row in rows] == sorted(room.id for room in rooms)
 
 
 def test_excludes_practice_other_classes_and_unfinished(
@@ -194,12 +210,10 @@ def test_teacher_analytics_endpoint(
     assert data["class_stats"]["finished"] == 2
     assert data["class_stats"]["success_rate"] == 50.0
     assert data["class_stats"]["photo_attempts"] == 3
-    assert [(item["location_id"], item["label"]) for item in data["locations"]] == [
-        (str(second), "Location 2"),
-        (str(fourth), "Location 4"),
-    ]
+    assert [item["location_id"] for item in data["locations"]] == sorted(map(str, (second, fourth)))
     assert all(
-        {"room_number", "name", "location_name"}.isdisjoint(item) for item in data["locations"]
+        {"label", "room_number", "name", "location_name"}.isdisjoint(item)
+        for item in data["locations"]
     )
 
 
@@ -230,10 +244,17 @@ def test_assistant_can_view_analytics(
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
     make_class_staff: Callable[..., object],
+    make_game_session: Callable[..., object],
+    make_session_location: Callable[..., object],
+    make_location: Callable[..., Location],
 ) -> None:
     assistant = make_user(role=role)
     school_class = make_class()
     make_class_staff(school_class, assistant, role=ClassStaffRole.ASSISTANT)
+
+    location = make_location()
+    game = make_game_session(class_id=school_class.id)
+    make_session_location(game, 1, location_id=location.id, status=LocationStatus.FAILED)
 
     response = client.get(
         f"/api/v1/teacher/classes/{school_class.id}/analytics",
@@ -241,7 +262,9 @@ def test_assistant_can_view_analytics(
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["locations"] == []
+    (row,) = response.json()["locations"]
+    assert row["location_id"] == str(location.id)
+    assert {"label", "room_number", "name", "location_name"}.isdisjoint(row)
 
 
 def test_unknown_class_cannot_be_read(
