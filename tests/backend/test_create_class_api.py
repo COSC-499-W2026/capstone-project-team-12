@@ -85,6 +85,15 @@ def test_teacher_creates_class_with_initial_code(
     assert access_code.is_active
     assert access_code.uses_count == 0
 
+    assert UUID(body["access_code_id"]) == access_code.id
+    response = client.patch(
+        f"/api/v1/teacher/access-codes/{body['access_code_id']}",
+        headers=auth_headers(teacher),
+    )
+    assert response.status_code == 204, response.text
+    db.refresh(access_code)
+    assert not access_code.is_active
+
 
 @pytest.mark.parametrize("role", [UserRole.STUDENT, UserRole.ADMIN])
 def test_only_staff_can_create_class(

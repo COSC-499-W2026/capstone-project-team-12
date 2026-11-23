@@ -30,6 +30,7 @@ from app.engagement.interface import (
     get_class_location_analytics,
     get_class_participation,
     get_class_student_analytics,
+    list_class_access_codes,
     list_staff_classes,
     remove_student,
     require_active_enrolment,
@@ -172,6 +173,7 @@ class CreateClassResponse(BaseModel):
     semester: str
     language: Language
     access_code: str
+    access_code_id: UUID = Field(description="Identifier used to deactivate the initial code.")
 
 
 class UpdateClassRequest(BaseModel):
@@ -226,6 +228,41 @@ class CreateAccessCodeResponse(BaseModel):
     code: str
     expires_at: datetime
     max_uses: int | None
+
+
+class ListedAccessCodeResponse(BaseModel):
+    """An access code and its usage information."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    code: str
+    expires_at: datetime
+    is_active: bool = Field(description="Whether the code is enabled, independent of expiry.")
+    max_uses: int | None = Field(description="Maximum uses, or null for unlimited.")
+    uses_count: int
+    created_at: datetime
+
+
+@teacher_classes_router.get(
+    "/{class_id}/access-codes",
+    response_model=list[ListedAccessCodeResponse],
+    operation_id="listClassAccessCodes",
+    summary="List classroom access codes",
+    description=(
+        "Class owners and teaching assistants can list all classroom access codes newest first, "
+        "including expired and deactivated codes. Archived classrooms remain readable."
+    ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT))],
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND),
+)
+def list_class_access_codes_endpoint(
+    class_id: UUID, db: Annotated[Session, Depends(get_db)]
+) -> list[ListedAccessCodeResponse]:
+    return [
+        ListedAccessCodeResponse.model_validate(code)
+        for code in list_class_access_codes(class_id, db)
+    ]
 
 
 @teacher_classes_router.post(
@@ -514,7 +551,8 @@ def list_teacher_classes(
         "Create a classroom with a fixed target language and generate "
         "its initial eight-character access code. Only active staff "
         "accounts may create classrooms. The classroom, owner assignment, "
-        "and initial access code are saved in one transaction. "
+        "and initial access code are saved in one transaction. The response includes the "
+        "initial code ID for deactivation. "
         "If no expiration is provided, the access code expires at the "
         "end of the classroom's semester."
     ),
@@ -553,6 +591,7 @@ def create_class_endpoint(
             semester=school_class.semester,
             language=Language(school_class.target_language),
             access_code=access_code.code,
+            access_code_id=access_code.id,
         )
 
         db.commit()
