@@ -1,4 +1,4 @@
-"""Admin API: staff accounts, content rights and exports of a user's data.
+"""Admin API: staff accounts, content rights, and exporting or deleting a user's data.
 
 Every route needs an admin account; anyone else gets 403 FORBIDDEN_ROLE, and a deactivated
 admin 403 ACCOUNT_DISABLED. Admin accounts are only created with the command-line tool, never
@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from app.accounts.anonymise import anonymise_user
 from app.accounts.interface import (
     UserExport,
     create_teacher,
@@ -204,3 +205,45 @@ def get_user_export(
     response.headers["Content-Disposition"] = f'attachment; filename="user-{user_id}.json"'
     response.headers["Cache-Control"] = "no-store"  # personal data: no copy in a browser cache
     return export
+
+
+class DeleteUserRequest(BaseModel):
+    """The admin confirms a deletion by typing the account's username. It is sent in the body,
+    not the query, so the name being deleted doesn't end up in access logs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(
+        min_length=1, max_length=30, description="The account's username, exactly as shown."
+    )
+
+
+@admin_router.delete(
+    "/users/{user_id}",
+    operation_id="deleteUser",
+    summary="Delete an account by anonymising it",
+    status_code=HTTPStatus.NO_CONTENT,
+    # NOT_AUTHENTICATED; FORBIDDEN_ROLE, ACCOUNT_DISABLED; USER_NOT_FOUND; OWNS_ACTIVE_CLASS
+    # (USERNAME_MISMATCH is a 422, which every route lists)
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def delete_user(
+    user_id: UUID,
+    fields: DeleteUserRequest,
+    admin: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Delete a student or staff account, which can't be undone. The account is anonymised: its
+    email address and username are replaced, its password, preferences, email links, emails, GPS
+    positions and photos removed, and it is signed out everywhere. Its games, points and
+    enrolments stay, anonymised.
+
+    403 FORBIDDEN_ROLE for an admin account, 404 USER_NOT_FOUND, 422 USERNAME_MISMATCH unless
+    `username` matches exactly, 409 OWNS_ACTIVE_CLASS (class ids in details) until each class it
+    owns is transferred or archived. The deletion is recorded in the admin audit log as
+    delete_user.
+    """
+    anonymise_user(admin.id, user_id, fields.username, db)
+    db.commit()

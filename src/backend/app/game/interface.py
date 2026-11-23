@@ -18,12 +18,14 @@ list_history: GET /me/games reads one page of the student's finished games.
 
 list_games_for_export: an admin's export of an account holds every game the student played,
 with its locations.
+
+clear_positions: deleting (anonymising) an account clears the GPS positions kept in its games.
 """
 
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.game.export import list_games_for_export
@@ -36,9 +38,10 @@ from app.game.sessions import (
     session_idle_limit,
 )
 from app.models.enums import SessionEndReason
-from app.models.game import OPEN_SESSION_STATES, GameSession
+from app.models.game import OPEN_SESSION_STATES, GameSession, SessionLocation
 
 __all__ = [
+    "clear_positions",
     "end_open_sessions",
     "expire_idle_sessions",
     "get_open_session_id",
@@ -83,3 +86,24 @@ def refuse_if_game_open(student_id: UUID, db: Session) -> None:
     game_id = get_open_session_id(student_id, db)
     if game_id is not None:
         raise game_already_open(game_id)
+
+
+def clear_positions(student_id: UUID, db: Session) -> None:
+    """Forget every GPS position the student sent, in all their games: the last position at each
+    location and the distances worked out from it. Results, points and flags stay. Doesn't
+    commit."""
+    games = select(GameSession.id).where(GameSession.student_id == student_id)
+    db.execute(
+        update(SessionLocation)
+        .where(SessionLocation.session_id.in_(games))
+        .values(
+            last_lat=None,
+            last_lng=None,
+            last_accuracy_m=None,
+            last_distance_m=None,
+            last_ping_at=None,
+            ref_point_index=None,
+            ref_distance_m=None,
+            ref_at=None,
+        )
+    )
