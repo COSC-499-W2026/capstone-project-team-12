@@ -33,11 +33,11 @@ All diagrams are drawn in draw.io. The source files are in our shared Google Dri
 
 Milestone 1 is the backend only. API consumers (Swagger UI, a Postman collection, and GPS replay and photo-set simulation scripts) call the FastAPI backend over HTTPS with a JWT. In Milestone 2 the React web app (student app, teacher portal and admin panel) is added behind nginx.
 
-Inside the backend container, the routers under `/api/v1` handle requests and pass them to five components. The components share a core (`config`, `db`, `errors`, `models` and shared `services` such as storage, email and audio), and they only call each other through each component's `interface.py`, which `utils/dep_graph.py --check` enforces in CI. Data lives in PostgreSQL 16 (stores D1 to D7) and a media volume (D8) for clue audio, feedback audio and photos. A scheduler container runs the CLI jobs (send emails, expire idle sessions, purge old photos) and emails go out through an SMTP provider.
+Inside the backend container, the routers under `/api/v1` handle requests and pass them to five components. The components share a core (`config`, `db`, `errors`, `models` and shared `services` such as storage, email, audio and rate limiting), and they only call each other through each component's `interface.py`, which `utils/dep_graph.py --check` enforces in CI. Data lives in PostgreSQL 16 (stores D1 to D7) and a media volume (D8) for clue audio, feedback audio and photos. A scheduler container runs the CLI jobs (send emails, expire idle sessions, purge old photos) and emails go out through an SMTP provider.
 
-Each major component has its own Level 1 DFD. In the architecture diagram, clicking a component box opens it.
+Each major component has its own Level 2 DFD. In the architecture diagram, clicking a component box opens it, and clicking the backend container opens the Level 1 overview.
 
-| Component | Code package | Owner | What it does | DFD Level 1 |
+| Component | Code package | Owner | What it does | DFD Level 2 |
 |---|---|---|---|---|
 | 1.0 Auth & Accounts | `app/accounts` | Kaedyn | Sign-up, login and refresh tokens, email verification and password reset, profile, staff accounts and admin support, teaching assistant management, privacy export and anonymisation | [1.0 Auth & Accounts](https://drive.google.com/file/d/1BkW_Tt_Tdvax9GVgqysyoxHLFLn8zJqU/view?usp=sharing) |
 | 2.0 Game Session | `app/game` | Mia | Starts a session and draws 5 locations, serves clues, processes GPS pings and gives closer/farther feedback, confirms arrival, pause/resume/quit/reset/shuffle, finishes locations, game history, expires idle sessions | [2.0 Game Session](https://drive.google.com/file/d/1So7fPBw_lazmH7Ljxl3l1mUTpDaYw8CK/view?usp=sharing) |
@@ -47,10 +47,11 @@ Each major component has its own Level 1 DFD. In the architecture diagram, click
 
 ### Data Flow Diagrams
 
-- [Level 0 (context diagram)](https://drive.google.com/file/d/11wntSjPr60qeLwDX-lv27QMxHI4oW7eI/view?usp=sharing): the whole system as one process, with its six external entities: Student, Teacher / TA, Admin, Content Manager, Email System and Scheduler.
-- Level 1: one diagram per architecture component, linked in the table above. Each one breaks its component into numbered processes (for example 2.1 Start session to 2.8 Expire idle sessions).
+- [Level 0 (context diagram)](https://drive.google.com/file/d/11wntSjPr60qeLwDX-lv27QMxHI4oW7eI/view?usp=sharing): the whole system as one process, with its five external entities: Student, Teacher / TA, Admin, Content Manager (a staff account with content rights) and Email System. The scheduler is not an external entity: it runs inside our system as the scheduler container.
+- [Level 1 (overview)](https://drive.google.com/file/d/196F3QhxwfLmq2BtKo4RNkYGTFfxQy0zY/view?usp=drive_link): the five components (1.0 to 5.0), the data flows between them, the data stores D1 to D8 and the scheduler container with its jobs (1.5, 2.8 and 3.7).
+- Level 2: one diagram per architecture component, linked in the table above. Each one breaks its component into numbered processes (for example 2.1 Start session to 2.8 Expire idle sessions).
 
-How to read the Level 1 diagrams:
+How to read the Level 1 and Level 2 diagrams:
 - Data stores use the same numbers in every diagram: D1 Users & Auth, D2 Email Outbox, D3 Classes, D4 Content, D5 Game Sessions, D6 Photo Attempts, D7 Points & Engagement and D8 Media Storage. A store marked with `*` is drawn again on the same diagram.
 - Dashed circles labelled "Other DFD" show data that goes to or comes from another component. For example, 2.0 sends each location result to 4.0, which sends back the updated points, streak and badges.
 
