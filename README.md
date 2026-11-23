@@ -78,7 +78,11 @@ Database migrations run automatically when the api container starts.
 
 Uvicorn takes the client IP from `X-Forwarded-For` only when the request comes from an address in `FORWARDED_ALLOW_IPS` (default `127.0.0.1`). Logins, sign-ups and requests without a token are rate limited per IP, so behind nginx:
 
-- set `FORWARDED_ALLOW_IPS` in `.env` to nginx's address or its Docker network, never `*` (anyone could then send a fake IP and get a fresh limit);
+- don't publish port 8000 to the outside. `docker-compose.yml` publishes `8000:8000` for local development; behind nginx, bind it to `127.0.0.1:8000:8000`, or use `expose` if nginx runs in the same compose network. A client that reaches 8000 directly could otherwise send a fake `X-Forwarded-For` and get a fresh limit;
+- set `FORWARDED_ALLOW_IPS` in `.env` to the one address nginx connects from, never a whole subnet or `*`:
+  - nginx in the same compose network: that container's address. Give it a fixed one (`ipv4_address`), since container addresses can change on restart;
+  - nginx on the host: the compose network's gateway, not `127.0.0.1`. Find it with `docker network inspect <project>_default --format '{{(index .IPAM.Config 0).Gateway}}'`. Docker picks this subnet itself, so it differs between machines;
+- check it: with the wrong address, every request seems to come from nginx, so all users share one login limit;
 - have nginx pass the client's address:
 
 ```nginx
