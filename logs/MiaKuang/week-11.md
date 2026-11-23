@@ -4,7 +4,7 @@
 
 Week 11 (Nov 16 – Nov 22)
 
-**This week** I finished the rate-limit hardening (#322) and moved the class staff checks onto the routes (#378). I also finished the A4 scan of student responses (#71) and moved the docs site to Netlify. I also brought the README in line with main and the new diagrams. Fabiha and Kaedyn reviewed the thirteen merged PRs, and Eddy reviewed the Netlify one. Six PRs are still open: the A23 follow-ups, the shared game errors, the expire-sessions cap and the clue plays (#436).
+**This week** I took over two of Kaedyn's issues on Nov 17: the rate-limit hardening (#322) and the rest of A4 role-based access (#71), and finished both. For #322 I also carried his two tests from #328 into #390. For #71 I moved the class staff checks to the routes (#378) and added the scan of student responses (#383). I also moved the docs site to Netlify and brought the README in line with main and the new diagrams. Fabiha and Kaedyn reviewed the thirteen merged PRs, and Eddy reviewed the Netlify one. Six PRs are still open: the A23 follow-ups, the shared game errors, the expire-sessions cap and the clue plays (#436).
 
 | PR | What | Files | Lines | Tests | Status |
 |---|---|---|---|---|---|
