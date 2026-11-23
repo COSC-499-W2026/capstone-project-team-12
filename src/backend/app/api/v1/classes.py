@@ -33,7 +33,9 @@ from app.engagement.interface import (
     get_class_student_analytics,
     leave_class,
     list_staff_classes,
+    remove_student,
     require_active_enrolment,
+    restore_student,
     update_class_settings,
     validate_code_and_enrol,
 )
@@ -771,6 +773,64 @@ def archive_class_endpoint(
     try:
         archive_class(class_id, db)
         end_open_sessions(class_id, db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+@teacher_classes_router.delete(
+    "/{class_id}/students/{student_id}",
+    status_code=HTTPStatus.NO_CONTENT,
+    operation_id="removeClassStudent",
+    summary="Remove a student from a classroom",
+    description=(
+        "Only the owner can remove a student. Removal ends the student's open games in this "
+        "class, preserves earned points, and prevents the student from rejoining with a code "
+        "until restored. Archived classes cannot be modified."
+    ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER))],
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def remove_class_student_endpoint(
+    class_id: UUID,
+    student_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    try:
+        if remove_student(student_id, class_id, db):
+            end_open_sessions(class_id, db, student_id=student_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+@teacher_classes_router.post(
+    "/{class_id}/students/{student_id}/restore",
+    status_code=HTTPStatus.NO_CONTENT,
+    operation_id="restoreClassStudent",
+    summary="Restore a removed student",
+    description=(
+        "Only the owner can restore a removed student. Restores the original enrolment without "
+        "consuming an access code or changing the student's class selection. Returns 409 if "
+        "the class is archived, the student assists it, or the student already has an active "
+        "class in the same language."
+    ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER))],
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT
+    ),
+)
+def restore_class_student_endpoint(
+    class_id: UUID,
+    student_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    try:
+        restore_student(student_id, class_id, db)
         db.commit()
     except Exception:
         db.rollback()

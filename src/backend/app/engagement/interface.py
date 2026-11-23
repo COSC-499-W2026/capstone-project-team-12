@@ -108,6 +108,8 @@ __all__ = [
     "is_actively_enrolled",
     "is_class_archived",
     "leave_class",
+    "remove_student",
+    "restore_student",
     "archive_class",
     "list_staff_classes",
     "require_active_enrolment",
@@ -541,6 +543,30 @@ def _lock_class(class_id: UUID, db: Session) -> Class:
     ).scalar_one()
 
 
+def _reject_assistant(student_id: UUID, class_id: UUID, db: Session) -> None:
+    assistant = db.scalar(
+        select(ClassStaff.user_id).where(
+            ClassStaff.user_id == student_id,
+            ClassStaff.class_id == class_id,
+            ClassStaff.role == ClassStaffRole.ASSISTANT,
+        )
+    )
+    if assistant is not None:
+        raise AppError(ErrorCode.TA_SAME_CLASS_CONFLICT)
+
+
+def _active_enrolment_for_language(
+    student_id: UUID, language: str, db: Session
+) -> ClassEnrollment | None:
+    return db.scalar(
+        select(ClassEnrollment).where(
+            ClassEnrollment.student_id == student_id,
+            ClassEnrollment.language == language,
+            ClassEnrollment.is_active.is_(True),
+        )
+    )
+
+
 def validate_code_and_enrol(
     student_id: UUID,
     code: str,
@@ -616,15 +642,7 @@ def validate_code_and_enrol(
     if school_class.archived_at is not None:
         raise AppError(ErrorCode.CLASS_ARCHIVED)
 
-    assistant = db.scalar(
-        select(ClassStaff.user_id).where(
-            ClassStaff.user_id == student_id,
-            ClassStaff.class_id == school_class.id,
-            ClassStaff.role == ClassStaffRole.ASSISTANT,
-        )
-    )
-    if assistant is not None:
-        raise AppError(ErrorCode.TA_SAME_CLASS_CONFLICT)
+    _reject_assistant(student_id, school_class.id, db)
 
     existing = db.scalar(
         select(ClassEnrollment).where(
@@ -636,13 +654,7 @@ def validate_code_and_enrol(
     if existing is not None and existing.end_reason == EnrollmentEndReason.REMOVED:
         raise AppError(ErrorCode.REMOVED_FROM_CLASS)
 
-    active_enrolment = db.scalar(
-        select(ClassEnrollment).where(
-            ClassEnrollment.student_id == student_id,
-            ClassEnrollment.language == school_class.target_language,
-            ClassEnrollment.is_active.is_(True),
-        )
-    )
+    active_enrolment = _active_enrolment_for_language(student_id, school_class.target_language, db)
 
     if active_enrolment is not None:
         if (
@@ -729,13 +741,70 @@ def leave_class(student_id: UUID, class_id: UUID, db: Session) -> None:
     if enrollment is None:
         raise AppError(ErrorCode.NOT_FOUND)
 
+    _end_enrolment(student, enrollment, EnrollmentEndReason.LEFT, db)
+
+
+def _end_enrolment(
+    student: User, enrollment: ClassEnrollment, reason: EnrollmentEndReason, db: Session
+) -> None:
+    class_id = enrollment.class_id
     enrollment.is_active = False
-    enrollment.end_reason = EnrollmentEndReason.LEFT
+    enrollment.end_reason = reason
     enrollment.left_at = datetime.now(UTC)
 
     if student.current_class_id == class_id:
-        student.current_class_id = _next_current_class(student_id, class_id, db)
+        student.current_class_id = _next_current_class(student.id, class_id, db)
 
+    db.flush()
+
+
+def _lock_class_enrolment(
+    student_id: UUID, class_id: UUID, db: Session
+) -> tuple[User, ClassEnrollment]:
+    student = lock_user(student_id, db)
+    if student is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    school_class = _lock_class(class_id, db)
+    if school_class.archived_at is not None:
+        raise AppError(ErrorCode.CLASS_ARCHIVED)
+
+    enrolment = db.scalar(
+        select(ClassEnrollment)
+        .where(ClassEnrollment.student_id == student_id, ClassEnrollment.class_id == class_id)
+        .execution_options(populate_existing=True)
+    )
+    if enrolment is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+    return student, enrolment
+
+
+def remove_student(student_id: UUID, class_id: UUID, db: Session) -> bool:
+    """End an active enrolment and return whether it changed. Does not commit."""
+    student, enrolment = _lock_class_enrolment(student_id, class_id, db)
+    if enrolment.end_reason == EnrollmentEndReason.REMOVED:
+        return False
+    if not enrolment.is_active:
+        raise AppError(ErrorCode.NOT_FOUND)
+    _end_enrolment(student, enrolment, EnrollmentEndReason.REMOVED, db)
+    return True
+
+
+def restore_student(student_id: UUID, class_id: UUID, db: Session) -> None:
+    """Reactivate a removed enrolment in place. Does not consume a code or commit."""
+    _, enrolment = _lock_class_enrolment(student_id, class_id, db)
+    if enrolment.is_active:
+        return
+    if enrolment.end_reason != EnrollmentEndReason.REMOVED:
+        raise AppError(ErrorCode.NOT_FOUND)
+
+    _reject_assistant(student_id, class_id, db)
+    if _active_enrolment_for_language(student_id, enrolment.language, db) is not None:
+        raise AppError(ErrorCode.ALREADY_IN_CLASS_FOR_LANGUAGE)
+
+    enrolment.is_active = True
+    enrolment.end_reason = None
+    enrolment.left_at = None
     db.flush()
 
 
