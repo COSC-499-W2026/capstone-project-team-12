@@ -1,9 +1,9 @@
-"""Admin API: staff accounts and content rights.
+"""Admin API: staff accounts, content rights and exports of a user's data.
 
 Every route needs an admin account; anyone else gets 403 FORBIDDEN_ROLE, and a deactivated
 admin 403 ACCOUNT_DISABLED. Admin accounts are only created with the command-line tool, never
-here. Every change is recorded in the admin audit log; a refused request changes nothing, so
-it records nothing, and reads are not recorded.
+here. Every change and every export, including one refused with an error, is written to the
+audit log; other reads are not.
 """
 
 from datetime import datetime
@@ -11,10 +11,11 @@ from http import HTTPStatus
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from app.accounts.export import UserExport, export_user
 from app.accounts.interface import (
     create_teacher,
     get_current_user,
@@ -24,7 +25,7 @@ from app.accounts.interface import (
 )
 from app.api.pagination import Page, PageParams, page_params
 from app.db import get_db
-from app.errors import error_responses
+from app.errors import AppError, error_responses
 from app.models.accounts import User
 from app.models.enums import UserRole
 
@@ -173,3 +174,36 @@ def _set_active(user_id: UUID, active: bool, admin: User, db: Session) -> StaffA
     account = StaffAccount.model_validate(set_staff_active(admin.id, user_id, active, db))
     db.commit()
     return account
+
+
+@admin_router.get(
+    "/users/{user_id}/export",
+    operation_id="exportUser",
+    summary="Export a user's data as a JSON file",
+    # NOT_AUTHENTICATED; FORBIDDEN_ROLE, ACCOUNT_DISABLED; USER_NOT_FOUND
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND),
+)
+def get_user_export(
+    user_id: UUID,
+    request: Request,
+    response: Response,
+    admin: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> UserExport:
+    """Download what is stored about an account of any role: the profile, class enrolments and
+    TA roles. Sent as an attachment named user-{id}.json and never cached. The password hash
+    and tokens are never included.
+
+    404 USER_NOT_FOUND for an unknown id. Each attempt is recorded in the audit log as
+    user_exported, an unknown id as a failure with its code.
+    """
+    ip_address = request.client.host if request.client else None
+    try:
+        export = export_user(admin.id, user_id, db, ip_address=ip_address)
+    except AppError:
+        db.commit()  # keeps the FAILURE entry; nothing else was written
+        raise
+    db.commit()
+    response.headers["Content-Disposition"] = f'attachment; filename="user-{user_id}.json"'
+    response.headers["Cache-Control"] = "no-store"  # personal data: no copy in a browser cache
+    return export
