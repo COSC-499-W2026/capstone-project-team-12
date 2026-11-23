@@ -33,6 +33,7 @@ class AnalyticsTotals:
     success_rate: float
     photo_attempts: int
     average_time_seconds: float | None
+    average_clue_plays: float | None
     flagged_results: int
     gps_overrides: int
 
@@ -109,6 +110,7 @@ def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
             func.count().filter(completed_filter),
             func.coalesce(func.sum(location.attempts_used), 0),
             _average_completed_time(),
+            func.avg(location.clue_plays),
             func.count().filter(func.jsonb_array_length(location.flags) > 0),
             func.count().filter(location.arrival_override == ArrivalOverride.GPS_UNAVAILABLE),
         )
@@ -122,7 +124,7 @@ def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
     ).all()
 
     # ROLLUP includes a class summary even when no location results match.
-    _, finished, completed, attempts, seconds, flagged, overrides = rows[0]
+    _, finished, completed, attempts, seconds, clue_plays, flagged, overrides = rows[0]
     class_stats = AnalyticsTotals(
         finished,
         completed,
@@ -130,6 +132,7 @@ def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
         round(completed / finished * 100, 2) if finished else 0.0,
         attempts,
         round(float(seconds), 2) if seconds is not None else None,
+        round(float(clue_plays), 2) if clue_plays is not None else None,
         flagged,
         overrides,
     )
@@ -141,6 +144,7 @@ def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
             round(completed / finished * 100, 2),
             attempts,
             round(float(seconds), 2) if seconds is not None else None,
+            round(float(clue_plays), 2) if clue_plays is not None else None,
             flagged,
             overrides,
             location_id,
@@ -151,6 +155,7 @@ def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
             completed,
             attempts,
             seconds,
+            clue_plays,
             flagged,
             overrides,
         ) in rows[1:]
@@ -202,6 +207,7 @@ class StudentAnalytics:
     completed_locations: int
     failed_locations: int
     classroom_points: int
+    total_clue_plays: int
     success_rate: float
     last_activity_at: datetime | None
     streak_days: int
@@ -242,27 +248,26 @@ def get_class_student_analytics(
     }
 
     location = SessionLocation
-    finished_locations = (
+    classroom_locations = (
         select(GameSession.student_id)
         .join(location, GameSession.id == location.session_id)
-        .where(
-            GameSession.class_id == class_id,
-            location.status.in_((LocationStatus.COMPLETED, LocationStatus.FAILED)),
-        )
+        .where(GameSession.class_id == class_id)
     )
     outcomes = {
-        student_id: (completed, failed)
-        for student_id, completed, failed in db.execute(
-            finished_locations.add_columns(
+        student_id: (completed, failed, clue_plays)
+        for student_id, completed, failed, clue_plays in db.execute(
+            classroom_locations.add_columns(
                 func.count().filter(location.status == LocationStatus.COMPLETED),
                 func.count().filter(location.status == LocationStatus.FAILED),
+                func.sum(location.clue_plays),
             ).group_by(GameSession.student_id)
         )
     }
     flags: dict[UUID, set[str]] = {}
     for student_id, location_flags in db.execute(
-        finished_locations.add_columns(location.flags).where(
-            func.jsonb_array_length(location.flags) > 0
+        classroom_locations.add_columns(location.flags).where(
+            location.status.in_((LocationStatus.COMPLETED, LocationStatus.FAILED)),
+            func.jsonb_array_length(location.flags) > 0,
         )
     ):
         flags.setdefault(student_id, set()).update(location_flags)
@@ -290,7 +295,7 @@ def get_class_student_analytics(
     results: list[StudentAnalytics] = []
     for enrollment, student, stats in enrollments:
         sessions, last_activity = games.get(student.id, (0, None))
-        completed, failed = outcomes.get(student.id, (0, 0))
+        completed, failed, clue_plays = outcomes.get(student.id, (0, 0, 0))
         finished = completed + failed
         success_rate = round(completed / finished * 100, 2) if finished else 0.0
 
@@ -305,6 +310,7 @@ def get_class_student_analytics(
                 completed_locations=completed,
                 failed_locations=failed,
                 classroom_points=points.get(student.id, 0),
+                total_clue_plays=clue_plays,
                 success_rate=success_rate,
                 last_activity_at=last_activity,
                 streak_days=visible_streak(stats, today=today),

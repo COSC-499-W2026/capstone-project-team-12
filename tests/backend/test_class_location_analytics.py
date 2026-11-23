@@ -46,6 +46,7 @@ def test_location_statistics_and_time_cap(
         status=LocationStatus.COMPLETED,
         points_awarded=100,
         attempts_used=2,
+        clue_plays=5,
         started_at=started,
         completed_at=started + timedelta(minutes=40),
         flags=["speed_anomaly"],
@@ -60,7 +61,8 @@ def test_location_statistics_and_time_cap(
         started_at=started,
     )
 
-    results = get_class_location_analytics(school_class.id, db).locations
+    analytics = get_class_location_analytics(school_class.id, db)
+    results = analytics.locations
 
     assert len(results) == 1
     result = results[0]
@@ -70,6 +72,8 @@ def test_location_statistics_and_time_cap(
     assert result.failed == 1
     assert result.success_rate == 50.0
     assert result.photo_attempts == 5
+    assert result.average_clue_plays == 2.5
+    assert analytics.class_stats.average_clue_plays == 2.5
     assert result.average_time_seconds == 1800.0
     assert result.flagged_results == 1
     assert result.gps_overrides == 1
@@ -167,6 +171,7 @@ def test_empty_class_returns_no_location_statistics(
     analytics = get_class_location_analytics(school_class.id, db)
     assert analytics.locations == []
     assert analytics.class_stats.finished == 0
+    assert analytics.class_stats.average_clue_plays is None
     assert analytics.class_stats.average_time_seconds is None
 
 
