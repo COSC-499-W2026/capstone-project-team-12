@@ -52,11 +52,10 @@ def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
     average = func.avg(func.least(func.greatest(elapsed, 0), 1800)).filter(
         completed_filter, location.started_at.is_not(None), location.completed_at.is_not(None)
     )
-    label = func.coalesce(Location.room_number, Location.name)
     rows = db.execute(
         select(
             location.location_id,
-            label,
+            Location.room_number,
             func.count(),
             func.count().filter(completed_filter),
             func.coalesce(func.sum(location.attempts_used), 0),
@@ -70,8 +69,8 @@ def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
             GameSession.class_id == class_id,
             location.status.in_((LocationStatus.COMPLETED, LocationStatus.FAILED)),
         )
-        .group_by(func.rollup(tuple_(location.location_id, label)))
-        .order_by(func.grouping(location.location_id).desc(), label, location.location_id)
+        .group_by(func.rollup(tuple_(location.location_id, Location.room_number)))
+        .order_by(func.grouping(location.location_id).desc(), Location.room_number)
     ).all()
 
     # ROLLUP includes a class summary even when no location results match.

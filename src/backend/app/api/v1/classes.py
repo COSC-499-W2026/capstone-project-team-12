@@ -316,7 +316,7 @@ class AnalyticsTotalsResponse(BaseModel):
 
 class LocationAnalyticsResponse(AnalyticsTotalsResponse):
     location_id: UUID
-    label: str = Field(description="Room number, or the location name when no room number is set.")
+    label: str = Field(description="Room number of the location.")
 
 
 class ClassAnalyticsResponse(BaseModel):

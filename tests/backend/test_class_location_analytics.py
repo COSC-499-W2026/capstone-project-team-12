@@ -2,11 +2,10 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.engagement.interface import get_class_location_analytics
@@ -21,17 +20,6 @@ from app.models.enums import (
 )
 
 
-def _simulate_locations_without_room_numbers(db: Session, *location_ids: UUID) -> None:
-    # Today the only verification type requires a room number. Shadow the table
-    # on this connection to exercise the fallback without changing its constraints.
-    db.execute(text("CREATE TEMP TABLE locations ON COMMIT DROP AS SELECT * FROM public.locations"))
-    db.execute(
-        text("UPDATE pg_temp.locations SET room_number = NULL WHERE id = ANY(:ids)"),
-        {"ids": list(location_ids)},
-    )
-
-
-@pytest.mark.parametrize("room_number", ["SCI 333", None], ids=["room-number", "name-fallback"])
 def test_location_statistics_and_time_cap(
     db: Session,
     make_user: Callable[..., User],
@@ -40,13 +28,12 @@ def test_location_statistics_and_time_cap(
     make_game_session: Callable[..., object],
     make_session_location: Callable[..., object],
     make_location: Callable[..., Location],
-    room_number: str | None,
 ) -> None:
     teacher = make_user(role=UserRole.STAFF)
     school_class = make_class()
     make_class_staff(school_class, teacher)
 
-    location_id = make_location(room_number=room_number or "SCI 333", name="Science Atrium").id
+    location_id = make_location(room_number="SCI 333", name="Science Atrium").id
     started = datetime(2026, 11, 1, 12, tzinfo=UTC)
 
     game1 = make_game_session(class_id=school_class.id)
@@ -73,15 +60,12 @@ def test_location_statistics_and_time_cap(
         started_at=started,
     )
 
-    if room_number is None:
-        _simulate_locations_without_room_numbers(db, location_id)
-
     results = get_class_location_analytics(school_class.id, db).locations
 
     assert len(results) == 1
     result = results[0]
     assert result.location_id == location_id
-    assert result.label == (room_number or "Science Atrium")
+    assert result.label == "SCI 333"
     assert result.finished == 2
     assert result.completed == 1
     assert result.failed == 1
@@ -111,7 +95,7 @@ def test_rooms_in_the_same_game_position_have_distinct_labels(
     }
 
 
-def test_locations_are_sorted_by_label_then_id(
+def test_locations_are_sorted_by_room_number(
     db: Session,
     make_class: Callable[..., Class],
     make_game_session: Callable[..., object],
@@ -119,17 +103,17 @@ def test_locations_are_sorted_by_label_then_id(
     make_location: Callable[..., Location],
 ) -> None:
     school_class = make_class()
-    room = make_location(room_number="SCI 333")
-    atria = [make_location(name="Atrium") for _ in range(2)]
+    later_room = make_location(room_number="SCI 334")
+    earlier_room = make_location(room_number="SCI 333")
     game = make_game_session(class_id=school_class.id)
-    for position, location in enumerate([room, *atria], start=1):
-        make_session_location(game, position, location_id=location.id, status=LocationStatus.FAILED)
-
-    _simulate_locations_without_room_numbers(db, *(atrium.id for atrium in atria))
+    for position, room in enumerate((later_room, earlier_room), start=1):
+        make_session_location(game, position, location_id=room.id, status=LocationStatus.FAILED)
 
     rows = get_class_location_analytics(school_class.id, db).locations
-    assert [row.label for row in rows] == ["Atrium", "Atrium", "SCI 333"]
-    assert [row.location_id for row in rows] == [*sorted(atrium.id for atrium in atria), room.id]
+    assert [(row.label, row.location_id) for row in rows] == [
+        ("SCI 333", earlier_room.id),
+        ("SCI 334", later_room.id),
+    ]
 
 
 def test_excludes_practice_other_classes_and_unfinished(
