@@ -1,7 +1,7 @@
 """Owner-only archival closes class enrolments and games."""
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -16,6 +16,7 @@ from app.models.engagement import AccessCode, Class, ClassEnrollment
 from app.models.enums import (
     ClassStaffRole,
     EnrollmentEndReason,
+    Language,
     SessionEndReason,
     SessionState,
     UserRole,
@@ -35,7 +36,15 @@ def test_archive_closes_the_class(
     make_game_session: Callable[..., GameSession],
     auth_headers: Callable[[User], dict[str, str]],
 ) -> None:
-    student, school_class, fallback, enrolment, _ = two_class_student
+    student, school_class, fallback, enrolment, fallback_enrolment = two_class_student
+    older_class = make_class(target_language=Language.ES)
+    make_enrollment(
+        student, older_class, joined_at=fallback_enrolment.joined_at - timedelta(days=1)
+    )
+    archived_class = make_class(target_language=Language.DE, archived_at=datetime.now(UTC))
+    make_enrollment(
+        student, archived_class, joined_at=fallback_enrolment.joined_at + timedelta(days=1)
+    )
     owner = make_user(role=UserRole.STAFF)
     make_class_staff(school_class, owner)
     other_student = make_user(current_class_id=school_class.id)

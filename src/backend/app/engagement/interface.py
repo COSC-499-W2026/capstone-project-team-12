@@ -684,6 +684,21 @@ def validate_code_and_enrol(
     return school_class.id
 
 
+def _next_current_class(student_id: UUID, class_id: UUID, db: Session) -> UUID | None:
+    return db.scalar(
+        select(ClassEnrollment.class_id)
+        .join(Class, Class.id == ClassEnrollment.class_id)
+        .where(
+            ClassEnrollment.student_id == student_id,
+            ClassEnrollment.class_id != class_id,
+            ClassEnrollment.is_active.is_(True),
+            Class.archived_at.is_(None),
+        )
+        .order_by(ClassEnrollment.joined_at.desc(), ClassEnrollment.class_id)
+        .limit(1)
+    )
+
+
 def leave_class(student_id: UUID, class_id: UUID, db: Session) -> None:
     """Leave an active classroom without committing the transaction.
 
@@ -718,18 +733,7 @@ def leave_class(student_id: UUID, class_id: UUID, db: Session) -> None:
     enrollment.left_at = datetime.now(UTC)
 
     if student.current_class_id == class_id:
-        student.current_class_id = db.scalar(
-            select(ClassEnrollment.class_id)
-            .join(Class, Class.id == ClassEnrollment.class_id)
-            .where(
-                ClassEnrollment.student_id == student_id,
-                ClassEnrollment.class_id != class_id,
-                ClassEnrollment.is_active.is_(True),
-                Class.archived_at.is_(None),
-            )
-            .order_by(ClassEnrollment.joined_at.desc(), ClassEnrollment.class_id)
-            .limit(1)
-        )
+        student.current_class_id = _next_current_class(student_id, class_id, db)
 
     db.flush()
 
@@ -784,5 +788,5 @@ def archive_class(class_id: UUID, db: Session) -> None:
     )
     for student in students:
         if student.current_class_id == class_id:
-            student.current_class_id = next(iter(get_active_class_ids(student.id, db)), None)
+            student.current_class_id = _next_current_class(student.id, class_id, db)
     db.flush()
