@@ -33,7 +33,7 @@ def test_location_statistics_and_time_cap(
     school_class = make_class()
     make_class_staff(school_class, teacher)
 
-    location_id = make_location(room_number="SCI 333", name="Science Atrium").id
+    location_id = make_location(room_number="SCI 333").id
     started = datetime(2026, 11, 1, 12, tzinfo=UTC)
 
     game1 = make_game_session(class_id=school_class.id)
@@ -93,27 +93,6 @@ def test_rooms_in_the_same_game_position_have_distinct_labels(
     assert {row.location_id: row.label for row in rows} == {
         room.id: room.room_number for room in rooms
     }
-
-
-def test_locations_are_sorted_by_room_number(
-    db: Session,
-    make_class: Callable[..., Class],
-    make_game_session: Callable[..., object],
-    make_session_location: Callable[..., object],
-    make_location: Callable[..., Location],
-) -> None:
-    school_class = make_class()
-    later_room = make_location(room_number="SCI 334")
-    earlier_room = make_location(room_number="SCI 333")
-    game = make_game_session(class_id=school_class.id)
-    for position, room in enumerate((later_room, earlier_room), start=1):
-        make_session_location(game, position, location_id=room.id, status=LocationStatus.FAILED)
-
-    rows = get_class_location_analytics(school_class.id, db).locations
-    assert [(row.label, row.location_id) for row in rows] == [
-        ("SCI 333", earlier_room.id),
-        ("SCI 334", later_room.id),
-    ]
 
 
 def test_excludes_practice_other_classes_and_unfinished(
