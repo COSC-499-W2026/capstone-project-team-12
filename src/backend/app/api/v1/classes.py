@@ -20,12 +20,14 @@ from app.accounts.interface import (
     require_code_class_role,
     require_staff,
 )
+from app.api.pagination import Page, PageParams, page_params
 from app.db import get_db
 from app.engagement.interface import (
     archive_class,
     create_class,
     deactivate_access_code,
     generate_access_code,
+    get_class_clue_plays,
     get_class_leaderboard,
     get_class_location_analytics,
     get_class_participation,
@@ -41,7 +43,13 @@ from app.errors import AppError, ErrorCode, error_responses
 from app.game.interface import end_open_sessions
 from app.models.accounts import User
 from app.models.engagement import Class
-from app.models.enums import ClassStaffRole, Difficulty, DifficultySuggestion, Language
+from app.models.enums import (
+    ClassStaffRole,
+    Difficulty,
+    DifficultySuggestion,
+    Language,
+    LocationStatus,
+)
 
 leaderboard_router = APIRouter(prefix="/classes", tags=["classes"])
 teacher_classes_router = APIRouter(
@@ -442,6 +450,60 @@ def get_class_students_endpoint(
     statistics = get_class_student_analytics(class_id, db)
 
     return [StudentAnalyticsResponse.model_validate(item) for item in statistics]
+
+
+class ClassCluePlayResponse(BaseModel):
+    """Clue playback and result for one location in a classroom game."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    student_id: UUID
+    username: str
+    game_id: UUID
+    game_started_at: datetime
+    location_id: UUID
+    clue_plays: int
+    result: LocationStatus
+
+
+class ClassCluePlayPage(Page[ClassCluePlayResponse]):
+    """Paginated clue-play records for a classroom."""
+
+
+@teacher_classes_router.get(
+    "/{class_id}/clue-plays",
+    response_model=ClassCluePlayPage,
+    operation_id="getClassCluePlays",
+    summary="List classroom clue plays",
+    description=(
+        "Return one record per student, game, and location, including zero plays and "
+        "unfinished or skipped results. Locations are identified by location ID. "
+        "Filter by game start date using inclusive dates "
+        "in the app timezone, as in the participation export. Results are ordered newest "
+        "game first. Class owners and assigned teaching assistants may read this report, "
+        "including for archived classrooms."
+    ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT))],
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.UNPROCESSABLE_ENTITY,
+    ),
+)
+def get_class_clue_plays_endpoint(
+    class_id: UUID,
+    start_date: date,
+    end_date: date,
+    db: Annotated[Session, Depends(get_db)],
+    params: Annotated[PageParams, Depends(page_params)],
+) -> ClassCluePlayPage:
+    items, total = get_class_clue_plays(
+        class_id, db, start_date, end_date, params.offset, params.page_size
+    )
+    return ClassCluePlayPage.of(
+        [ClassCluePlayResponse.model_validate(item) for item in items], params, total
+    )
 
 
 @teacher_classes_router.get(

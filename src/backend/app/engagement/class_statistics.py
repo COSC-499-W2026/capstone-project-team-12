@@ -327,6 +327,86 @@ def get_class_student_analytics(
     return results
 
 
+def _class_report_period(start_date: date, end_date: date) -> tuple[datetime, datetime]:
+    """Return the half-open interval for inclusive report dates in app time."""
+    if start_date > end_date:
+        raise AppError(ErrorCode.VALIDATION_ERROR, "start_date must not be after end_date")
+
+    timezone = ZoneInfo(get_settings().app_timezone)
+    return (
+        datetime.combine(start_date, datetime.min.time(), tzinfo=timezone),
+        datetime.combine(end_date + timedelta(days=1), datetime.min.time(), tzinfo=timezone),
+    )
+
+
+@dataclass(frozen=True)
+class ClassCluePlay:
+    student_id: UUID
+    username: str
+    game_id: UUID
+    game_started_at: datetime
+    location_id: UUID
+    clue_plays: int
+    result: LocationStatus
+
+
+def get_class_clue_plays(
+    class_id: UUID, db: Session, start_date: date, end_date: date, offset: int, page_size: int
+) -> tuple[list[ClassCluePlay], int]:
+    """Read a page of classroom location records and the total matching the date range."""
+    period_start, period_end = _class_report_period(start_date, end_date)
+    query = (
+        select(
+            GameSession.student_id,
+            User.username,
+            GameSession.id,
+            GameSession.started_at,
+            SessionLocation.location_id,
+            SessionLocation.clue_plays,
+            SessionLocation.status,
+        )
+        .select_from(GameSession)
+        .join(User, User.id == GameSession.student_id)
+        .join(SessionLocation, SessionLocation.session_id == GameSession.id)
+        .where(
+            GameSession.class_id == class_id,
+            GameSession.started_at >= period_start,
+            GameSession.started_at < period_end,
+        )
+    )
+    total = db.scalar(select(func.count()).select_from(query.subquery()))
+    rows = db.execute(
+        query.order_by(
+            GameSession.started_at.desc(),
+            GameSession.id,
+            SessionLocation.position,
+            SessionLocation.id,
+        )
+        .offset(offset)
+        .limit(page_size)
+    )
+    return [
+        ClassCluePlay(
+            student_id,
+            username,
+            game_id,
+            started_at,
+            location_id,
+            clue_plays,
+            LocationStatus(status),
+        )
+        for (
+            student_id,
+            username,
+            game_id,
+            started_at,
+            location_id,
+            clue_plays,
+            status,
+        ) in rows
+    ], total or 0
+
+
 @dataclass(frozen=True)
 class StudentParticipation:
     """Participation grade for one enrolled student in a selected period."""
@@ -359,16 +439,10 @@ def get_class_participation(
 
     The service is read-only and does not commit or flush.
     """
-    if start_date > end_date:
-        raise AppError(ErrorCode.VALIDATION_ERROR, "start_date must not be after end_date")
     if target_locations < 1:
         raise AppError(ErrorCode.VALIDATION_ERROR, "target_locations must be positive")
 
-    timezone = ZoneInfo(get_settings().app_timezone)
-    period_start = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone)
-    period_end = datetime.combine(
-        end_date + timedelta(days=1), datetime.min.time(), tzinfo=timezone
-    )
+    period_start, period_end = _class_report_period(start_date, end_date)
 
     enrollments = db.execute(
         select(ClassEnrollment, User)
@@ -378,7 +452,9 @@ def get_class_participation(
     ).all()
 
     pair = tuple_(SessionLocation.location_id, GameSession.difficulty)
-    active_date = cast(func.timezone(timezone.key, SessionLocation.completed_at), Date)
+    active_date = cast(
+        func.timezone(get_settings().app_timezone, SessionLocation.completed_at), Date
+    )
     completions = {
         student_id: (count, active_days)
         for student_id, count, active_days in db.execute(
