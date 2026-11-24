@@ -399,7 +399,8 @@ class AchievementsResponse(BaseModel):
         "Return active achievements for the requested language, "
         "including global achievements and previously earned inactive "
         "achievements. Each item includes its unlock state and available "
-        "progress. Unlocked achievements appear newest first, followed "
+        "progress, including completed challenging locations for Challenge Master. "
+        "Unlocked achievements appear newest first, followed "
         "by locked achievements."
     ),
     responses=error_responses(
