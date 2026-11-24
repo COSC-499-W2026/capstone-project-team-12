@@ -40,6 +40,7 @@ from app.engagement.challenge_progress import record_challenge_progress
 from app.engagement.class_statistics import (
     LocationAnalytics,
     StudentAnalytics,
+    get_class_clue_plays,
     get_class_location_analytics,
     get_class_participation,
     get_class_student_analytics,
@@ -128,6 +129,7 @@ __all__ = [
     "LeaderboardEntry",
     "get_class_leaderboard",
     "LocationAnalytics",
+    "get_class_clue_plays",
     "get_class_location_analytics",
     "get_class_participation",
     "get_personal_statistics",
