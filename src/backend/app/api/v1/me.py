@@ -30,8 +30,7 @@ from app.engagement.interface import (
     validate_code_and_enrol,
 )
 from app.errors import AppError, ErrorCode, error_responses
-from app.game.history import list_history
-from app.game.interface import end_open_sessions
+from app.game.interface import end_open_sessions, list_history
 from app.models.accounts import User
 from app.models.enums import (
     DailyChallengeType,

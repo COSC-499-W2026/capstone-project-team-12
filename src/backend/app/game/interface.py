@@ -13,6 +13,8 @@ game_sessions. refuse_if_game_open raises the same 409 as starting a game.
 
 expire_idle_sessions: the expire-sessions job (spec, Scheduled Jobs) ends games that have been
 idle for the limit.
+
+list_history: GET /me/games reads one page of the student's finished games.
 """
 
 from datetime import UTC, datetime
@@ -21,6 +23,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.game.history import list_history
 from app.game.sessions import (
     abandon_sessions,
     expire_idle_sessions,
@@ -35,6 +38,7 @@ __all__ = [
     "end_open_sessions",
     "expire_idle_sessions",
     "get_open_session_id",
+    "list_history",
     "refuse_if_game_open",
 ]
 
