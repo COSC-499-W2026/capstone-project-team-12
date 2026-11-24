@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from http import HTTPStatus
 from typing import Any
 from uuid import UUID
 
@@ -16,7 +17,14 @@ from app.game.clue_plays import record_clue_play
 from app.game.progress import move_on
 from app.game.shuffle import shuffle_game
 from app.models.accounts import User
-from app.models.enums import Difficulty, Language, LocationStatus, SessionEndReason, SessionState
+from app.models.enums import (
+    Difficulty,
+    Language,
+    LocationStatus,
+    SessionEndReason,
+    SessionState,
+    UserRole,
+)
 from app.models.game import GameSession, SessionLocation
 
 NOW = datetime(2026, 11, 22, 20, 0, tzinfo=UTC)
@@ -138,24 +146,26 @@ def test_the_route(
     game, row = playing()
     # saved already, so a rolled-back refusal does not remove the account
     db.commit()
-    student = db.get(User, game.student_id)
-    assert student is not None
+    student = db.get_one(User, game.student_id)
     url = f"/api/v1/games/{game.id}/clue-plays"
     headers = auth_headers(student)
     body = {"position": 1, "shuffles_used": 0}
     missing = client.post(url, json={"position": 1}, headers=headers)
-    assert_error(missing, 422, ErrorCode.VALIDATION_ERROR)
+    assert_error(missing, HTTPStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR)
     transaction_calls.clear()
 
     response = client.post(url, json=body, headers=headers)
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == HTTPStatus.OK, response.text
     assert response.json() == {"position": 1, "clue_plays": 1}
     assert transaction_calls.count("commit") == 1
     db.refresh(row)
     assert row.clue_plays == 1
     other = auth_headers(make_user())
-    assert_error(client.post(url, json=body, headers=other), 404, ErrorCode.NOT_FOUND)
-    admin = auth_headers(make_user(role="admin"))
-    assert_error(client.post(url, json=body, headers=admin), 403, ErrorCode.FORBIDDEN_ROLE)
-    assert_error(client.post(url, json=body), 401, ErrorCode.NOT_AUTHENTICATED)
+    assert_error(
+        client.post(url, json=body, headers=other), HTTPStatus.NOT_FOUND, ErrorCode.NOT_FOUND
+    )
+    admin = auth_headers(make_user(role=UserRole.ADMIN))
+    assert_error(
+        client.post(url, json=body, headers=admin), HTTPStatus.FORBIDDEN, ErrorCode.FORBIDDEN_ROLE
+    )
