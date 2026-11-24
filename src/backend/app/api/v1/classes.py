@@ -328,6 +328,10 @@ class AnalyticsTotalsResponse(BaseModel):
     success_rate: float
     photo_attempts: int
     average_time_seconds: float | None
+    average_clue_plays: float | None = Field(
+        description="Mean clue plays per completed or failed location, including zero-play "
+        "results. Null when there are no finished results."
+    )
     flagged_results: int
     gps_overrides: int
 
@@ -350,7 +354,7 @@ class ClassAnalyticsResponse(BaseModel):
     summary="Get classroom location analytics",
     description=(
         "Return class totals and per-location success rates, photo attempts, completion "
-        "times, flags, and GPS overrides. Only completed and failed "
+        "times, average clue plays, flags, and GPS overrides. Only completed and failed "
         "classroom location results are included. Practice sessions "
         "are excluded. Per-location rows are identified by location ID. "
         "Class owners and assigned teaching assistants "
@@ -398,6 +402,10 @@ class StudentAnalyticsResponse(BaseModel):
     completed_locations: int
     failed_locations: int
     classroom_points: int
+    total_clue_plays: int = Field(
+        description="Total clue plays across the student's classroom games, including "
+        "locations that did not finish."
+    )
     success_rate: float
     last_activity_at: datetime | None
     streak_days: int
@@ -412,7 +420,7 @@ class StudentAnalyticsResponse(BaseModel):
     summary="Get individual student statistics for a classroom",
     description=(
         "Return classroom-specific progress for current and former students, "
-        "including sessions, completed and failed locations, points, and "
+        "including sessions, completed and failed locations, total clue plays, points, and "
         "success rates, plus global streaks and classroom flags. "
         "Difficulty hints use all finished results at each level in this class "
         "and require at least five results. "

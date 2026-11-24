@@ -79,6 +79,7 @@ def test_student_statistics_exclude_practice_and_other_classes(
         game,
         1,
         status=LocationStatus.COMPLETED,
+        clue_plays=4,
         points_awarded=100,
         completed_at=now,
         flags=["similar_photo"],
@@ -92,6 +93,7 @@ def test_student_statistics_exclude_practice_and_other_classes(
         game,
         3,
         status=LocationStatus.PENDING,
+        clue_plays=2,
         flags=["speed_anomaly"],
     )
     make_session_location(
@@ -99,6 +101,7 @@ def test_student_statistics_exclude_practice_and_other_classes(
         1,
         status=LocationStatus.COMPLETED,
         points_awarded=100,
+        clue_plays=10,
         completed_at=now - timedelta(days=1),
         flags=["speed_anomaly"],
     )
@@ -107,6 +110,7 @@ def test_student_statistics_exclude_practice_and_other_classes(
         1,
         status=LocationStatus.COMPLETED,
         points_awarded=100,
+        clue_plays=10,
         completed_at=now - timedelta(days=2),
     )
 
@@ -122,6 +126,7 @@ def test_student_statistics_exclude_practice_and_other_classes(
     assert result.completed_locations == 1
     assert result.failed_locations == 1
     assert result.classroom_points == 250
+    assert result.total_clue_plays == 6
     assert result.streak_days == 7
     assert result.flags == ["similar_photo"]
     assert result.success_rate == 50.0
@@ -157,6 +162,7 @@ def test_students_without_games_remain_visible(
     assert result.completed_locations == 0
     assert result.failed_locations == 0
     assert result.classroom_points == 0
+    assert result.total_clue_plays == 0
     assert result.success_rate == 0.0
     assert result.last_activity_at is None
 
