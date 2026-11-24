@@ -33,8 +33,8 @@ def playing(
     return partial(navigating_game, NOW, "app.game.clue_plays", location_id=location_id)
 
 
-def record(game: GameSession, db: Session, position: int = 1) -> int:
-    return record_clue_play(game.student_id, game.id, position, db)
+def record(game: GameSession, db: Session, position: int = 1, shuffles_used: int = 0) -> int:
+    return record_clue_play(game.student_id, game.id, position, shuffles_used, db)
 
 
 def test_each_play_adds_one_and_counts_as_a_game_action(
@@ -68,7 +68,7 @@ def test_plays_are_kept_per_location(
     assert (first.clue_plays, second.clue_plays) == (2, 1)
 
 
-def test_a_shuffled_in_location_starts_at_0(
+def test_a_late_play_from_before_a_shuffle_is_not_counted_for_the_new_location(
     db: Session, playing: Callable[..., Any], freeze_clock: Callable[..., None]
 ) -> None:
     game, old = playing()
@@ -83,16 +83,26 @@ def test_a_shuffled_in_location_starts_at_0(
         )
     ).one()
 
-    assert new.clue_plays == 0
-    assert record(game, db) == 1
-    assert old.clue_plays == 1
+    with pytest.raises(AppError) as error:
+        record(game, db, shuffles_used=0)
+
+    assert error.value.code == ErrorCode.STATE_CHANGED
+    assert error.value.details[0]["shuffles_used"] == 1
+    assert (old.clue_plays, new.clue_plays) == (1, 0)
+    assert record(game, db, shuffles_used=1) == 1
 
 
 @pytest.mark.parametrize(
-    ("game_fields", "position", "code"),
+    ("game_fields", "position", "shuffles_used", "code"),
     [
-        ({}, 2, ErrorCode.STATE_CHANGED),
-        ({"state": SessionState.PAUSED, "paused_at": AN_HOUR_AGO}, 1, ErrorCode.SESSION_NOT_ACTIVE),
+        ({}, 2, 0, ErrorCode.STATE_CHANGED),
+        ({}, 1, 1, ErrorCode.STATE_CHANGED),
+        (
+            {"state": SessionState.PAUSED, "paused_at": AN_HOUR_AGO},
+            1,
+            0,
+            ErrorCode.SESSION_NOT_ACTIVE,
+        ),
     ],
 )
 def test_refused_without_changes(
@@ -100,12 +110,13 @@ def test_refused_without_changes(
     playing: Callable[..., Any],
     game_fields: dict[str, Any],
     position: int,
+    shuffles_used: int,
     code: ErrorCode,
 ) -> None:
     game, row = playing(game=game_fields)
 
     with pytest.raises(AppError) as error:
-        record(game, db, position)
+        record(game, db, position, shuffles_used)
 
     assert error.value.code == code
     assert (row.clue_plays, game.last_activity_at) == (0, AN_HOUR_AGO)
@@ -138,12 +149,14 @@ def test_the_route(
     assert student is not None
     url = f"/api/v1/games/{game.id}/clue-plays"
     headers = auth_headers(student)
-    assert_error(client.post(url, json={}, headers=headers), 422, ErrorCode.VALIDATION_ERROR)
-    stale = client.post(url, json={"position": 2}, headers=headers)
+    body = {"position": 1, "shuffles_used": 0}
+    missing = client.post(url, json={"position": 1}, headers=headers)
+    assert_error(missing, 422, ErrorCode.VALIDATION_ERROR)
+    stale = client.post(url, json={**body, "position": 2}, headers=headers)
     assert_error(stale, 409, ErrorCode.STATE_CHANGED)
     transaction_calls.clear()
 
-    response = client.post(url, json={"position": 1}, headers=headers)
+    response = client.post(url, json=body, headers=headers)
 
     assert response.status_code == 200, response.text
     assert response.json() == {"position": 1, "clue_plays": 1}
@@ -151,9 +164,7 @@ def test_the_route(
     db.refresh(row)
     assert row.clue_plays == 1
     other = auth_headers(make_user())
-    assert_error(client.post(url, json={"position": 1}, headers=other), 404, ErrorCode.NOT_FOUND)
+    assert_error(client.post(url, json=body, headers=other), 404, ErrorCode.NOT_FOUND)
     admin = auth_headers(make_user(role="admin"))
-    assert_error(
-        client.post(url, json={"position": 1}, headers=admin), 403, ErrorCode.FORBIDDEN_ROLE
-    )
-    assert_error(client.post(url, json={"position": 1}), 401, ErrorCode.NOT_AUTHENTICATED)
+    assert_error(client.post(url, json=body, headers=admin), 403, ErrorCode.FORBIDDEN_ROLE)
+    assert_error(client.post(url, json=body), 401, ErrorCode.NOT_AUTHENTICATED)
