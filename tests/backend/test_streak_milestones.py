@@ -145,13 +145,38 @@ def test_streak_milestones_are_awarded_once(
         assert week_warrior.achievement_key not in second.achievements_unlocked
 
 
-def test_streak_below_seven_days_awards_no_milestone(
-    db: Session, make_user: Callable[..., User]
+def test_streak_below_seven_days_awards_no_milestone_or_week_warrior(
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
 ) -> None:
     student = make_user()
-    awarded = award_streak_milestones(student.id, 6, language=Language.JA, class_id=None, db=db)
-    assert awarded == 0
+    game, location = _prepare_completed_location(
+        db, student, make_game_session, make_session_location, streak_days=6
+    )
+    result = apply_location_result(
+        location.id,
+        student.id,
+        completed=True,
+        target_language=Language(game.target_language),
+        class_id=game.class_id,
+        db=db,
+    )
+    assert result.streak_days == 6
     assert _milestone_awards(db, student.id) == []
+    assert "week_warrior" not in result.achievements_unlocked
+    assert (
+        db.scalar(
+            select(UserAchievement.id)
+            .join(Achievement, Achievement.id == UserAchievement.achievement_id)
+            .where(
+                UserAchievement.user_id == student.id,
+                Achievement.achievement_key == "week_warrior",
+            )
+        )
+        is None
+    )
 
 
 def test_missed_day_resets_streak_but_preserves_best(

@@ -1,11 +1,11 @@
-"""Read-only classroom analytics services (A16)."""
+"""Read-only student statistics and classroom analytics."""
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Date, cast, extract, func, or_, select, tuple_
+from sqlalchemy import ColumnElement, Date, cast, extract, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -13,7 +13,13 @@ from app.engagement.streaks import app_calendar_date, visible_streak
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.engagement import ClassEnrollment, PointsLedger, UserAchievement, UserStats
-from app.models.enums import ArrivalOverride, Difficulty, DifficultySuggestion, LocationStatus
+from app.models.enums import (
+    ArrivalOverride,
+    Difficulty,
+    DifficultySuggestion,
+    Language,
+    LocationStatus,
+)
 from app.models.game import GameSession, SessionLocation
 
 
@@ -42,21 +48,67 @@ class ClassAnalytics:
     locations: list[LocationAnalytics]
 
 
+def _average_completed_time() -> ColumnElement[float | None]:
+    """Average timed completions, capping each location at 30 minutes."""
+    location = SessionLocation
+    elapsed = extract("epoch", location.completed_at - location.started_at)
+    return func.avg(func.least(func.greatest(elapsed, 0), 1800)).filter(
+        location.status == LocationStatus.COMPLETED,
+        location.started_at.is_not(None),
+        location.completed_at.is_not(None),
+    )
+
+
+@dataclass(frozen=True)
+class PersonalStatistics:
+    language: Language
+    difficulty: Difficulty
+    locations_completed: int
+    completion_rate: float
+    average_time_seconds: float | None
+
+
+def get_personal_statistics(player_id: UUID, db: Session) -> list[PersonalStatistics]:
+    """Summarize the player's completed and failed location results by game mode."""
+    rows = db.execute(
+        select(
+            GameSession.target_language,
+            GameSession.difficulty,
+            func.count(),
+            func.count().filter(SessionLocation.status == LocationStatus.COMPLETED),
+            _average_completed_time(),
+        )
+        .join(SessionLocation, SessionLocation.session_id == GameSession.id)
+        .where(
+            GameSession.student_id == player_id,
+            SessionLocation.status.in_((LocationStatus.COMPLETED, LocationStatus.FAILED)),
+        )
+        .group_by(GameSession.target_language, GameSession.difficulty)
+        .order_by(GameSession.target_language, GameSession.difficulty)
+    )
+    return [
+        PersonalStatistics(
+            language=Language(language),
+            difficulty=Difficulty(difficulty),
+            locations_completed=completed,
+            completion_rate=round(100 * completed / finished, 2),
+            average_time_seconds=round(float(seconds), 2) if seconds is not None else None,
+        )
+        for language, difficulty, finished, completed, seconds in rows
+    ]
+
+
 def get_class_location_analytics(class_id: UUID, db: Session) -> ClassAnalytics:
     """Aggregate finished classroom locations; completed times are capped at 30 minutes."""
     location = SessionLocation
     completed_filter = location.status == LocationStatus.COMPLETED
-    elapsed = extract("epoch", location.completed_at - location.started_at)
-    average = func.avg(func.least(func.greatest(elapsed, 0), 1800)).filter(
-        completed_filter, location.started_at.is_not(None), location.completed_at.is_not(None)
-    )
     rows = db.execute(
         select(
             location.location_id,
             func.count(),
             func.count().filter(completed_filter),
             func.coalesce(func.sum(location.attempts_used), 0),
-            average,
+            _average_completed_time(),
             func.count().filter(func.jsonb_array_length(location.flags) > 0),
             func.count().filter(location.arrival_override == ArrivalOverride.GPS_UNAVAILABLE),
         )
