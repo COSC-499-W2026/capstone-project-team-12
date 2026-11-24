@@ -11,6 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import (
@@ -40,6 +41,7 @@ from app.engagement.interface import (
 from app.errors import AppError, ErrorCode, error_responses
 from app.game.interface import end_open_sessions
 from app.models.accounts import User
+from app.models.content import Location
 from app.models.engagement import Class
 from app.models.enums import ClassStaffRole, Difficulty, DifficultySuggestion, Language
 
@@ -334,6 +336,9 @@ class AnalyticsTotalsResponse(BaseModel):
 
 class LocationAnalyticsResponse(AnalyticsTotalsResponse):
     location_id: UUID
+    label: str | None = Field(
+        default=None, description="Room number, included only for class owners."
+    )
 
 
 class ClassAnalyticsResponse(BaseModel):
@@ -346,6 +351,7 @@ class ClassAnalyticsResponse(BaseModel):
 @teacher_classes_router.get(
     "/{class_id}/analytics",
     response_model=ClassAnalyticsResponse,
+    response_model_exclude_unset=True,
     operation_id="getClassLocationAnalytics",
     summary="Get classroom location analytics",
     description=(
@@ -353,10 +359,10 @@ class ClassAnalyticsResponse(BaseModel):
         "times, flags, and GPS overrides. Only completed and failed "
         "classroom location results are included. Practice sessions "
         "are excluded. Per-location rows are identified by location ID. "
-        "Class owners and assigned teaching assistants "
-        "may access statistics, including for archived classrooms."
+        "Class owners receive the room number as a label when available. Assigned teaching "
+        "assistants receive only location IDs as identifiers. Both may view analytics for "
+        "archived classrooms."
     ),
-    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT))],
     responses=error_responses(
         HTTPStatus.UNAUTHORIZED,
         HTTPStatus.FORBIDDEN,
@@ -366,9 +372,24 @@ class ClassAnalyticsResponse(BaseModel):
 def get_class_analytics_endpoint(
     class_id: UUID,
     db: Annotated[Session, Depends(get_db)],
+    role: Annotated[
+        ClassStaffRole, Depends(require_class_role(ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT))
+    ],
 ) -> ClassAnalyticsResponse:
     """Return classroom location analytics without modifying data."""
-    return ClassAnalyticsResponse.model_validate(get_class_location_analytics(class_id, db))
+    analytics = ClassAnalyticsResponse.model_validate(get_class_location_analytics(class_id, db))
+    if role == ClassStaffRole.OWNER and analytics.locations:
+        room_numbers = {
+            location_id: room_number
+            for location_id, room_number in db.execute(
+                select(Location.id, Location.room_number).where(
+                    Location.id.in_([row.location_id for row in analytics.locations])
+                )
+            )
+        }
+        for row in analytics.locations:
+            row.label = room_numbers.get(row.location_id)
+    return analytics
 
 
 class DifficultyHintResponse(BaseModel):

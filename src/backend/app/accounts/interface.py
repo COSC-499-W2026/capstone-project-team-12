@@ -61,17 +61,17 @@ def get_current_user(
     return user
 
 
-def require_class_role(*allowed_roles: ClassStaffRole) -> Callable[..., None]:
-    """404 NOT_FOUND for an unknown class; 403 FORBIDDEN_ROLE without an allowed role."""
+def require_class_role(*allowed_roles: ClassStaffRole) -> Callable[..., ClassStaffRole]:
+    """Return the allowed class role, or raise 404 or 403."""
 
     def role_checker(
         user: Annotated[User, Depends(get_current_user)],
         class_id: Annotated[UUID, Path()],
         db: Annotated[Session, Depends(get_db)],
-    ) -> None:
+    ) -> ClassStaffRole:
         if db.get(Class, class_id) is None:
             raise AppError(ErrorCode.NOT_FOUND)
-        _check_class_role(user.id, class_id, allowed_roles, db)
+        return _check_class_role(user.id, class_id, allowed_roles, db)
 
     return role_checker
 
@@ -94,14 +94,15 @@ def require_code_class_role(*allowed_roles: ClassStaffRole) -> Callable[..., Non
 
 def _check_class_role(
     user_id: UUID, class_id: UUID, allowed_roles: tuple[ClassStaffRole, ...], db: Session
-) -> None:
+) -> ClassStaffRole:
     role = db.scalar(
         select(ClassStaff.role).where(
             ClassStaff.user_id == user_id, ClassStaff.class_id == class_id
         )
     )
-    if role not in allowed_roles:
+    if role is None or role not in allowed_roles:
         raise AppError(ErrorCode.FORBIDDEN_ROLE)
+    return ClassStaffRole(role)
 
 
 def require_admin(user: Annotated[User, Depends(get_current_user)]) -> None:
