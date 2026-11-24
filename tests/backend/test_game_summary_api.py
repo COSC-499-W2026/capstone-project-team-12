@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from game_fields import SUMMARY_FIELDS
 from httpx2 import Response
 from sqlalchemy.orm import Session
 
@@ -28,22 +29,6 @@ from app.models.enums import (
 from app.models.game import GameSession, SessionLocation
 
 URL = "/api/v1/games"
-SUMMARY_FIELDS = {
-    "session_id",
-    "state",
-    "end_reason",
-    "class_id",
-    "language",
-    "difficulty",
-    "current_position",
-    "shuffles_used",
-    "total_score",
-    "started_at",
-    "paused_at",
-    "locations",
-    "ended_at",
-    "engagement",
-}
 NOON = datetime(2026, 11, 2, 12, tzinfo=UTC)
 
 
