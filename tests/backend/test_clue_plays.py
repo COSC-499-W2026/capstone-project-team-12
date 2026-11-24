@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.errors import AppError, ErrorCode
 from app.game.clue_plays import record_clue_play
 from app.game.progress import move_on
+from app.game.sessions import session_idle_limit
 from app.game.shuffle import shuffle_game
 from app.models.accounts import User
 from app.models.enums import (
@@ -169,3 +170,31 @@ def test_the_route(
     assert_error(
         client.post(url, json=body, headers=admin), HTTPStatus.FORBIDDEN, ErrorCode.FORBIDDEN_ROLE
     )
+
+
+def test_the_route_commits_the_expiry_of_an_idle_game(
+    db: Session,
+    client: TestClient,
+    auth_headers: Callable[[User], dict[str, str]],
+    playing: Callable[..., Any],
+    transaction_calls: list[str],
+    assert_error: Callable[..., None],
+) -> None:
+    game, row = playing()
+    game.last_activity_at = NOW - session_idle_limit() - timedelta(minutes=1)
+    db.commit()
+    headers = auth_headers(db.get_one(User, game.student_id))
+    transaction_calls.clear()
+
+    response = client.post(
+        f"/api/v1/games/{game.id}/clue-plays",
+        json={"position": 1, "shuffles_used": 0},
+        headers=headers,
+    )
+
+    assert_error(response, HTTPStatus.CONFLICT, ErrorCode.SESSION_NOT_ACTIVE)
+    assert transaction_calls.count("commit") == 1
+    db.refresh(game)
+    db.refresh(row)
+    assert (game.state, game.end_reason) == (SessionState.ABANDONED, SessionEndReason.EXPIRED)
+    assert row.clue_plays == 0
