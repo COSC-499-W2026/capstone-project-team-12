@@ -183,13 +183,14 @@ def test_teacher_analytics_endpoint(
     teacher = make_user(role=UserRole.STAFF)
     school_class = make_class()
     make_class_staff(school_class, teacher)
-    second, fourth = make_location().id, make_location().id
+    second, fourth = make_location(), make_location()
+    expected_labels = {str(room.id): room.room_number for room in (second, fourth)}
 
     game = make_game_session(class_id=school_class.id)
     make_session_location(
         game,
         2,
-        location_id=second,
+        location_id=second.id,
         status=LocationStatus.COMPLETED,
         points_awarded=100,
         attempts_used=1,
@@ -197,7 +198,7 @@ def test_teacher_analytics_endpoint(
     )
 
     make_session_location(
-        game, 4, location_id=fourth, status=LocationStatus.FAILED, attempts_used=2
+        game, 4, location_id=fourth.id, status=LocationStatus.FAILED, attempts_used=2
     )
 
     response = client.get(
@@ -210,11 +211,8 @@ def test_teacher_analytics_endpoint(
     assert data["class_stats"]["finished"] == 2
     assert data["class_stats"]["success_rate"] == 50.0
     assert data["class_stats"]["photo_attempts"] == 3
-    assert [item["location_id"] for item in data["locations"]] == sorted(map(str, (second, fourth)))
-    assert all(
-        {"label", "room_number", "name", "location_name"}.isdisjoint(item)
-        for item in data["locations"]
-    )
+    assert [item["location_id"] for item in data["locations"]] == sorted(expected_labels)
+    assert {item["location_id"]: item["label"] for item in data["locations"]} == expected_labels
 
 
 @pytest.mark.parametrize("role", [UserRole.STAFF, UserRole.STUDENT])
@@ -265,6 +263,8 @@ def test_assistant_can_view_analytics(
     (row,) = response.json()["locations"]
     assert row["location_id"] == str(location.id)
     assert {"label", "room_number", "name", "location_name"}.isdisjoint(row)
+    assert location.room_number is not None
+    assert location.room_number not in response.text
 
 
 def test_unknown_class_cannot_be_read(
