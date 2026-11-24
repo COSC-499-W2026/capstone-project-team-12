@@ -6,11 +6,11 @@ from typing import Annotated, Self
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.email_links import cancel_waiting_reset_mail
-from app.accounts.interface import get_current_user, revoke_all_refresh_tokens
+from app.accounts.interface import get_current_user, require_player, revoke_all_refresh_tokens
 from app.accounts.password import hash_password, validate_password_security, verified_password_hash
 from app.accounts.profile import current_class_id, select_class, set_practice_language
 from app.accounts.tokens import create_refresh_token, set_refresh_cookie
@@ -23,6 +23,7 @@ from app.engagement.interface import (
     get_active_class_ids,
     get_and_report_streak,
     get_language_engagement_stats,
+    get_personal_statistics,
     leave_class,
     list_unlocked_achievements,
     validate_code_and_enrol,
@@ -134,12 +135,10 @@ def _profile(user: User, db: Session) -> ProfileResponse:
 )
 def update_profile(
     request: UpdateProfileRequest,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ProfileResponse:
     """Apply the changes in one transaction."""
-    if user.role == UserRole.ADMIN:
-        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
     if "current_class_id" in request.model_fields_set:
         select_class(user, request.current_class_id, db)
     if request.preferred_language is not None:
@@ -300,13 +299,10 @@ class EngagementStatsResponse(BaseModel):
 )
 def get_my_engagement(
     language: Language,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> EngagementStatsResponse:
     """Read the signed-in user's engagement statistics."""
-    if user.role == UserRole.ADMIN:
-        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
-
     now = datetime.now(UTC)
     daily_challenges = _daily_challenges_response(user.id, db, now)
     stats = get_language_engagement_stats(user.id, language, db)
@@ -412,13 +408,10 @@ class AchievementsResponse(BaseModel):
 )
 def get_my_achievements(
     language: Language,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AchievementsResponse:
     """Read the signed-in user's achievements."""
-    if user.role == UserRole.ADMIN:
-        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
-
     achievements = list_unlocked_achievements(user.id, language, db)
 
     return AchievementsResponse(
@@ -442,6 +435,46 @@ def get_my_achievements(
             for item in achievements
         ]
     )
+
+
+class PersonalStatisticsResponse(BaseModel):
+    """The player's historical results for one language and difficulty."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    language: Language
+    difficulty: Difficulty
+    locations_completed: int
+    completion_rate: float = Field(
+        description="Percentage of completed or failed results completed."
+    )
+    average_time_seconds: float | None = Field(
+        description="Mean time for timed completions, with each result capped at 1,800 seconds."
+    )
+
+
+@me_router.get(
+    "/statistics",
+    response_model=list[PersonalStatisticsResponse],
+    operation_id="getMyStatistics",
+    summary="Get my gameplay statistics",
+    description=(
+        "Return the signed-in player's completed location count, completion percentage, and "
+        "average completion time by language and difficulty, for classroom and Practice games. "
+        "Only completed and failed results count toward the percentage. Each completed location "
+        "contributes at most 30 minutes to the average. Groups without timed completions have "
+        "a null average. Players with no completed or failed results receive an empty list."
+    ),
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
+)
+def get_my_statistics(
+    user: Annotated[User, Depends(require_player)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[PersonalStatisticsResponse]:
+    return [
+        PersonalStatisticsResponse.model_validate(row)
+        for row in get_personal_statistics(user.id, db)
+    ]
 
 
 class GameHistoryItemResponse(BaseModel):
@@ -490,15 +523,13 @@ class GameHistoryResponse(BaseModel):
     responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
 )
 def list_my_games(
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
     language: Language | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> GameHistoryResponse:
     """Read one page of the history; an expiry done while reading is committed."""
-    if user.role == UserRole.ADMIN:
-        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
     history = list_history(user.id, language, page, page_size, db)
     db.commit()
     return GameHistoryResponse(

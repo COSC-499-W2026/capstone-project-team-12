@@ -43,6 +43,7 @@ from app.engagement.class_statistics import (
     get_class_location_analytics,
     get_class_participation,
     get_class_student_analytics,
+    get_personal_statistics,
 )
 from app.engagement.classes import (
     create_class,
@@ -129,6 +130,7 @@ __all__ = [
     "LocationAnalytics",
     "get_class_location_analytics",
     "get_class_participation",
+    "get_personal_statistics",
     "StudentAnalytics",
     "get_class_student_analytics",
 ]

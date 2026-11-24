@@ -27,6 +27,7 @@ __all__ = [
     "can_manage_content",
     "require_admin",
     "require_staff",
+    "require_player",
 ]
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
@@ -114,6 +115,13 @@ def require_staff(user: Annotated[User, Depends(get_current_user)]) -> None:
     students, including TAs, and admins are refused"""
     if user.role != UserRole.STAFF:
         raise AppError(ErrorCode.FORBIDDEN_ROLE, "Only staff accounts can do this.")
+
+
+def require_player(user: Annotated[User, Depends(get_current_user)]) -> User:
+    """Return the authenticated player, or raise FORBIDDEN_ROLE for an admin."""
+    if user.role == UserRole.ADMIN:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
+    return user
 
 
 def is_class_staff(user_id: UUID, class_id: UUID, db: Session) -> bool:
