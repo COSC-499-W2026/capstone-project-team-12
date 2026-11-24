@@ -1,8 +1,9 @@
-"""Admin API (A27): staff accounts and content rights.
+"""Admin API: staff accounts and content rights.
 
 Every route needs an admin account; anyone else gets 403 FORBIDDEN_ROLE, and a deactivated
 admin 403 ACCOUNT_DISABLED. Admin accounts are only created with the command-line tool, never
-here. Every action, including one refused with an error, is written to the audit log.
+here. Every change is recorded in the admin audit log; a refused request changes nothing, so
+it records nothing.
 """
 
 from datetime import datetime
@@ -10,7 +11,7 @@ from http import HTTPStatus
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
@@ -18,7 +19,7 @@ from app.accounts.interface import get_current_user, require_admin
 from app.accounts.register import email_is_valid, username_is_valid
 from app.accounts.staff import create_teacher
 from app.db import get_db
-from app.errors import AppError, error_responses
+from app.errors import error_responses
 from app.models.accounts import User
 from app.models.enums import UserRole
 
@@ -89,7 +90,6 @@ class StaffAccount(BaseModel):
 )
 def post_staff_account(
     fields: CreateStaffRequest,
-    request: Request,
     admin: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> StaffAccount:
@@ -98,22 +98,9 @@ def post_staff_account(
     the password is set.
 
     409 EMAIL_TAKEN if an account already has the address, 409 USERNAME_TAKEN if the username
-    is in use. Each attempt is recorded in the audit log as user_created: a success with the
-    new account, or a failure with the error code.
+    is in use. The new account is recorded in the admin audit log as create_staff.
     """
-    ip_address = request.client.host if request.client else None
-    try:
-        user = create_teacher(
-            admin.id,
-            fields.email,
-            fields.username,
-            fields.can_manage_content,
-            db,
-            ip_address=ip_address,
-        )
-    except AppError:
-        db.commit()  # keeps the FAILURE entry; nothing else was written
-        raise
+    user = create_teacher(admin.id, fields.email, fields.username, fields.can_manage_content, db)
     account = StaffAccount.model_validate(user)
     db.commit()
     return account

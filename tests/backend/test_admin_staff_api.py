@@ -1,5 +1,5 @@
 """POST /api/v1/admin/staff: an admin creates a teacher account, its set-password email is
-queued and the attempt is written to the audit log (A27)."""
+queued and the new account is recorded in the admin audit log."""
 
 from collections.abc import Callable
 from typing import Any
@@ -17,7 +17,7 @@ from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.audit import AuditEvent
 from app.models.email import EmailOutbox
-from app.models.enums import AuditAction, AuditResult, EmailKind, EmailStatus, UserRole
+from app.models.enums import AuditAction, EmailKind, EmailStatus, UserRole
 
 URL = "/api/v1/admin/staff"
 
@@ -34,27 +34,37 @@ def create_as(
     """POST a new teacher as `user`; `fields` override a valid body with unique values."""
 
     def send(user: User, **fields: Any) -> Response:
-        body = {"email": f"{uuid4().hex[:12]}@example.com", "username": f"t_{uuid4().hex[:8]}"}
-        return client.post(URL, json=body | fields, headers=auth_headers(user))
+        return client.post(URL, json=new_teacher() | fields, headers=auth_headers(user))
 
     return send
+
+
+def new_teacher() -> dict[str, str]:
+    """An address and a username no account has."""
+    return {"email": f"{uuid4().hex[:12]}@example.com", "username": f"t_{uuid4().hex[:8]}"}
 
 
 def audit_entries(db: Session, actor: User) -> list[AuditEvent]:
     return list(db.scalars(select(AuditEvent).where(AuditEvent.actor_id == actor.id)))
 
 
-def users_with_email(db: Session, email: str) -> int:
-    return db.scalar(select(func.count()).select_from(User).where(User.email == email)) or 0
+def user_count(db: Session) -> int:
+    return db.scalar(select(func.count()).select_from(User)) or 0
 
 
+@pytest.mark.parametrize("can_manage_content", [False, True], ids=["teacher", "content-manager"])
 def test_admin_creates_a_teacher_and_queues_a_set_password_email(
-    db: Session, admin: User, create_as: Callable[..., Response]
+    db: Session, admin: User, create_as: Callable[..., Response], can_manage_content: bool
 ) -> None:
     address = f"{uuid4().hex[:12]}@example.com"
     username = f"Sensei_{uuid4().hex[:6]}"
 
-    response = create_as(admin, email=f"  {address.upper()} ", username=username)
+    response = create_as(
+        admin,
+        email=f"  {address.upper()} ",
+        username=username,
+        can_manage_content=can_manage_content,
+    )
 
     assert response.status_code == 201, response.text
     body = response.json()
@@ -63,14 +73,14 @@ def test_admin_creates_a_teacher_and_queues_a_set_password_email(
     assert {key: body[key] for key in ("username", "role", "can_manage_content", "is_active")} == {
         "username": username,
         "role": UserRole.STAFF,
-        "can_manage_content": False,
+        "can_manage_content": can_manage_content,
         "is_active": True,
     }
     assert body["created_at"].endswith("Z")
     assert (teacher.email, teacher.role, teacher.can_manage_content) == (
         address,
         UserRole.STAFF,
-        False,
+        can_manage_content,
     )
     # no password until the teacher uses the link, and the address isn't verified yet
     assert teacher.password_hash is None and teacher.email_verified_at is None
@@ -84,151 +94,102 @@ def test_admin_creates_a_teacher_and_queues_a_set_password_email(
     assert mail.params == {}  # the link token is only made when the mail is sent
 
     [entry] = audit_entries(db, admin)
-    assert (entry.action, entry.result, entry.target_id) == (
-        AuditAction.CREATE_USER,
-        AuditResult.SUCCESS,
+    assert (entry.action, entry.target_user_id, entry.target_class_id) == (
+        AuditAction.CREATE_STAFF,
         teacher.id,
-    )
-    assert entry.details == {
-        "email": address,
-        "username": username,
-        "role": "staff",
-        "can_manage_content": False,
-    }
-    assert entry.ip_address == "testclient"  # TestClient's client host
-
-
-def test_admin_can_give_content_rights_when_creating(
-    db: Session, admin: User, create_as: Callable[..., Response]
-) -> None:
-    response = create_as(admin, can_manage_content=True)
-
-    assert response.status_code == 201, response.text
-    assert response.json()["can_manage_content"] is True
-    teacher = db.get_one(User, UUID(response.json()["id"]))
-    assert teacher.can_manage_content is True
-    [entry] = audit_entries(db, admin)
-    assert entry.details["can_manage_content"] is True
-
-
-def test_an_address_in_use_is_email_taken_and_audited_as_a_failure(
-    db: Session,
-    admin: User,
-    make_user: Callable[..., User],
-    create_as: Callable[..., Response],
-    assert_error: Callable[[Response, int, ErrorCode], None],
-) -> None:
-    existing = make_user(is_active=False)  # a deactivated account still holds its address
-    username = f"t_{uuid4().hex[:8]}"
-
-    # another case of the same address is the same address
-    response = create_as(admin, email=existing.email.upper(), username=username)
-
-    assert_error(response, 409, ErrorCode.EMAIL_TAKEN)
-    assert users_with_email(db, existing.email) == 1
-    assert db.scalar(select(User).where(User.username == username)) is None
-    assert db.scalar(select(EmailOutbox).where(EmailOutbox.user_id == existing.id)) is None
-    [entry] = audit_entries(db, admin)
-    assert (entry.action, entry.result, entry.target_id) == (
-        AuditAction.CREATE_USER,
-        AuditResult.FAILURE,
         None,
     )
-    assert entry.details == {
-        "email": existing.email,
-        "username": username,
-        "role": "staff",
-        "can_manage_content": False,
-        "error": "EMAIL_TAKEN",
-    }
+    assert entry.details == {"can_manage_content": can_manage_content}
 
 
-def test_a_username_in_use_in_any_case_is_username_taken(
+@pytest.mark.parametrize(
+    ("taken", "code"),
+    [("email", ErrorCode.EMAIL_TAKEN), ("username", ErrorCode.USERNAME_TAKEN)],
+)
+def test_an_email_or_username_in_use_in_any_case_is_409_and_nothing_is_written(
     db: Session,
     admin: User,
     make_user: Callable[..., User],
     create_as: Callable[..., Response],
     assert_error: Callable[[Response, int, ErrorCode], None],
+    taken: str,
+    code: ErrorCode,
 ) -> None:
-    existing = make_user()
-    address = f"{uuid4().hex[:12]}@example.com"
+    existing = make_user(is_active=False)  # a deactivated account still holds both
+    users_before = user_count(db)
 
-    response = create_as(admin, email=address, username=existing.username.upper())
+    # another case of the same address or username is the same one
+    response = create_as(admin, **{taken: getattr(existing, taken).upper()})
 
-    assert_error(response, 409, ErrorCode.USERNAME_TAKEN)
-    assert users_with_email(db, address) == 0
-    [entry] = audit_entries(db, admin)
-    assert entry.result == AuditResult.FAILURE and entry.details["error"] == "USERNAME_TAKEN"
+    assert_error(response, 409, code)
+    assert user_count(db) == users_before
+    assert db.scalar(select(EmailOutbox).where(EmailOutbox.user_id == existing.id)) is None
+    assert audit_entries(db, admin) == []
 
 
-def test_an_address_taken_after_the_check_is_still_email_taken_and_audited(
+@pytest.mark.parametrize(
+    ("check", "taken", "code"),
+    [
+        ("email_exists", "email", ErrorCode.EMAIL_TAKEN),
+        ("username_exists", "username", ErrorCode.USERNAME_TAKEN),
+    ],
+)
+def test_an_email_or_username_taken_after_the_check_is_still_409(
     db: Session,
     admin: User,
     make_user: Callable[..., User],
     monkeypatch: pytest.MonkeyPatch,
+    check: str,
+    taken: str,
+    code: ErrorCode,
 ) -> None:
-    """Another request adds the address between the check and the insert: the unique index
-    refuses it, and only the insert is rolled back, so the FAILURE entry is still recorded."""
+    """Another request takes the address or username between the check and the insert: the
+    unique index refuses the insert, and that is the same 409 as the check gives."""
     existing = make_user()
-    monkeypatch.setattr(staff, "email_exists", lambda *_: False)
+    monkeypatch.setattr(staff, check, lambda *_: False)
+    fields = new_teacher() | {taken: getattr(existing, taken).upper()}
 
     with pytest.raises(AppError) as raised:
-        create_teacher(admin.id, existing.email, f"t_{uuid4().hex[:8]}", False, db)
+        create_teacher(admin.id, fields["email"], fields["username"], False, db)
 
-    assert raised.value.code == ErrorCode.EMAIL_TAKEN
-    [entry] = audit_entries(db, admin)
-    assert entry.result == AuditResult.FAILURE and entry.details["error"] == "EMAIL_TAKEN"
-    assert users_with_email(db, existing.email) == 1
+    assert raised.value.code == code
 
 
 def test_create_teacher_does_not_commit(
-    db: Session, admin: User, monkeypatch: pytest.MonkeyPatch
+    db: Session, admin: User, transaction_calls: list[str]
 ) -> None:
-    # not transaction_calls: SQLAlchemy reports releasing the insert's savepoint as a commit too
-    commits: list[None] = []
-    monkeypatch.setattr(db, "commit", lambda: commits.append(None))
+    create_teacher(admin.id, **new_teacher(), can_manage_content=False, db=db)
 
-    create_teacher(admin.id, f"{uuid4().hex[:12]}@example.com", f"t_{uuid4().hex[:8]}", False, db)
-
-    assert commits == []
+    assert "commit" not in transaction_calls
+    assert "rollback" not in transaction_calls
 
 
 @pytest.mark.parametrize(
-    "fields",
+    ("fields", "code"),
     [
-        {"role": UserRole.STUDENT},
-        {"role": UserRole.STAFF},
-        {"role": UserRole.STAFF, "can_manage_content": True},
+        ({"role": UserRole.STUDENT}, ErrorCode.FORBIDDEN_ROLE),
+        ({"role": UserRole.STAFF}, ErrorCode.FORBIDDEN_ROLE),
+        ({"role": UserRole.STAFF, "can_manage_content": True}, ErrorCode.FORBIDDEN_ROLE),
+        ({"role": UserRole.ADMIN, "is_active": False}, ErrorCode.ACCOUNT_DISABLED),
     ],
-    ids=["student", "teacher", "content-manager"],
+    ids=["student", "teacher", "content-manager", "deactivated-admin"],
 )
-def test_non_admins_get_403_and_nothing_is_created(
+def test_only_active_admins_can_create_staff(
     db: Session,
     make_user: Callable[..., User],
     create_as: Callable[..., Response],
     assert_error: Callable[[Response, int, ErrorCode], None],
     fields: dict[str, Any],
+    code: ErrorCode,
 ) -> None:
     caller = make_user(**fields)
-    address = f"{uuid4().hex[:12]}@example.com"
+    users_before = user_count(db)
 
-    response = create_as(caller, email=address)
+    response = create_as(caller)
 
-    assert_error(response, 403, ErrorCode.FORBIDDEN_ROLE)
-    assert users_with_email(db, address) == 0
+    assert_error(response, 403, code)
+    assert user_count(db) == users_before
     assert audit_entries(db, caller) == []
-
-
-def test_a_deactivated_admin_gets_account_disabled(
-    db: Session,
-    make_user: Callable[..., User],
-    create_as: Callable[..., Response],
-    assert_error: Callable[[Response, int, ErrorCode], None],
-) -> None:
-    disabled = make_user(role=UserRole.ADMIN, is_active=False)
-
-    assert_error(create_as(disabled), 403, ErrorCode.ACCOUNT_DISABLED)
-    assert audit_entries(db, disabled) == []
 
 
 def test_without_a_token_the_request_is_401(
