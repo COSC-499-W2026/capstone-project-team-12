@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.game.scoring import score_finalized_location
 from app.models.accounts import User
+from app.models.content import AudioAsset, Clue, Location
 from app.models.engagement import Achievement, PointsLedger, UserAchievement
 from app.models.enums import (
     Difficulty,
@@ -353,3 +355,73 @@ def test_challenge_master_unlocks_only_once_at_ten_completions(
     assert japanese_badge["progress"] == {"current": 11, "required": 10}
     assert french_badge["unlocked"] is False
     assert french_badge["progress"] == {"current": 1, "required": 10}
+
+
+def test_campus_master_requires_every_playable_location_in_one_language(
+    client: TestClient,
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    make_location: Callable[..., Location],
+    make_clue: Callable[..., Clue],
+    make_audio_asset: Callable[..., AudioAsset],
+    playable_location_ids: Callable[..., list[UUID]],
+    limit_playable_locations: Callable[[int], None],
+    auth_headers: Callable[[User], dict[str, str]],
+) -> None:
+    student = make_user()
+    other = make_user()
+    key = "campus_master"
+    [basic] = playable_location_ids(count=1)
+    limit_playable_locations(1)
+    advanced = make_location()
+    make_audio_asset(make_clue(advanced, difficulty=Difficulty.ADVANCING), is_primary=True)
+    inactive = make_location(is_active=False)
+    make_audio_asset(make_clue(inactive), is_primary=True)
+    no_recording = make_location()
+    make_clue(no_recording)
+
+    def score(
+        player: User,
+        location_id: UUID,
+        difficulty: Difficulty = Difficulty.BASIC,
+        language: Language = Language.JA,
+        status: LocationStatus = LocationStatus.COMPLETED,
+    ) -> tuple[str, ...]:
+        now = datetime.now(UTC)
+        game = make_game_session(
+            player,
+            difficulty=difficulty,
+            target_language=language,
+            state=SessionState.COMPLETED,
+            completed_at=now,
+        )
+        completed = status == LocationStatus.COMPLETED
+        row = make_session_location(
+            game,
+            1,
+            location_id=location_id,
+            status=status,
+            completed_at=now if completed else None,
+            points_awarded=100 if completed else 0,
+        )
+        return score_finalized_location(game, row, db).achievements_unlocked
+
+    assert key not in score(student, basic)
+    assert key not in score(student, basic)
+    assert key not in score(other, advanced.id, Difficulty.ADVANCING)
+    assert key not in score(student, advanced.id, Difficulty.ADVANCING, Language.FR)
+    assert key not in score(
+        student, advanced.id, Difficulty.ADVANCING, status=LocationStatus.FAILED
+    )
+    before = _badge(_items(client, student, auth_headers), key)
+    assert before["progress"] == {"current": 1, "required": 2}
+    assert before["unlocked"] is False
+
+    assert key in score(student, advanced.id, Difficulty.ADVANCING)
+    assert key not in score(student, advanced.id, Difficulty.ADVANCING)
+    earned = _badge(_items(client, student, auth_headers), key)
+    assert earned["unlocked"] is True
+    assert earned["progress"] == {"current": 2, "required": 2}
+    assert _badge(_items(client, student, auth_headers, Language.FR), key)["unlocked"] is False

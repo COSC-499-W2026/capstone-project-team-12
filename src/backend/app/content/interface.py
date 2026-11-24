@@ -79,12 +79,11 @@ class LocationNotEligibleError(Exception):
     """The location is not (or no longer) eligible for the requested language and difficulty."""
 
 
-def _drawable(language: Language, difficulty: Difficulty, *columns: Any) -> Select[Any]:
-    """`columns` of each location drawable in `language` and `difficulty`, one row per location
-    (a clue per location, language and difficulty, and at most one primary recording per clue)."""
-    clue = and_(
-        Clue.location_id == Location.id, Clue.language == language, Clue.difficulty == difficulty
-    )
+def _drawable(language: Language, difficulty: Difficulty | None, *columns: Any) -> Select[Any]:
+    """Select drawable rows, with one row per location and matching difficulty."""
+    clue = and_(Clue.location_id == Location.id, Clue.language == language)
+    if difficulty is not None:
+        clue = and_(clue, Clue.difficulty == difficulty)
     return (
         select(*columns)
         .select_from(Location)
@@ -95,11 +94,12 @@ def _drawable(language: Language, difficulty: Difficulty, *columns: Any) -> Sele
 
 
 def eligible_location_ids(
-    language: Language, difficulty: Difficulty, db: Session
+    language: Language, difficulty: Difficulty | None, db: Session
 ) -> frozenset[UUID]:
     """IDs of every location that can be drawn for `language` and `difficulty`.
 
-    Empty while the language is missing a feedback phrase.
+    Pass None to include locations drawable at any difficulty. Empty while the
+    language is missing a feedback phrase.
     """
     if not get_audio_service().has_all_feedback_phrases(language, db):
         return frozenset()
