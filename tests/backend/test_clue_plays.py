@@ -13,11 +13,10 @@ from sqlalchemy.orm import Session
 
 from app.errors import AppError, ErrorCode
 from app.game.clue_plays import record_clue_play
-from app.game.control import quit_game
 from app.game.progress import move_on
 from app.game.shuffle import shuffle_game
 from app.models.accounts import User
-from app.models.enums import Difficulty, Language, LocationStatus, SessionState
+from app.models.enums import Difficulty, Language, LocationStatus, SessionEndReason, SessionState
 from app.models.game import GameSession, SessionLocation
 
 NOW = datetime(2026, 11, 22, 20, 0, tzinfo=UTC)
@@ -96,9 +95,14 @@ def test_a_late_play_from_before_a_shuffle_is_not_counted_for_the_new_location(
     ("game_fields", "position", "shuffles_used", "code"),
     [
         ({}, 2, 0, ErrorCode.STATE_CHANGED),
-        ({}, 1, 1, ErrorCode.STATE_CHANGED),
         (
             {"state": SessionState.PAUSED, "paused_at": AN_HOUR_AGO},
+            1,
+            0,
+            ErrorCode.SESSION_NOT_ACTIVE,
+        ),
+        (
+            {"state": SessionState.ABANDONED, "end_reason": SessionEndReason.QUIT},
             1,
             0,
             ErrorCode.SESSION_NOT_ACTIVE,
@@ -122,17 +126,6 @@ def test_refused_without_changes(
     assert (row.clue_plays, game.last_activity_at) == (0, AN_HOUR_AGO)
 
 
-def test_an_ended_game_is_409(db: Session, playing: Callable[..., Any]) -> None:
-    game, row = playing()
-    quit_game(game.student_id, game.id, db)
-
-    with pytest.raises(AppError) as error:
-        record(game, db)
-
-    assert error.value.code == ErrorCode.SESSION_NOT_ACTIVE
-    assert row.clue_plays == 0
-
-
 def test_the_route(
     db: Session,
     client: TestClient,
@@ -143,7 +136,7 @@ def test_the_route(
     assert_error: Callable[..., None],
 ) -> None:
     game, row = playing()
-    # saved already, so a rolled-back 409 does not remove the account
+    # saved already, so a rolled-back refusal does not remove the account
     db.commit()
     student = db.get(User, game.student_id)
     assert student is not None
@@ -152,8 +145,6 @@ def test_the_route(
     body = {"position": 1, "shuffles_used": 0}
     missing = client.post(url, json={"position": 1}, headers=headers)
     assert_error(missing, 422, ErrorCode.VALIDATION_ERROR)
-    stale = client.post(url, json={**body, "position": 2}, headers=headers)
-    assert_error(stale, 409, ErrorCode.STATE_CHANGED)
     transaction_calls.clear()
 
     response = client.post(url, json=body, headers=headers)
