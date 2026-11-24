@@ -108,6 +108,25 @@ def out_of_step(game: GameSession) -> AppError:
     )
 
 
+def moved_on(game: GameSession) -> AppError:
+    """409 STATE_CHANGED: the app's position is out of date (e.g. a very late retry)."""
+    return AppError(
+        ErrorCode.STATE_CHANGED,
+        "The game has moved on since this location",
+        details=[game_details(game)],
+    )
+
+
+def game_changed(game: GameSession) -> AppError:
+    """409 STATE_CHANGED with what the app needs to try again: the current shuffles_used, state
+    and position. The locations themselves come from GET /games/{id}."""
+    return AppError(
+        ErrorCode.STATE_CHANGED,
+        "The game changed since it was loaded",
+        details=[{**game_details(game), "shuffles_used": game.shuffles_used}],
+    )
+
+
 def inactive_location(game: GameSession) -> AppError:
     """409 STATE_CHANGED: the location was deactivated, and nothing is written."""
     return AppError(
