@@ -49,9 +49,6 @@ def expire_sessions() -> int:
                 "expire-sessions: stopped after %d full batches, the rest waits for the next run",
                 max_batches,
             )
-    # it runs every 5 minutes, so only log when something happened
-    if expired:
-        logger.info("expire-sessions: expired %d games", expired)
     return 0
 
 
