@@ -5,7 +5,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, PositiveInt
+from pydantic import BaseModel, Field, NonNegativeInt, PositiveInt
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
@@ -20,6 +20,9 @@ clue_plays_router = APIRouter(prefix="/games", tags=["games"])
 
 class CluePlayRequest(BaseModel):
     position: PositiveInt = Field(description="The position of the location whose clue played")
+    shuffles_used: NonNegativeInt = Field(
+        description="shuffles_used from the current location, so a play from before a shuffle fails"
+    )
 
 
 class CluePlayResponse(BaseModel):
@@ -44,8 +47,12 @@ def clue_play(
     """Count one play of the current location's clue: the first play and every replay.
 
     Feedback phrases don't count. 409 SESSION_NOT_ACTIVE if the game is paused, ended or
-    expired; STATE_CHANGED if `position` isn't the current location. 404 for another student's
-    game. 403 FORBIDDEN_ROLE or ACCOUNT_DISABLED.
+    expired; STATE_CHANGED if `position` or `shuffles_used` is out of date, with the current
+    values in the details. 404 for another student's game. 403 FORBIDDEN_ROLE or ACCOUNT_DISABLED.
     """
-    plays = play(lambda: record_clue_play(user.id, game_id, request.position, db), user, db)
+    plays = play(
+        lambda: record_clue_play(user.id, game_id, request.position, request.shuffles_used, db),
+        user,
+        db,
+    )
     return CluePlayResponse(position=request.position, clue_plays=plays)
