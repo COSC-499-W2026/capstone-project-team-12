@@ -16,7 +16,7 @@ from app.game.control import quit_game
 from app.game.current_location import Stage
 from app.game.photo import PhotoProgress, finish_photo_location, lock_photo_location
 from app.game.shuffle import shuffle_game
-from app.models.engagement import PointsLedger
+from app.models.engagement import Achievement, PointsLedger, UserAchievement
 from app.models.enums import Difficulty, Language, LocationStatus, SessionState, SkipReason
 from app.models.game import GameSession, SessionLocation
 
@@ -292,6 +292,70 @@ def test_a_match_at_the_last_location_completes_the_game(
     assert (progress.game_state, upcoming(progress)) == (SessionState.COMPLETED, None)
     assert (game.state, game.completed_at, game.paused_at) == (SessionState.COMPLETED, NOW, None)
     assert game.total_score == 100
+
+
+@pytest.mark.parametrize(
+    ("first_status", "shuffled", "expected_unlock"),
+    [
+        (LocationStatus.COMPLETED, False, True),
+        (LocationStatus.COMPLETED, True, True),
+        (LocationStatus.FAILED, False, False),
+        (LocationStatus.SKIPPED, False, False),
+    ],
+    ids=["all-completed", "shuffled-out-row", "failed", "skipped"],
+)
+def test_perfect_session_uses_the_five_live_location_results(
+    db: Session,
+    verifying_game: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    first_status: LocationStatus,
+    shuffled: bool,
+    expected_unlock: bool,
+) -> None:
+    game = verifying_game(locations=5)
+    for position in range(1, 4):
+        row = row_at(game, position, db)
+        row.status = first_status if position == 1 else LocationStatus.COMPLETED
+        if row.status == LocationStatus.COMPLETED:
+            row.points_awarded = 100
+            row.completed_at = NOW - timedelta(minutes=10)
+        elif row.status == LocationStatus.SKIPPED:
+            row.skip_reason = SkipReason.DEACTIVATED
+    if shuffled:
+        make_session_location(
+            game, 1, status=LocationStatus.SKIPPED, skip_reason=SkipReason.SHUFFLED
+        )
+
+    game.current_position = 4
+    fourth = row_at(game, 4, db)
+    fourth.status = LocationStatus.VERIFYING
+    fourth.arrived_at = NOW
+    db.flush()
+    progress = finish(game, True, db)
+    assert progress.engagement is not None
+    assert "perfect_session" not in progress.engagement.achievements_unlocked
+
+    fifth = row_at(game, 5, db)
+    fifth.status = LocationStatus.VERIFYING
+    fifth.arrived_at = NOW
+    db.flush()
+    progress = finish(game, True, db)
+    assert progress.game_state == SessionState.COMPLETED
+    assert progress.engagement is not None
+    assert ("perfect_session" in progress.engagement.achievements_unlocked) is expected_unlock
+    assert refused(lambda: finish_photo_location(game.student_id, game.id, fifth.id, True, db)) == (
+        ErrorCode.SESSION_NOT_ACTIVE
+    )
+
+    languages = db.scalars(
+        select(UserAchievement.language)
+        .join(Achievement, Achievement.id == UserAchievement.achievement_id)
+        .where(
+            UserAchievement.user_id == game.student_id,
+            Achievement.achievement_key == "perfect_session",
+        )
+    ).all()
+    assert languages == ([Language.JA] if expected_unlock else [])
 
 
 def test_a_paused_game_takes_the_result_and_stays_paused(

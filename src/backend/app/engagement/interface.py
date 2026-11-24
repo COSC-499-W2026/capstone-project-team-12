@@ -404,32 +404,29 @@ def apply_location_result(
             db.flush()
 
     challenges_completed: tuple[str, ...] = ()
+    achievements_unlocked: tuple[str, ...] = ()
     if awarded > 0:
-        # Use the finalized location's game difficulty; challenge progress is
-        # recorded only for a newly awarded completion, never for retries.
-        game_difficulty = db.scalar(
-            select(GameSession.difficulty)
+        # Reuse the finalized location's game for challenge progress and session badges.
+        game = db.execute(
+            select(GameSession.id, GameSession.difficulty)
             .join(SessionLocation, SessionLocation.session_id == GameSession.id)
             .where(
                 SessionLocation.id == session_location_id,
                 GameSession.student_id == student_id,
             )
-        )
-        if game_difficulty is None:
+        ).one_or_none()
+        if game is None:
             raise AppError(ErrorCode.NOT_FOUND)
         challenges_completed = record_challenge_progress(
             student_id,
-            difficulty=game_difficulty,
+            difficulty=game.difficulty,
             language=target_language,
             class_id=class_id,
             db=db,
         )
-
-    achievements_unlocked = (
-        unlock_completion_badges(student_id, target_language, db) if awarded > 0 else ()
-    )
-
-    if awarded > 0:
+        achievements_unlocked = unlock_completion_badges(
+            student_id, target_language, db, session_id=game.id
+        )
         streak_days = record_active_day(student_id, db)
         award_streak_milestones(
             student_id,
