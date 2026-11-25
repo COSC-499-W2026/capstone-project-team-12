@@ -70,8 +70,9 @@ def start_new_game(
 ) -> StartGameResponse:
     """Start a class game (`class_id`) or a Practice game (`language`).
 
-    Send exactly one of them. The game gets 5 different locations in the language. Locations the
-    student has not completed yet come first. After a quit the same day, the locations that were
+    Send exactly one of them. The game gets 5 different locations in the language; a Basic game
+    takes all 5 from one building, the one with the most the student hasn't completed. Locations
+    the student has not completed yet come first. After a quit the same day, the locations that were
     not played carry over to the new game, but not after a reset. Names, rooms and coordinates
     are never sent, only the first clue's audio link.
 
@@ -80,7 +81,8 @@ def start_new_game(
     new game starts. If the new game then fails (e.g. NOT_ENOUGH_CONTENT), nothing is committed,
     so the expiry is rolled back and the old game stays open until the next start or the expiry
     job.
-    409 NOT_ENOUGH_CONTENT if the language has fewer than 5 locations to draw.
+    409 NOT_ENOUGH_CONTENT if the language has fewer than 5 locations to draw (for Basic, in any
+    one building).
     409 CLASS_ARCHIVED for a student whose enrolment ended when the class was archived.
     404 NOT_FOUND for a class the student is not in, or if the first clue has no recording (also
     in a Practice game). 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.
@@ -431,7 +433,8 @@ def reset(
 
     A paused game can be reset too. Returns the new game, the same body as POST /games. The new
     locations are a fresh random draw: unplayed locations of a game quit earlier today don't come
-    back. Points already earned stay with the old game.
+    back, and a Basic game may move to another building. Points already earned stay with the old
+    game.
     409 RESET_LIMIT_REACHED after 3 resets today (local time). 409 NOT_ENOUGH_CONTENT if the
     language has too few locations; the current game is left as it is. 409 SESSION_NOT_ACTIVE
     for a game that has already ended, or one that has been idle for the expiry limit (24 hours
@@ -475,11 +478,12 @@ def shuffle(
     no longer matches, for example a retry of a shuffle that already happened; nothing changes,
     `details` holds the current `shuffles_used`, `state` and `current_position`, and the
     locations come from GET /games/{id}. 409 SHUFFLE_LIMIT_REACHED after 2 shuffles
-    in this game. 409 NOT_ENOUGH_CONTENT if there aren't enough new locations; the shuffle isn't
-    used up. 409 SESSION_NOT_ACTIVE for a paused game (resume first), a game that has ended, or
-    one that has been idle for the expiry limit (24 hours by default), which is expired. 404
-    NOT_FOUND for another student's game, or if the new clue has no recording. 403
-    FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.
+    in this game. 409 NOT_ENOUGH_CONTENT if there aren't enough new locations (in a Basic game,
+    in its building); the shuffle isn't used up. 409 SESSION_NOT_ACTIVE for a paused game
+    (resume first), a game that has ended, or one that has been idle for the expiry limit (24
+    hours by default), which is expired. 404 NOT_FOUND for another student's game, or if the new
+    clue has no recording. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
+    account.
     """
     shuffled = play(lambda: shuffle_game(user.id, game_id, request.shuffles_used, db), user, db)
     return ShuffledGameResponse(**asdict(shuffled.status), clue_audio_url=shuffled.clue_audio_url)
