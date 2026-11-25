@@ -104,6 +104,8 @@ class GameSession(Base):
     resume_count: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     shuffles_used: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     completed_at: Mapped[datetime | None]
+    # when the game was completed, quit, reset, expired or closed with its class; null while open
+    ended_at: Mapped[datetime | None]
     # sum of points_awarded, written in the same transaction as the points_ledger row
     total_score: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     created_at: Mapped[datetime] = created_at()

@@ -94,6 +94,7 @@ def move_on(game: GameSession, now: datetime, db: Session) -> None:
         return
     game.state = SessionState.COMPLETED
     game.completed_at = now
+    game.ended_at = now
     game.paused_at = None
     db.flush()
 
