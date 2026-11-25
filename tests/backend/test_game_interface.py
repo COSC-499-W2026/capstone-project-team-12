@@ -21,11 +21,18 @@ def test_archiving_ends_every_open_game_in_the_class(
     db: Session,
     make_class: Callable[..., Class],
     make_game_session: Callable[..., GameSession],
+    freeze_clock: Callable[..., None],
 ) -> None:
+    closed_at = datetime(2026, 11, 2, 15, tzinfo=UTC)
+    last_played = closed_at - timedelta(hours=5)
+    freeze_clock(closed_at, "app.game.sessions")
     school_class, other_class = make_class(), make_class()
-    active = make_game_session(class_id=school_class.id)
+    active = make_game_session(class_id=school_class.id, last_activity_at=last_played)
     paused = make_game_session(
-        class_id=school_class.id, state=SessionState.PAUSED, paused_at=datetime.now(UTC)
+        class_id=school_class.id,
+        state=SessionState.PAUSED,
+        paused_at=last_played,
+        last_activity_at=last_played,
     )
     elsewhere = make_game_session(class_id=other_class.id)
     practice = make_game_session()
@@ -37,6 +44,8 @@ def test_archiving_ends_every_open_game_in_the_class(
         assert game.state == SessionState.ABANDONED
         assert game.end_reason == SessionEndReason.CLASS_CLOSED
         assert game.paused_at is None
+        # the game ended when the class closed; the student's last action stays as it was
+        assert (game.ended_at, game.last_activity_at) == (closed_at, last_played)
     assert elsewhere.state == practice.state == SessionState.ACTIVE
 
 
