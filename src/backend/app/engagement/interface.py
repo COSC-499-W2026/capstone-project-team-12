@@ -127,6 +127,7 @@ __all__ = [
     "list_unlocked_achievements",
     "LeaderboardEntry",
     "get_class_leaderboard",
+    "view_class_leaderboard",
     "LocationAnalytics",
     "get_class_location_analytics",
     "get_class_participation",
@@ -533,6 +534,37 @@ def require_active_enrolment(student_id: UUID, class_id: UUID, db: Session) -> L
     if not is_actively_enrolled(student_id, class_id, db):
         raise not_found
     return language
+
+
+def view_class_leaderboard(
+    viewer_id: UUID, class_id: UUID, page: int, page_size: int, db: Session
+) -> tuple[list[LeaderboardEntry], int]:
+    """Check access and leaderboard settings, then return a page of rankings and the total."""
+    staff = (
+        db.scalar(
+            select(ClassStaff.user_id).where(
+                ClassStaff.user_id == viewer_id,
+                ClassStaff.class_id == class_id,
+                ClassStaff.role.in_((ClassStaffRole.OWNER, ClassStaffRole.ASSISTANT)),
+            )
+        )
+        is not None
+    )
+    if not staff:
+        require_active_enrolment(viewer_id, class_id, db)
+
+    school_class = db.get_one(Class, class_id)
+    if not school_class.leaderboard_enabled:
+        raise AppError(ErrorCode.LEADERBOARD_DISABLED)
+
+    entries = get_class_leaderboard(
+        class_id,
+        db,
+        viewer_id=viewer_id,
+        include_archived_enrolments=staff and school_class.archived_at is not None,
+    )
+    offset = (page - 1) * page_size
+    return entries[offset : offset + page_size], len(entries)
 
 
 def _lock_class(class_id: UUID, db: Session) -> Class:

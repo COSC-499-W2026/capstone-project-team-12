@@ -1,7 +1,7 @@
 """Class leaderboard scoring queries for A14 (#88).
 
-This module contains read-only scoring logic. HTTP authorization and
-leaderboard-enabled checks belong to the API layer.
+This module contains read-only scoring logic. Access and leaderboard-enabled checks
+live in view_class_leaderboard in the engagement interface.
 """
 
 from dataclasses import dataclass

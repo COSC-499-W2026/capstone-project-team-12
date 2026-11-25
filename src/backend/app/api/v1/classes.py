@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session
 
 from app.accounts.interface import (
     get_current_user,
-    is_class_staff,
     require_class_role,
     require_code_class_role,
     require_staff,
@@ -27,21 +26,19 @@ from app.engagement.interface import (
     create_class,
     deactivate_access_code,
     generate_access_code,
-    get_class_leaderboard,
     get_class_location_analytics,
     get_class_participation,
     get_class_student_analytics,
     list_class_access_codes,
     list_staff_classes,
     remove_student,
-    require_active_enrolment,
     restore_student,
     update_class_settings,
+    view_class_leaderboard,
 )
-from app.errors import AppError, ErrorCode, error_responses
+from app.errors import error_responses
 from app.game.interface import end_open_sessions
 from app.models.accounts import User
-from app.models.engagement import Class
 from app.models.enums import ClassStaffRole, Difficulty, DifficultySuggestion, Language
 
 leaderboard_router = APIRouter(prefix="/classes", tags=["classes"])
@@ -95,20 +92,7 @@ def get_class_leaderboard_endpoint(
     params: Annotated[PageParams, Depends(page_params)],
 ) -> ClassLeaderboardResponse:
     """Return class rankings to enrolled students and assigned staff."""
-    staff = is_class_staff(user.id, class_id, db)
-    if not staff:
-        require_active_enrolment(user.id, class_id, db)
-
-    school_class = db.get_one(Class, class_id)
-    if not school_class.leaderboard_enabled:
-        raise AppError(ErrorCode.LEADERBOARD_DISABLED)
-
-    entries = get_class_leaderboard(
-        class_id,
-        db,
-        viewer_id=user.id,
-        include_archived_enrolments=staff and school_class.archived_at is not None,
-    )
+    entries, total = view_class_leaderboard(user.id, class_id, params.page, params.page_size, db)
     items = [
         LeaderboardItem(
             rank=entry.rank,
@@ -116,9 +100,9 @@ def get_class_leaderboard_endpoint(
             total_points=entry.total_points,
             is_me=entry.is_me,
         )
-        for entry in entries[params.offset : params.offset + params.page_size]
+        for entry in entries
     ]
-    return ClassLeaderboardResponse.of(items, params, len(entries))
+    return ClassLeaderboardResponse.of(items, params, total)
 
 
 class CreateClassRequest(BaseModel):
