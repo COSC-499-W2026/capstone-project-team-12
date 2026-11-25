@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, PositiveInt, model_validator
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import get_current_user
+from app.accounts.interface import get_current_user, require_player
 from app.api.v1.game_actions import play
 from app.api.v1.game_responses import (
     CurrentLocationResponse,
@@ -28,7 +28,7 @@ from app.game.start import start_game
 from app.game.status import GameStatus, find_current_game, get_game
 from app.game.summary import GameSummary, get_summary
 from app.models.accounts import User
-from app.models.enums import ArrivalOverride, Difficulty, Language, SessionState, UserRole
+from app.models.enums import ArrivalOverride, Difficulty, Language, SessionState
 
 games_router = APIRouter(prefix="/games", tags=["games"])
 
@@ -100,7 +100,7 @@ def start_new_game(
     responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND),
 )
 def current_game(
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GameStatusResponse:
     """The student's open (active or paused) game, with the status of each location.
@@ -109,8 +109,6 @@ def current_game(
     default) is expired when it is read, so it gives 404 too. 403 FORBIDDEN_ROLE for an admin,
     ACCOUNT_DISABLED for a disabled account.
     """
-    if user.role == UserRole.ADMIN:
-        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
     status = find_current_game(user.id, db)
     # commit before the 404, so an expiry done while reading is kept
     db.commit()
@@ -127,7 +125,7 @@ def current_game(
 )
 def game_status(
     game_id: UUID,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GameStatusResponse:
     """One of the student's games, open or finished, with the status of each location.
@@ -136,8 +134,6 @@ def game_status(
     game that has been idle for the expiry limit (24 hours by default) is expired when it is read.
     403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.
     """
-    if user.role == UserRole.ADMIN:
-        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
     status = get_game(user.id, game_id, db)
     db.commit()
     return GameStatusResponse.model_validate(status, from_attributes=True)
@@ -151,7 +147,7 @@ def game_status(
 )
 def game_summary(
     game_id: UUID,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GameSummaryResponse:
     """The summary of one of the student's games: the game status (each location's result and
@@ -163,8 +159,6 @@ def game_summary(
     expired when it is read. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
     account.
     """
-    if user.role == UserRole.ADMIN:
-        raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
     summary = get_summary(user.id, game_id, db)
     db.commit()
     return summary_response(summary)
@@ -180,7 +174,7 @@ def game_summary(
 )
 def current_location(
     game_id: UUID,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> CurrentLocationResponse | GameSummaryResponse:
     """The current location of the student's game: position, stage (`navigation` or
@@ -207,7 +201,7 @@ def current_location(
         # the last location was skipped, so the game is over: its summary, in this transaction
         return get_summary(user.id, game_id, db) if isinstance(found, GameStatus) else found
 
-    result = play(current_or_summary, user, db)
+    result = play(current_or_summary, db)
     if isinstance(result, GameSummary):
         return summary_response(result)
     return CurrentLocationResponse.model_validate(result, from_attributes=True)
@@ -246,7 +240,7 @@ class PingResponse(BaseModel):
 def navigation_ping(
     game_id: UUID,
     request: PingRequest,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PingResponse:
     """Send the student's position in Stage 1, about every 5 seconds.
@@ -270,7 +264,7 @@ def navigation_ping(
     for a disabled account.
     """
     ping = Ping(request.lat, request.lng, request.accuracy_m)
-    outcome = play(lambda: process_ping(user.id, game_id, ping, db), user, db)
+    outcome = play(lambda: process_ping(user.id, game_id, ping, db), db)
     return PingResponse(
         trend=outcome.trend,
         can_confirm=outcome.can_confirm,
@@ -304,7 +298,7 @@ class ArrivalResponse(CurrentLocationResponse):
 def navigation_confirm_arrival(
     game_id: UUID,
     request: ArrivalRequest,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ArrivalResponse:
     """Confirm arrival and start Stage 2, plus VERIFY_START.
@@ -320,7 +314,6 @@ def navigation_confirm_arrival(
     """
     arrival = play(
         lambda: confirm_arrival(user.id, game_id, request.override_reason, request.position, db),
-        user,
         db,
     )
     feedback = FeedbackResponse(code=arrival.feedback, audio_url=arrival.feedback_audio_url)
@@ -343,7 +336,7 @@ class PausedGameResponse(GameStatusResponse):
 )
 def pause(
     game_id: UUID,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PausedGameResponse:
     """Pause the student's game. The current location keeps its stage and attempts.
@@ -354,7 +347,7 @@ def pause(
     expiry limit, which is expired. 404 NOT_FOUND for another student's game. 403 FORBIDDEN_ROLE
     for an admin, ACCOUNT_DISABLED for a disabled account.
     """
-    paused = play(lambda: pause_game(user.id, game_id, db), user, db)
+    paused = play(lambda: pause_game(user.id, game_id, db), db)
     return PausedGameResponse(**asdict(paused.status), expires_at=paused.expires_at)
 
 
@@ -368,7 +361,7 @@ def pause(
 )
 def resume(
     game_id: UUID,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GameStatusResponse:
     """Resume the student's paused game where it was left.
@@ -378,7 +371,7 @@ def resume(
     SESSION_NOT_ACTIVE, the same as a completed or abandoned game. 404 NOT_FOUND for another
     student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.
     """
-    status = play(lambda: resume_game(user.id, game_id, db), user, db)
+    status = play(lambda: resume_game(user.id, game_id, db), db)
     return GameStatusResponse.model_validate(status, from_attributes=True)
 
 
@@ -392,7 +385,7 @@ def resume(
 )
 def quit_the_game(
     game_id: UUID,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GameSummaryResponse:
     """End the student's game (abandoned, end reason quit). A paused game can be quit too.
@@ -410,7 +403,7 @@ def quit_the_game(
         quit_game(user.id, game_id, db)
         return get_summary(user.id, game_id, db)
 
-    return summary_response(play(quit_and_summarize, user, db))
+    return summary_response(play(quit_and_summarize, db))
 
 
 @games_router.post(
@@ -424,7 +417,7 @@ def quit_the_game(
 )
 def reset(
     game_id: UUID,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> StartGameResponse:
     """End the student's game and start a new one with the same class, language and difficulty.
@@ -439,7 +432,7 @@ def reset(
     clue has no recording. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
     account.
     """
-    started = play(lambda: reset_game(user.id, game_id, db), user, db)
+    started = play(lambda: reset_game(user.id, game_id, db), db)
     return StartGameResponse.model_validate(started, from_attributes=True)
 
 
@@ -464,7 +457,7 @@ class ShuffledGameResponse(GameStatusResponse):
 def shuffle(
     game_id: UUID,
     request: ShuffleRequest,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ShuffledGameResponse:
     """Replace the unfinished locations of the student's game (the current one and those still
@@ -481,5 +474,5 @@ def shuffle(
     NOT_FOUND for another student's game, or if the new clue has no recording. 403
     FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled account.
     """
-    shuffled = play(lambda: shuffle_game(user.id, game_id, request.shuffles_used, db), user, db)
+    shuffled = play(lambda: shuffle_game(user.id, game_id, request.shuffles_used, db), db)
     return ShuffledGameResponse(**asdict(shuffled.status), clue_audio_url=shuffled.clue_audio_url)

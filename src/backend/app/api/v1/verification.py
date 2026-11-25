@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import get_current_user
+from app.accounts.interface import require_player
 from app.api.rate_limit import photo_rate_limit
 from app.api.v1.game_actions import play
 from app.api.v1.game_responses import FeedbackResponse, GameSummaryResponse, summary_response
@@ -93,7 +93,7 @@ class PhotoResponse(BaseModel):
 def upload_photo(
     game_id: UUID,
     photo: UploadFile,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PhotoResponse:
     """Send a photo of the room sign for the current location, in Stage 2.
@@ -121,7 +121,7 @@ def upload_photo(
     another student's game. 403 FORBIDDEN_ROLE for an admin, ACCOUNT_DISABLED for a disabled
     account. 429 RATE_LIMITED over 10 uploads a minute (by default), refused files included.
     """
-    return play(lambda: _check_photo(user.id, game_id, photo, db), user, db)
+    return play(lambda: _check_photo(user.id, game_id, photo, db), db)
 
 
 def _check_photo(student_id: UUID, game_id: UUID, photo: UploadFile, db: Session) -> PhotoResponse:
