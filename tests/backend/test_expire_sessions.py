@@ -253,7 +253,8 @@ def test_the_command_expires_idle_games_up_to_its_batch_cap(
         assert f"stopped after {max_batches} full batches" in caplog.text
     else:
         assert "stopped after" not in caplog.text
-    assert len(caplog.records) == len(batch_lines) + int(warned)
+    # count only app.cli records; other loggers in caplog would break the assert
+    assert len([r for r in caplog.records if r.name == "app.cli"]) == len(batch_lines) + int(warned)
     if warned:
         (left,) = [game for game in games if game.end_reason != SessionEndReason.EXPIRED]
         assert left.state == SessionState.ACTIVE
