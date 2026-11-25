@@ -54,6 +54,15 @@ def find_current_game(student_id: UUID, db: Session) -> GameStatus | None:
     A game idle for the expiry time is expired first (spec: expiry is checked whenever a game is
     read), so it is never returned. The expiry is written with an UPDATE; doesn't commit.
     """
+    game = expire_open_game(student_id, db)
+    return None if game is None else status_of(game, db)
+
+
+def expire_open_game(student_id: UUID, db: Session) -> GameSession | None:
+    """The student's open game after expiring it if idle; None if there is none or it expired.
+
+    The expiry is written with an UPDATE; doesn't commit.
+    """
     game = db.scalar(
         select(GameSession).where(
             GameSession.student_id == student_id, GameSession.state.in_(OPEN_SESSION_STATES)
@@ -62,9 +71,7 @@ def find_current_game(student_id: UUID, db: Session) -> GameStatus | None:
     if game is None:
         return None
     expire_if_idle(game, db)
-    if game.state not in OPEN_SESSION_STATES:
-        return None
-    return status_of(game, db)
+    return game if game.state in OPEN_SESSION_STATES else None
 
 
 def get_game(student_id: UUID, game_id: UUID, db: Session) -> GameStatus:
