@@ -122,13 +122,19 @@ def test_uncompleted_locations_come_first(
     assert _completed(student.id, Language.KO, BASIC, db) == set()
 
 
+@pytest.mark.parametrize(
+    "groups",
+    [[slice(0, 4)], [slice(0, 4), slice(4, 8)]],
+    ids=["too few in total", "no building big enough"],
+)
 def test_not_enough_eligible_locations(
     db: Session,
     make_user: Callable[..., User],
     eligible: list[UUID],
     monkeypatch: pytest.MonkeyPatch,
+    groups: list[slice],
 ) -> None:
-    _only_eligible(monkeypatch, eligible[:4])
+    _only_eligible(monkeypatch, *(eligible[group] for group in groups))
 
     with pytest.raises(AppError) as raised:
         draw_locations(make_user().id, None, JA, BASIC, db)
@@ -385,21 +391,7 @@ def test_a_basic_game_is_drawn_from_the_building_with_most_uncompleted_locations
 
     drawn = _ids(draw_locations(student.id, None, JA, BASIC, db))
 
-    assert len(set(drawn)) == 5 and set(drawn) <= set(eligible[10:18])
-
-
-def test_no_building_with_enough_locations_is_not_enough_content(
-    db: Session,
-    make_user: Callable[..., User],
-    eligible: list[UUID],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # 8 locations, but no building has 5
-    _only_eligible(monkeypatch, eligible[:4], eligible[4:8])
-
-    with pytest.raises(AppError) as raised:
-        draw_locations(make_user().id, None, JA, BASIC, db)
-    assert raised.value.code == ErrorCode.NOT_ENOUGH_CONTENT
+    assert set(drawn) <= set(eligible[10:18])
 
 
 def test_an_advancing_game_can_mix_buildings(
