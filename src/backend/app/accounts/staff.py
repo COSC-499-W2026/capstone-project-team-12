@@ -29,7 +29,9 @@ def create_teacher(
     badly formed; 409 EMAIL_TAKEN or USERNAME_TAKEN if another account has either one.
     """
     # no password: the teacher sets it from the emailed link
-    user = insert_user(email, username, None, UserRole.STAFF, can_manage_content, db)
+    user = insert_user(
+        email, username, None, role=UserRole.STAFF, can_manage_content=can_manage_content, db=db
+    )
     EmailService.queue_email(user, EmailKind.SET_PASSWORD, db)  # the token is made when sent
     # the account itself holds the address and username, so the entry only adds the rights
     # it started with

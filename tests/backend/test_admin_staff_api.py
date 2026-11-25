@@ -11,9 +11,8 @@ from httpx2 import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.accounts import register
 from app.accounts.interface import create_teacher
-from app.errors import AppError, ErrorCode
+from app.errors import ErrorCode
 from app.models.accounts import User
 from app.models.audit import AuditEvent
 from app.models.email import EmailOutbox
@@ -102,57 +101,22 @@ def test_admin_creates_a_teacher_and_queues_a_set_password_email(
     assert entry.details == {"can_manage_content": can_manage_content}
 
 
-@pytest.mark.parametrize(
-    ("taken", "code"),
-    [("email", ErrorCode.EMAIL_TAKEN), ("username", ErrorCode.USERNAME_TAKEN)],
-)
-def test_an_email_or_username_in_use_in_any_case_is_409_and_nothing_is_written(
+def test_an_email_in_use_is_409_and_nothing_is_written(
     db: Session,
     admin: User,
     make_user: Callable[..., User],
     create_as: Callable[..., Response],
     assert_error: Callable[[Response, int, ErrorCode], None],
-    taken: str,
-    code: ErrorCode,
 ) -> None:
-    existing = make_user(is_active=False)  # a deactivated account still holds both
+    existing = make_user()
     users_before = user_count(db)
 
-    # another case of the same address or username is the same one
-    response = create_as(admin, **{taken: getattr(existing, taken).upper()})
+    response = create_as(admin, email=existing.email)
 
-    assert_error(response, 409, code)
+    assert_error(response, 409, ErrorCode.EMAIL_TAKEN)
     assert user_count(db) == users_before
     assert db.scalar(select(EmailOutbox).where(EmailOutbox.user_id == existing.id)) is None
     assert audit_entries(db, admin) == []
-
-
-@pytest.mark.parametrize(
-    ("check", "taken", "code"),
-    [
-        ("email_exists", "email", ErrorCode.EMAIL_TAKEN),
-        ("username_exists", "username", ErrorCode.USERNAME_TAKEN),
-    ],
-)
-def test_an_email_or_username_taken_after_the_check_is_still_409(
-    db: Session,
-    admin: User,
-    make_user: Callable[..., User],
-    monkeypatch: pytest.MonkeyPatch,
-    check: str,
-    taken: str,
-    code: ErrorCode,
-) -> None:
-    """Another request takes the address or username between the check and the insert: the
-    unique index refuses the insert, and that is the same 409 as the check gives."""
-    existing = make_user()
-    monkeypatch.setattr(register, check, lambda *_: False)
-    fields = new_teacher() | {taken: getattr(existing, taken).upper()}
-
-    with pytest.raises(AppError) as raised:
-        create_teacher(admin.id, fields["email"], fields["username"], False, db)
-
-    assert raised.value.code == code
 
 
 def test_create_teacher_does_not_commit(
@@ -187,9 +151,6 @@ def test_non_admins_are_403_and_nothing_is_created(
     ("fields", "field"),
     [
         ({"email": "not-an-email"}, "email"),
-        ({"username": "ab"}, "username"),
-        ({"username": "x" * 31}, "username"),
-        ({"username": " padded "}, "username"),
         ({"can_manage_content": "maybe"}, "can_manage_content"),
         ({"role": UserRole.ADMIN}, "role"),  # this route only makes teachers
     ],

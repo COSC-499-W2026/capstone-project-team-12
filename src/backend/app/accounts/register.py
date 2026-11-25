@@ -36,7 +36,12 @@ USERNAME_TAKEN_MESSAGE = "This username is already in use."
 def register_account(request: RegisterRequest, db: Session) -> User:
     validate_password_security(request.password)
     user = insert_user(
-        request.email, request.username, request.password, UserRole.STUDENT, False, db
+        request.email,
+        request.username,
+        request.password,
+        role=UserRole.STUDENT,
+        can_manage_content=False,
+        db=db,
     )
     EmailService.queue_email(user, EmailKind.VERIFY_EMAIL, db)  # spec: sign-up sends it
     if request.access_code is not None:
