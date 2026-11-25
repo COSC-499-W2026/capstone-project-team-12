@@ -11,8 +11,8 @@ from httpx2 import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.accounts import staff
-from app.accounts.staff import create_teacher
+from app.accounts import register
+from app.accounts.interface import create_teacher
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.audit import AuditEvent
@@ -146,7 +146,7 @@ def test_an_email_or_username_taken_after_the_check_is_still_409(
     """Another request takes the address or username between the check and the insert: the
     unique index refuses the insert, and that is the same 409 as the check gives."""
     existing = make_user()
-    monkeypatch.setattr(staff, check, lambda *_: False)
+    monkeypatch.setattr(register, check, lambda *_: False)
     fields = new_teacher() | {taken: getattr(existing, taken).upper()}
 
     with pytest.raises(AppError) as raised:
@@ -164,39 +164,23 @@ def test_create_teacher_does_not_commit(
     assert "rollback" not in transaction_calls
 
 
-@pytest.mark.parametrize(
-    ("fields", "code"),
-    [
-        ({"role": UserRole.STUDENT}, ErrorCode.FORBIDDEN_ROLE),
-        ({"role": UserRole.STAFF}, ErrorCode.FORBIDDEN_ROLE),
-        ({"role": UserRole.STAFF, "can_manage_content": True}, ErrorCode.FORBIDDEN_ROLE),
-        ({"role": UserRole.ADMIN, "is_active": False}, ErrorCode.ACCOUNT_DISABLED),
-    ],
-    ids=["student", "teacher", "content-manager", "deactivated-admin"],
-)
-def test_only_active_admins_can_create_staff(
+@pytest.mark.parametrize("role", [UserRole.STUDENT, UserRole.STAFF])
+def test_non_admins_are_403_and_nothing_is_created(
     db: Session,
     make_user: Callable[..., User],
     create_as: Callable[..., Response],
     assert_error: Callable[[Response, int, ErrorCode], None],
-    fields: dict[str, Any],
-    code: ErrorCode,
+    role: UserRole,
 ) -> None:
-    caller = make_user(**fields)
+    """test_role_access.py covers require_admin itself; this only checks that the route uses it."""
+    caller = make_user(role=role)
     users_before = user_count(db)
 
     response = create_as(caller)
 
-    assert_error(response, 403, code)
+    assert_error(response, 403, ErrorCode.FORBIDDEN_ROLE)
     assert user_count(db) == users_before
     assert audit_entries(db, caller) == []
-
-
-def test_without_a_token_the_request_is_401(
-    client: TestClient, assert_error: Callable[[Response, int, ErrorCode], None]
-) -> None:
-    response = client.post(URL, json={"email": "a@example.com", "username": "teacher"})
-    assert_error(response, 401, ErrorCode.NOT_AUTHENTICATED)
 
 
 @pytest.mark.parametrize(

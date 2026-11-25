@@ -12,12 +12,10 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import get_current_user, require_admin
-from app.accounts.register import email_is_valid, username_is_valid
-from app.accounts.staff import create_teacher
+from app.accounts.interface import create_teacher, get_current_user, require_admin
 from app.db import get_db
 from app.errors import error_responses
 from app.models.accounts import User
@@ -48,22 +46,6 @@ class CreateStaffRequest(BaseModel):
         default=False,
         description="Content rights: add and edit locations, clues and audio.",
     )
-
-    @field_validator("email")
-    @classmethod
-    def _check_email(cls, value: str) -> str:
-        # the same check as sign-up
-        value = value.strip().lower()
-        if not email_is_valid(value):
-            raise ValueError("not a valid email address")
-        return value
-
-    @field_validator("username")
-    @classmethod
-    def _check_username(cls, value: str) -> str:
-        if not username_is_valid(value):
-            raise ValueError("must be 3 to 30 characters with no space at either end")
-        return value
 
 
 class StaffAccount(BaseModel):
