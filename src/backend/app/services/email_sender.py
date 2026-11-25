@@ -14,11 +14,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Protocol
+from uuid import UUID
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
-from app.models.accounts import User
+from app.models.accounts import INVITATION_TTL, ClassStaffInvitation, User
 from app.models.email import (
     MAX_EMAIL_ATTEMPTS,
     PENDING_WHERE,
@@ -106,6 +107,7 @@ def send_due_emails(mailer: Mailer, db: Session, *, limit: int = BATCH_SIZE) -> 
             # a savepoint: a failure drops the new token but keeps the row locked until recorded
             with db.begin_nested():
                 token = _token_for(row, db)
+                _start_invitation_expiry(row, db)
                 mailer.send(
                     OutgoingMail(row.to_email, EmailKind(row.template), dict(row.params), token)
                 )
@@ -173,6 +175,16 @@ def _token_for(row: EmailOutbox, db: Session) -> str | None:
         raise _SkipError  # its link would work for 60 minutes after the password changed
     new_email = row.to_email if kind == EmailKind.CHANGE_EMAIL else None  # sent to the new one
     return EmailService.create_token(user, kind, db, new_email=new_email)
+
+
+def _start_invitation_expiry(row: EmailOutbox, db: Session) -> None:
+    """A TA invitation's 7 days count from when its email is sent, as a link token's do."""
+    if row.template == EmailKind.TA_INVITATION:
+        db.execute(
+            update(ClassStaffInvitation)
+            .where(ClassStaffInvitation.id == UUID(row.params["invitation_id"]))
+            .values(expires_at=func.now() + INVITATION_TTL)
+        )
 
 
 def _newer_mail_exists(row: EmailOutbox, db: Session) -> bool:
