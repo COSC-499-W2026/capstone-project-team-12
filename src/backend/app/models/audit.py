@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, text
+from sqlalchemy import CheckConstraint, ForeignKey, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,8 +20,6 @@ class AuditEvent(Base):
     __table_args__ = (
         in_check("action", AuditAction, name="action"),
         CheckConstraint("jsonb_typeof(details) = 'object'", name="details_object"),
-        # the log is read newest first
-        Index("ix_admin_audit_log_created_at", "created_at"),
     )
 
     id: Mapped[UUID] = uuid_pk()

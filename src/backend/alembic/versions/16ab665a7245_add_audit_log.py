@@ -62,9 +62,6 @@ def upgrade() -> None:
         op.f("ix_admin_audit_log_actor_id"), "admin_audit_log", ["actor_id"], unique=False
     )
     op.create_index(
-        "ix_admin_audit_log_created_at", "admin_audit_log", ["created_at"], unique=False
-    )
-    op.create_index(
         op.f("ix_admin_audit_log_target_class_id"),
         "admin_audit_log",
         ["target_class_id"],
@@ -81,6 +78,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index(op.f("ix_admin_audit_log_target_user_id"), table_name="admin_audit_log")
     op.drop_index(op.f("ix_admin_audit_log_target_class_id"), table_name="admin_audit_log")
-    op.drop_index("ix_admin_audit_log_created_at", table_name="admin_audit_log")
     op.drop_index(op.f("ix_admin_audit_log_actor_id"), table_name="admin_audit_log")
     op.drop_table("admin_audit_log")

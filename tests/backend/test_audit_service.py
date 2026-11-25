@@ -64,6 +64,13 @@ def test_record_does_not_commit(
     assert "commit" not in transaction_calls
 
 
+def test_record_keeps_order_within_one_transaction(db: Session, admin: User, teacher: User) -> None:
+    # each test runs in one transaction, where now() would give both entries the same time
+    first = audit.record(admin.id, AuditAction.DEACTIVATE, db, target_user_id=teacher.id)
+    second = audit.record(admin.id, AuditAction.REACTIVATE, db, target_user_id=teacher.id)
+    assert first.created_at < second.created_at
+
+
 @pytest.mark.parametrize(
     ("fields", "constraint"),
     [
