@@ -151,3 +151,18 @@ class EmailStatus(StrEnum):
     PENDING = "pending"
     SENT = "sent"
     FAILED = "failed"
+
+
+class AuditAction(StrEnum):
+    """Changes an admin makes, recorded in admin_audit_log once they succeed."""
+
+    CREATE_STAFF = "create_staff"
+    DEACTIVATE = "deactivate"
+    REACTIVATE = "reactivate"
+    CHANGE_CONTENT_RIGHTS = "change_content_rights"
+    SEND_RESET_LINK = "send_reset_link"
+    TRANSFER_CLASS = "transfer_class"
+    CHANGE_EMAIL = "change_email"
+    # privacy requests
+    EXPORT_USER = "export_user"
+    DELETE_USER = "delete_user"
