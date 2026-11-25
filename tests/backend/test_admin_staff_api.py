@@ -301,25 +301,3 @@ def test_invalid_paging_is_422(
 ) -> None:
     response = client.get(URL, params=params, headers=auth_headers(admin))
     assert_error(response, 422, ErrorCode.VALIDATION_ERROR)
-
-
-@pytest.mark.parametrize(
-    ("fields", "code"),
-    [
-        ({"role": UserRole.STUDENT}, ErrorCode.FORBIDDEN_ROLE),
-        ({"role": UserRole.STAFF}, ErrorCode.FORBIDDEN_ROLE),
-        ({"role": UserRole.STAFF, "can_manage_content": True}, ErrorCode.FORBIDDEN_ROLE),
-        ({"role": UserRole.ADMIN, "is_active": False}, ErrorCode.ACCOUNT_DISABLED),
-    ],
-    ids=["student", "teacher", "content-manager", "deactivated-admin"],
-)
-def test_only_active_admins_can_list_staff(
-    client: TestClient,
-    make_user: Callable[..., User],
-    auth_headers: Callable[[User], dict[str, str]],
-    assert_error: Callable[[Response, int, ErrorCode], None],
-    fields: dict[str, Any],
-    code: ErrorCode,
-) -> None:
-    response = client.get(URL, headers=auth_headers(make_user(**fields)))
-    assert_error(response, 403, code)

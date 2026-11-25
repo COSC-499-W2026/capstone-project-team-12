@@ -57,27 +57,27 @@ LISTED_ROLES = (UserRole.STAFF, UserRole.ADMIN)
 
 
 def list_staff_accounts(
-    page: int, page_size: int, db: Session, *, email: str | None = None
+    offset: int, limit: int, db: Session, *, email: str | None = None
 ) -> StaffPage:
-    """One page of the staff and admin accounts, deactivated ones too, so they can be
-    reactivated. Students are never listed.
+    """Up to `limit` staff and admin accounts after the first `offset`, deactivated ones too,
+    so they can be reactivated. Students are never listed.
 
     `email` keeps only the addresses that contain it, in any case; `%` and `_` in it match
     themselves. Ordered by username in any case (the order of uq_users_username_lower), then
-    by id, so pages don't overlap. `page` starts at 1; a page past the end has no items.
+    by id, so pages don't overlap. An offset past the end gives no items.
     """
     matching: list[ColumnElement[bool]] = [User.role.in_(LISTED_ROLES)]
     if email is not None:
         # addresses are stored lowercase
         matching.append(User.email.contains(email.strip().lower(), autoescape=True))
     total = db.scalar(select(func.count()).select_from(User).where(*matching)) or 0
-    if (page - 1) * page_size >= total:
+    if offset >= total:
         return StaffPage(items=(), total=total)
     users = db.scalars(
         select(User)
         .where(*matching)
         .order_by(func.lower(User.username), User.id)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+        .offset(offset)
+        .limit(limit)
     )
     return StaffPage(items=tuple(users), total=total)

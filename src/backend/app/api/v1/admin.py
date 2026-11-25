@@ -15,8 +15,12 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import create_teacher, get_current_user, require_admin
-from app.accounts.staff import list_staff_accounts
+from app.accounts.interface import (
+    create_teacher,
+    get_current_user,
+    list_staff_accounts,
+    require_admin,
+)
 from app.db import get_db
 from app.errors import error_responses
 from app.models.accounts import User
@@ -99,7 +103,7 @@ def get_staff_accounts(
     the addresses. Paged with page and page_size (default 20, at most 100); a page past the
     end has no items.
     """
-    staff = list_staff_accounts(page, page_size, db, email=email)
+    staff = list_staff_accounts((page - 1) * page_size, page_size, db, email=email)
     return StaffAccountPage(
         items=[StaffAccount.model_validate(user) for user in staff.items],
         page=page,
