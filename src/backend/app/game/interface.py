@@ -3,9 +3,10 @@
 When another component needs something from game, agree on the signature with its users first,
 then add it here.
 
-end_open_sessions: archiving a class, or a student leaving or being removed, ends their open
-games. Engagement doesn't call game (that would be a cycle); the route calls engagement and then
-this function, in the same transaction (spec, Architecture and Session Lifecycle).
+archive_class_and_end_games, remove_student_and_end_games, leave_class_and_end_games: archiving
+a class, or a student leaving or being removed, ends their open games. Engagement doesn't call
+game (that would be a cycle), so game calls engagement first, then ends the games, in the same
+transaction (spec, Architecture and Session Lifecycle).
 
 get_open_session_id: switching the current class or the Practice language is refused while the
 student has an open game (spec, Starting a Session), so accounts asks game instead of reading
@@ -23,6 +24,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.engagement import interface as engagement
 from app.game.history import list_history
 from app.game.sessions import (
     abandon_sessions,
@@ -35,7 +37,9 @@ from app.models.enums import SessionEndReason
 from app.models.game import OPEN_SESSION_STATES, GameSession
 
 __all__ = [
-    "end_open_sessions",
+    "archive_class_and_end_games",
+    "leave_class_and_end_games",
+    "remove_student_and_end_games",
     "expire_idle_sessions",
     "get_open_session_id",
     "list_history",
@@ -55,6 +59,27 @@ def end_open_sessions(class_id: UUID, db: Session, student_id: UUID | None = Non
     if student_id is not None:
         conditions.append(GameSession.student_id == student_id)
     return len(abandon_sessions(SessionEndReason.CLASS_CLOSED, conditions, db))
+
+
+def archive_class_and_end_games(class_id: UUID, db: Session) -> None:
+    """Archive the class and end every open game in it. The caller checks access; doesn't commit."""
+    engagement.archive_class(class_id, db)
+    end_open_sessions(class_id, db)
+
+
+def remove_student_and_end_games(student_id: UUID, class_id: UUID, db: Session) -> None:
+    """Remove the student from the class and, if they were removed, end their open games in it.
+
+    The caller checks access; doesn't commit.
+    """
+    if engagement.remove_student(student_id, class_id, db):
+        end_open_sessions(class_id, db, student_id=student_id)
+
+
+def leave_class_and_end_games(student_id: UUID, class_id: UUID, db: Session) -> None:
+    """Take the student out of the class and end their open games in it. Doesn't commit."""
+    engagement.leave_class(student_id, class_id, db)
+    end_open_sessions(class_id, db, student_id=student_id)
 
 
 def get_open_session_id(student_id: UUID, db: Session) -> UUID | None:

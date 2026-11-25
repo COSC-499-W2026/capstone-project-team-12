@@ -29,12 +29,11 @@ from app.engagement.interface import (
     get_and_report_streak,
     get_language_engagement_stats,
     get_personal_statistics,
-    leave_class,
     list_unlocked_achievements,
     validate_code_and_enrol,
 )
 from app.errors import AppError, ErrorCode, error_responses
-from app.game.interface import end_open_sessions, list_history
+from app.game.interface import leave_class_and_end_games, list_history
 from app.models.accounts import User
 from app.models.enums import (
     DailyChallengeType,
@@ -631,10 +630,5 @@ def leave_class_endpoint(
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """Leave a classroom and close its open games in one transaction."""
-    try:
-        leave_class(user.id, class_id, db)
-        end_open_sessions(class_id, db, student_id=user.id)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
+    leave_class_and_end_games(user.id, class_id, db)
+    db.commit()
