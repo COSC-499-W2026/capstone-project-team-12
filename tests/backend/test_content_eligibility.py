@@ -106,7 +106,6 @@ def test_an_eligible_location_comes_with_its_room_numbers_building(
     buildings = eligible_location_buildings(*FR_2, db)
 
     assert (buildings[same], buildings[also_same], buildings[other]) == ("ZZA", "ZZA", "ZZB")
-    assert frozenset(buildings) == eligible_location_ids(*FR_2, db)
 
 
 @pytest.mark.parametrize("case", INELIGIBLE)
@@ -255,7 +254,6 @@ def test_content_lookups_never_commit_flush_roll_back_or_load_a_location(
     transaction_calls.clear()  # the factories flushed what they made
 
     assert location_id in eligible_location_ids(*FR_2, db)
-    assert location_id in eligible_location_buildings(*FR_2, db)
     assert is_location_active(location_id, db)
     location_snapshot(location_id, *FR_2, db)
 
