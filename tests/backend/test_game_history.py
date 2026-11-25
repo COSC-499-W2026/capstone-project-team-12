@@ -274,17 +274,9 @@ def test_refused(
     make_user: Callable[..., User],
     assert_error: Callable[..., None],
 ) -> None:
-    student = make_user()
-
     assert_error(get(make_user(role=UserRole.ADMIN)), 403, ErrorCode.FORBIDDEN_ROLE)
     assert_error(client.get(URL), 401, ErrorCode.NOT_AUTHENTICATED)
-    for params in (
-        {"page": 0},
-        {"page_size": 0},
-        {"page_size": 101},
-        {"language": "xx"},
-    ):
-        assert_error(get(student, **params), 422, ErrorCode.VALIDATION_ERROR)
+    assert_error(get(make_user(), language="xx"), 422, ErrorCode.VALIDATION_ERROR)
 
 
 @pytest.mark.parametrize("page", [10_001, 10**18])

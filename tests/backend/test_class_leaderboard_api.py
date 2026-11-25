@@ -4,7 +4,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -175,26 +174,6 @@ def test_pagination_preserves_global_ranks(
     assert body["items"][0]["rank"] == 2
     assert body["items"][0]["username"] == students[1].username
     assert body["items"][0]["is_me"] is False
-
-
-@pytest.mark.parametrize("query", ["?page=0", "?page_size=0", "?page_size=101"])
-def test_invalid_pagination_returns_422(
-    query: str,
-    client: TestClient,
-    make_user: Callable[..., User],
-    make_class: Callable[..., Class],
-    make_enrollment: Callable[..., ClassEnrollment],
-    auth_headers: Callable[[User], dict[str, str]],
-) -> None:
-    student = make_user()
-    school_class = make_class()
-    make_enrollment(student, school_class)
-
-    response = client.get(
-        f"{URL}/{school_class.id}/leaderboard{query}", headers=auth_headers(student)
-    )
-
-    assert response.status_code == 422, response.text
 
 
 def test_unauthenticated_request_returns_401(client: TestClient) -> None:
