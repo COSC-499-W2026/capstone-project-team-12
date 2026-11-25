@@ -30,18 +30,25 @@ def send_emails() -> int:
 
 
 def expire_sessions() -> int:
+    max_batches = get_settings().expire_sessions_max_batches
     expired = 0
     with SessionLocal() as db:
-        while True:
+        for batch in range(1, max_batches + 1):
             count = expire_idle_sessions(db, batch_size=EXPIRE_BATCH_SIZE)
             db.commit()
             expired += count
+            if count:
+                logger.info(
+                    "expire-sessions: batch %d expired %d, %d in total", batch, count, expired
+                )
             # a short batch means nothing else was idle, or the rest is locked until the next run
             if count < EXPIRE_BATCH_SIZE:
                 break
-    # it runs every 5 minutes, so only log when something happened
-    if expired:
-        logger.info("expire-sessions: expired %d games", expired)
+        else:
+            logger.warning(
+                "expire-sessions: stopped after %d full batches, the rest waits for the next run",
+                max_batches,
+            )
     return 0
 
 
