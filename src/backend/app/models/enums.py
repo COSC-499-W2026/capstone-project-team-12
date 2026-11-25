@@ -95,6 +95,16 @@ class ClassStaffRole(StrEnum):
     ASSISTANT = "assistant"
 
 
+class InvitationStatus(StrEnum):
+    """Where an owner's invitation to assist a class stands."""
+
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    DECLINED = "declined"
+    CANCELLED = "cancelled"  # the owner withdrew it before it was answered
+    EXPIRED = "expired"  # not answered within INVITATION_TTL
+
+
 class EnrollmentEndReason(StrEnum):
     LEFT = "left"  # the student left; they can rejoin later with a code
     REMOVED = "removed"  # by the owner; can't rejoin with a code, but the owner can restore

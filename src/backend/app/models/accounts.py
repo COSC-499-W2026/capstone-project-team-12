@@ -1,6 +1,6 @@
 """Tables owned by 1.0 Auth & Accounts (Kaedyn). #8 creates users and class_staff."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import CheckConstraint, ForeignKey, Index, false, func, text, true
@@ -8,7 +8,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 from app.models.columns import created_at, in_check, language_check, updated_at, uuid_pk
-from app.models.enums import ClassStaffRole, UserRole
+from app.models.enums import ClassStaffRole, InvitationStatus, UserRole
+
+# how long the invitee has to answer an invitation to assist a class
+INVITATION_TTL = timedelta(days=7)
 
 
 class User(Base):
@@ -68,6 +71,45 @@ class ClassStaff(Base):
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), primary_key=True, index=True)
     role: Mapped[str]
     added_at: Mapped[datetime] = created_at()
+
+
+class ClassStaffInvitation(Base):
+    """An owner's invitation to assist a class. Accepting it adds an assistant class_staff row;
+    answered, cancelled and expired invitations are kept."""
+
+    __tablename__ = "class_staff_invitations"
+    __table_args__ = (
+        in_check("status", InvitationStatus, name="status"),
+        CheckConstraint("email = lower(email)", name="email_lowercase"),
+        # only the invitee's answer sets responded_at; cancelling or expiring doesn't
+        CheckConstraint(
+            f"(status IN ('{InvitationStatus.ACCEPTED}', '{InvitationStatus.DECLINED}'))"
+            " = (responded_at IS NOT NULL)",
+            name="responded_at_matches_status",
+        ),
+        # one open invitation per person and class; inviting again while it is open reuses it
+        Index(
+            "uq_class_staff_invitations_one_pending",
+            "class_id",
+            "invitee_id",
+            unique=True,
+            postgresql_where=text(f"status = '{InvitationStatus.PENDING}'"),
+        ),
+    )
+
+    id: Mapped[UUID] = uuid_pk()
+    class_id: Mapped[UUID] = mapped_column(ForeignKey("classes.id"))
+    # indexed: the invitee lists their pending invitations
+    invitee_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    # the address the invitation was sent to; cleared when the invitee is anonymised
+    email: Mapped[str | None]
+    invited_by: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    status: Mapped[str] = mapped_column(
+        default=InvitationStatus.PENDING, server_default=InvitationStatus.PENDING.value
+    )
+    expires_at: Mapped[datetime]
+    created_at: Mapped[datetime] = created_at()
+    responded_at: Mapped[datetime | None]
 
 
 class RefreshToken(Base):

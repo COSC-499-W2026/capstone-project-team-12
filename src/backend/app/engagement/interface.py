@@ -107,6 +107,7 @@ __all__ = [
     "generate_access_code",
     "get_active_class_ids",
     "get_class_language",
+    "get_class_name",
     "is_actively_enrolled",
     "is_class_archived",
     "leave_class",
@@ -463,6 +464,12 @@ def get_class_language(class_id: UUID, db: Session) -> Language | None:
     if school_class is None:
         return None
     return Language(school_class.target_language)
+
+
+def get_class_name(class_id: UUID, db: Session) -> str | None:
+    """Return the class name, or None if the class does not exist."""
+    school_class = db.get(Class, class_id)
+    return None if school_class is None else school_class.name
 
 
 def get_active_class_ids(student_id: UUID, db: Session) -> list[UUID]:
