@@ -4,7 +4,7 @@ How many times the student played or replayed each location's clue (#436), so te
 it in class analytics.
 
 Revision ID: c4aead9614f3
-Revises: 587517abf9fa
+Revises: 16ab665a7245
 Create Date: 2026-11-22 15:00:00.000000
 """
 
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "c4aead9614f3"
-down_revision: str | None = "587517abf9fa"
+down_revision: str | None = "16ab665a7245"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
