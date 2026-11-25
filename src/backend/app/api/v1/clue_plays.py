@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, NonNegativeInt, PositiveInt
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import get_current_user
+from app.accounts.interface import require_player
 from app.api.v1.game_actions import play
 from app.db import get_db
 from app.errors import error_responses
@@ -41,7 +41,7 @@ class CluePlayResponse(BaseModel):
 def clue_play(
     game_id: UUID,
     request: CluePlayRequest,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_player)],
     db: Annotated[Session, Depends(get_db)],
 ) -> CluePlayResponse:
     """Count one play of the current location's clue: the first play and every replay.
@@ -52,7 +52,6 @@ def clue_play(
     """
     plays = play(
         lambda: record_clue_play(user.id, game_id, request.position, request.shuffles_used, db),
-        user,
         db,
     )
     return CluePlayResponse(position=request.position, clue_plays=plays)
