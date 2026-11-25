@@ -148,7 +148,7 @@ def test_a_game_ended_elsewhere_is_not_quit(
     db.execute(
         update(GameSession)
         .where(GameSession.id == game.id)
-        .values(state=SessionState.COMPLETED, completed_at=completed_at)
+        .values(state=SessionState.COMPLETED, completed_at=completed_at, ended_at=completed_at)
         .execution_options(synchronize_session=False)
     )
 

@@ -255,6 +255,7 @@ def test_leave_does_not_affect_game_in_different_class(
     # Close the first game before creating the student's second open game.
     first_game.state = SessionState.ABANDONED
     first_game.end_reason = SessionEndReason.CLASS_CLOSED
+    first_game.ended_at = datetime.now(UTC)
     db.flush()
 
     second_game = make_game_session(

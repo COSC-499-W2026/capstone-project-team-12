@@ -205,7 +205,11 @@ def test_game_ended_elsewhere_is_not_reported_as_open(
     db.execute(
         update(GameSession)
         .where(GameSession.id == game.id)
-        .values(state=SessionState.ABANDONED, end_reason=SessionEndReason.QUIT)
+        .values(
+            state=SessionState.ABANDONED,
+            end_reason=SessionEndReason.QUIT,
+            ended_at=datetime.now(UTC),
+        )
         .execution_options(synchronize_session=False)
     )
 
