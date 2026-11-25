@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.errors import AppError, ErrorCode
 from app.game.interface import end_open_sessions, get_open_session_id, refuse_if_game_open
-from app.game.sessions import session_idle_limit
+from app.game.sessions import abandon_sessions, session_idle_limit
 from app.models.accounts import User
 from app.models.engagement import Class
 from app.models.enums import LocationStatus, SessionEndReason, SessionState, SkipReason
@@ -21,18 +21,11 @@ def test_archiving_ends_every_open_game_in_the_class(
     db: Session,
     make_class: Callable[..., Class],
     make_game_session: Callable[..., GameSession],
-    freeze_clock: Callable[..., None],
 ) -> None:
-    closed_at = datetime(2026, 11, 2, 15, tzinfo=UTC)
-    last_played = closed_at - timedelta(hours=5)
-    freeze_clock(closed_at, "app.game.sessions")
     school_class, other_class = make_class(), make_class()
-    active = make_game_session(class_id=school_class.id, last_activity_at=last_played)
+    active = make_game_session(class_id=school_class.id)
     paused = make_game_session(
-        class_id=school_class.id,
-        state=SessionState.PAUSED,
-        paused_at=last_played,
-        last_activity_at=last_played,
+        class_id=school_class.id, state=SessionState.PAUSED, paused_at=datetime.now(UTC)
     )
     elsewhere = make_game_session(class_id=other_class.id)
     practice = make_game_session()
@@ -44,8 +37,6 @@ def test_archiving_ends_every_open_game_in_the_class(
         assert game.state == SessionState.ABANDONED
         assert game.end_reason == SessionEndReason.CLASS_CLOSED
         assert game.paused_at is None
-        # the game ended when the class closed; the student's last action stays as it was
-        assert (game.ended_at, game.last_activity_at) == (closed_at, last_played)
     assert elsewhere.state == practice.state == SessionState.ACTIVE
 
 
@@ -138,6 +129,35 @@ def test_no_open_game_gives_none(
 
     assert get_open_session_id(student.id, db) is None
     assert get_open_session_id(never_played.id, db) is None
+
+
+@pytest.mark.parametrize(
+    ("reason", "ends_after_last_action"),
+    [
+        (SessionEndReason.CLASS_CLOSED, timedelta(days=5)),
+        (SessionEndReason.EXPIRED, session_idle_limit()),
+    ],
+)
+def test_a_game_the_system_ends_keeps_its_last_action_and_gets_its_real_end(
+    db: Session,
+    make_game_session: Callable[..., GameSession],
+    freeze_clock: Callable[..., None],
+    reason: SessionEndReason,
+    ends_after_last_action: timedelta,
+) -> None:
+    now = datetime(2026, 11, 7, 15, tzinfo=UTC)
+    last_played = now - timedelta(days=5)
+    freeze_clock(now, "app.game.sessions")
+    game = make_game_session(last_activity_at=last_played)
+
+    abandon_sessions(reason, [GameSession.id == game.id], db)
+
+    db.refresh(game)
+    assert (game.end_reason, game.ended_at, game.last_activity_at) == (
+        reason,
+        last_played + ends_after_last_action,
+        last_played,
+    )
 
 
 def test_a_game_idle_for_the_expiry_time_does_not_count(
