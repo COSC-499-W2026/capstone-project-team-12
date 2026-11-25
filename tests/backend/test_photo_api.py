@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.errors import ErrorCode
 from app.models.accounts import User
 from app.models.engagement import PointsLedger
-from app.models.enums import LocationStatus, SessionState
+from app.models.enums import LocationStatus, SessionState, UserRole
 from app.models.game import GameSession, SessionLocation
 from app.services.uploads import BYTES_PER_MB
 from app.verification import verify
@@ -305,5 +305,20 @@ def test_a_photo_out_of_turn_is_refused_before_ocr(
     reads = ocr_reads(("SCI 333", 0.92))
 
     assert_error(upload(game), 409, code)
+
+    assert reads == []
+
+
+def test_an_admin_photo_is_refused_before_ocr(
+    upload: Callable[..., Response],
+    verifying_game: Callable[..., GameSession],
+    ocr_reads: Callable[..., list[int]],
+    make_user: Callable[..., User],
+    assert_error: Callable[[Response, int, ErrorCode], None],
+) -> None:
+    game = verifying_game()
+    reads = ocr_reads(("SCI 333", 0.92))
+
+    assert_error(upload(game, user=make_user(role=UserRole.ADMIN)), 403, ErrorCode.FORBIDDEN_ROLE)
 
     assert reads == []
