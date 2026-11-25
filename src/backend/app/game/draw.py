@@ -7,15 +7,12 @@ quitting cannot be used to reroll. The other places are filled at random, prefer
 the student has not completed yet in that language and difficulty. Content decides which
 locations are eligible; this module only picks among them.
 
-A Basic game takes all its locations from one building (#434): among the buildings with enough
-locations for a game, the one with the most the student hasn't completed (ties at random). A
-carry-over keeps its building while that building still has enough; a shuffle stays in the
-game's building.
+A Basic game stays in one building (see `_one_building`).
 """
 
 import random
 from collections import Counter, defaultdict
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from uuid import UUID
 
@@ -87,10 +84,7 @@ def draw_replacements(
     buildings = content.eligible_location_buildings(language, difficulty, db)
     rest = set(buildings).difference(exclude)
     if difficulty == Difficulty.BASIC:
-        in_game = Counter(
-            buildings[location_id] for location_id in exclude if location_id in buildings
-        )
-        building = in_game.most_common(1)[0][0] if in_game else None
+        building = next(iter(_buildings_by_size(exclude, buildings)), None)
         rest = {location_id for location_id in rest if buildings[location_id] == building}
     return _pick(
         count=count,
@@ -115,8 +109,7 @@ def _one_building(
     for location_id, building in buildings.items():
         by_building[building].add(location_id)
     big_enough = {code: ids for code, ids in by_building.items() if len(ids) >= count}
-    # a game from before #434 can span buildings: keep the one most of its locations are in
-    for building, _ in Counter(buildings[location_id] for location_id in carried).most_common():
+    for building in _buildings_by_size(carried, buildings):
         if building in big_enough:
             return big_enough[building]
     if not big_enough:
@@ -124,6 +117,14 @@ def _one_building(
     uncompleted = {code: len(ids - completed) for code, ids in big_enough.items()}
     most = max(uncompleted.values())
     return big_enough[random.choice([code for code, n in uncompleted.items() if n == most])]
+
+
+def _buildings_by_size(location_ids: Iterable[UUID], buildings: Mapping[UUID, str]) -> list[str]:
+    """Buildings of these locations, most locations first; ineligible locations are ignored."""
+    counts = Counter(
+        buildings[location_id] for location_id in location_ids if location_id in buildings
+    )
+    return [building for building, _ in counts.most_common()]
 
 
 def _pick(
