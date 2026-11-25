@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from game_fields import GAME_FIELDS
 from httpx2 import Response
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -25,20 +26,6 @@ from app.models.game import GameSession, SessionLocation
 URL = "/api/v1/games"
 SOME_GAME_ID = "2f6f2a52-8d1c-4a56-9f0b-5d6c1c0f7b11"
 
-GAME_FIELDS = {
-    "session_id",
-    "state",
-    "end_reason",
-    "class_id",
-    "language",
-    "difficulty",
-    "current_position",
-    "shuffles_used",
-    "total_score",
-    "started_at",
-    "paused_at",
-    "locations",
-}
 LOCATION_FIELDS = {"position", "status", "skip_reason", "attempts_used", "points_awarded"}
 
 
