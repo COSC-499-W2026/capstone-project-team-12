@@ -209,13 +209,14 @@ def test_refuse_if_game_open_ignores_a_game_idle_for_the_expiry_time(
     ],
 )
 def test_a_class_change_is_not_committed_when_ending_the_games_fails(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
     client: TestClient,
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
     make_class_staff: Callable[..., ClassStaff],
     make_enrollment: Callable[..., ClassEnrollment],
     auth_headers: Callable[[User], dict[str, str]],
-    transaction_calls: list[str],
     method: str,
     path: str,
     as_student: bool,
@@ -226,7 +227,16 @@ def test_a_class_change_is_not_committed_when_ending_the_games_fails(
     make_enrollment(student, school_class)
     url = path.format(class_id=school_class.id, student_id=student.id)
     headers = auth_headers(student if as_student else owner)
-    transaction_calls.clear()
+    # spy on Session.commit itself: transaction_calls also counts the savepoint that
+    # archive_class releases while locking, which isn't a commit of the request
+    commits: list[str] = []
+    real_commit = db.commit
+
+    def spy_commit() -> None:
+        commits.append("commit")
+        real_commit()
+
+    monkeypatch.setattr(db, "commit", spy_commit)
 
     with (
         patch("app.game.interface.end_open_sessions", side_effect=RuntimeError("cleanup failed")),
@@ -234,4 +244,4 @@ def test_a_class_change_is_not_committed_when_ending_the_games_fails(
     ):
         client.request(method, url, headers=headers)
 
-    assert "commit" not in transaction_calls
+    assert commits == []
