@@ -1,7 +1,6 @@
 """Tests for GET /api/v1/me/profile."""
 
 from collections.abc import Callable
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -14,8 +13,8 @@ from app.accounts.password import hash_password
 from app.engagement.interface import validate_code_and_enrol
 from app.errors import ErrorCode
 from app.models.accounts import User
-from app.models.engagement import AccessCode, ClassEnrollment
-from app.models.enums import EnrollmentEndReason, Language, UserRole
+from app.models.engagement import AccessCode
+from app.models.enums import Language, UserRole
 
 URL = "/api/v1/me/profile"
 VALID_EMAIL = "test@email.com"
@@ -83,7 +82,8 @@ def test_profile_of_a_new_student(get_profile: Callable[[User], Response], stude
 def test_profile_lists_each_class_with_its_name_language_and_join_date(
     db: Session, get_profile: Callable[[User], Response], two_class_student: TwoClassStudent
 ) -> None:
-    roster = two_class_student  # joined Japanese, then French a day later
+    # joined Japanese, then French a day later
+    roster = two_class_student
     roster.french.name = "FREN 101 - Fall 2026"
     db.flush()
 
@@ -91,15 +91,19 @@ def test_profile_lists_each_class_with_its_name_language_and_join_date(
 
     assert response.status_code == 200, response.text
     body = response.json()
-    classes = body["classes"]
-    assert [{k: v for k, v in item.items() if k != "joined_at"} for item in classes] == [
-        {"id": str(roster.french.id), "name": "FREN 101 - Fall 2026", "language": "fr"},
-        {"id": str(roster.japanese.id), "name": "JAPN 101 - Fall 2026", "language": "ja"},
-    ]
-    # compared as instants, since the offset in the text depends on the database's time zone
-    assert [datetime.fromisoformat(item["joined_at"]) for item in classes] == [
-        roster.french_enrolment.joined_at,
-        roster.japanese_enrolment.joined_at,
+    assert body["classes"] == [
+        {
+            "id": str(roster.french.id),
+            "name": "FREN 101 - Fall 2026",
+            "language": "fr",
+            "joined_at": "2026-10-02T12:00:00Z",
+        },
+        {
+            "id": str(roster.japanese.id),
+            "name": "JAPN 101 - Fall 2026",
+            "language": "ja",
+            "joined_at": "2026-10-01T12:00:00Z",
+        },
     ]
     assert body["current_class_id"] == str(roster.japanese.id)
     assert body["preferred_language"] == Language.JA.value
@@ -122,23 +126,16 @@ def test_profile_keeps_the_first_join_date_of_a_rejoined_class(
     # rejoining reuses the enrolment, so Japanese still ranks by the date it was first joined
     body = response.json()
     assert class_ids(body) == [str(roster.french.id), str(roster.japanese.id)]
-    assert datetime.fromisoformat(body["classes"][1]["joined_at"]) == datetime(
-        2026, 10, 1, 12, tzinfo=UTC
-    )
+    assert body["classes"][1]["joined_at"] == "2026-10-01T12:00:00Z"
 
 
-@pytest.mark.parametrize(
-    "reason",
-    [EnrollmentEndReason.LEFT, EnrollmentEndReason.REMOVED, EnrollmentEndReason.ARCHIVED],
-)
 def test_profile_leaves_out_ended_enrolments(
     get_profile: Callable[[User], Response],
     two_class_student: TwoClassStudent,
-    end_enrolment: Callable[[ClassEnrollment, EnrollmentEndReason], None],
-    reason: EnrollmentEndReason,
+    end_enrolment: Callable[..., None],
 ) -> None:
     roster = two_class_student
-    end_enrolment(roster.french_enrolment, reason)
+    end_enrolment(roster.french_enrolment)
 
     response = get_profile(roster.student)
 

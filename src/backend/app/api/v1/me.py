@@ -10,9 +10,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.email_links import cancel_waiting_reset_mail
-from app.accounts.interface import get_current_user, require_player, revoke_all_refresh_tokens
+from app.accounts.interface import (
+    get_current_user,
+    get_profile_classes,
+    require_player,
+    revoke_all_refresh_tokens,
+)
 from app.accounts.password import hash_password, validate_password_security, verified_password_hash
-from app.accounts.profile import current_class_id, select_class, set_practice_language
+from app.accounts.profile import select_class, set_practice_language
 from app.accounts.tokens import create_refresh_token, set_refresh_cookie
 from app.api.pagination import Page, PageParams, page_params
 from app.api.v1.email_links import StatusResponse
@@ -25,7 +30,6 @@ from app.engagement.interface import (
     get_language_engagement_stats,
     get_personal_statistics,
     leave_class,
-    list_active_classes,
     list_unlocked_achievements,
     validate_code_and_enrol,
 )
@@ -111,15 +115,16 @@ class ChangePasswordRequest(BaseModel):
 
 
 def _profile(user: User, db: Session) -> ProfileResponse:
-    # one read, so current_class_id is always one of classes
-    active = list_active_classes(user.id, db)
+    profile = get_profile_classes(user, db)
     return ProfileResponse(
         id=user.id,
         username=user.username,
         email=user.email,
         role=user.role,
-        classes=[ProfileClassResponse.model_validate(c, from_attributes=True) for c in active],
-        current_class_id=current_class_id(user, db, [c.id for c in active]),
+        classes=[
+            ProfileClassResponse.model_validate(c, from_attributes=True) for c in profile.classes
+        ],
+        current_class_id=profile.current_class_id,
         preferred_language=user.preferred_language,
     )
 

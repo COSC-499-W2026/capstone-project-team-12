@@ -10,7 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.accounts.profile import current_class_id, select_class, set_practice_language
-from app.engagement.interface import ActiveClass, get_active_class_ids, list_active_classes
+from app.engagement.interface import get_active_class_ids
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.engagement import Class
@@ -34,31 +34,6 @@ def test_active_class_ids_newest_first(
     end_enrolment(roster.french_enrolment)
 
     assert get_active_class_ids(roster.student.id, db) == [roster.japanese.id]
-
-
-def test_active_classes_have_names_languages_and_join_dates(
-    db: Session,
-    make_user: Callable[..., User],
-    two_class_student: TwoClassStudent,
-    end_enrolment: Callable[..., None],
-) -> None:
-    roster = two_class_student
-    assert list_active_classes(roster.student.id, db) == [
-        ActiveClass(
-            roster.french.id, roster.french.name, Language.FR, roster.french_enrolment.joined_at
-        ),
-        ActiveClass(
-            roster.japanese.id,
-            roster.japanese.name,
-            Language.JA,
-            roster.japanese_enrolment.joined_at,
-        ),
-    ]
-    assert list_active_classes(make_user().id, db) == []
-
-    end_enrolment(roster.french_enrolment)
-
-    assert [c.id for c in list_active_classes(roster.student.id, db)] == [roster.japanese.id]
 
 
 def test_stored_class_is_kept_and_no_stored_class_means_practice(

@@ -471,19 +471,22 @@ def get_class_language(class_id: UUID, db: Session) -> Language | None:
 
 @dataclass(frozen=True)
 class ActiveClass:
-    """A class the student is actively enrolled in, for the student's class switcher."""
+    """A class the student is actively enrolled in, for the student's class switcher.
+
+    `language` is the class's target language; `joined_at` is the first join date, kept on rejoin.
+    """
 
     id: UUID
     name: str
-    language: Language  # the class's target language
-    joined_at: datetime  # when the student first joined; kept when they rejoin
+    language: Language
+    joined_at: datetime
 
 
 def list_active_classes(student_id: UUID, db: Session) -> list[ActiveClass]:
     """Return the classes the student is actively enrolled in, most recently joined first.
 
-    The same classes, in the same order, as get_active_class_ids, with each class's name,
-    language and the student's first join date.
+    Each with its name, language and the student's first join date. get_active_class_ids lists
+    their ids from this same query.
     """
     statement = (
         select(Class.id, Class.name, Class.target_language, ClassEnrollment.joined_at)
@@ -508,12 +511,7 @@ def get_active_class_ids(student_id: UUID, db: Session) -> list[UUID]:
     An archived class has no active enrolments, so it is never listed. A class the student left
     and rejoined keeps its first `joined_at`, so it can rank lower than "most recent" suggests.
     """
-    statement = (
-        select(ClassEnrollment.class_id)
-        .where(ClassEnrollment.student_id == student_id, ClassEnrollment.is_active.is_(True))
-        .order_by(ClassEnrollment.joined_at.desc(), ClassEnrollment.class_id)
-    )
-    return list(db.scalars(statement))
+    return [c.id for c in list_active_classes(student_id, db)]
 
 
 def is_actively_enrolled(student_id: UUID, class_id: UUID, db: Session) -> bool:

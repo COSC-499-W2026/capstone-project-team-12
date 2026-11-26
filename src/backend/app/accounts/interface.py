@@ -10,6 +10,7 @@ from jwt import InvalidTokenError, decode
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.accounts.profile import get_profile_classes
 from app.accounts.staff import create_teacher, list_staff_accounts
 from app.accounts.tokens import revoke_refresh_tokens
 from app.config import get_settings
@@ -32,6 +33,7 @@ __all__ = [
     "require_player",
     "create_teacher",
     "list_staff_accounts",
+    "get_profile_classes",
 ]
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
