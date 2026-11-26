@@ -1,7 +1,7 @@
 """add class staff invitations
 
 Revision ID: 726f1a45f23b
-Revises: 16ab665a7245
+Revises: c4aead9614f3
 Create Date: 2026-11-24 21:52:32.669017
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "726f1a45f23b"
-down_revision: str | None = "16ab665a7245"
+down_revision: str | None = "c4aead9614f3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
