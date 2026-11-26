@@ -21,6 +21,7 @@ from app.accounts.interface import (
     list_staff_accounts,
     require_admin,
 )
+from app.api.pagination import Page, PageParams, page_params
 from app.db import get_db
 from app.errors import error_responses
 from app.models.accounts import User
@@ -68,14 +69,8 @@ class StaffAccount(BaseModel):
     created_at: datetime
 
 
-class StaffAccountPage(BaseModel):
+class StaffAccountPage(Page[StaffAccount]):
     """A page of staff and admin accounts (docs/api-conventions.md, Pagination)."""
-
-    items: list[StaffAccount]
-    page: int
-    page_size: int
-    total: int
-    has_next_page: bool
 
 
 @admin_router.get(
@@ -87,6 +82,7 @@ class StaffAccountPage(BaseModel):
 )
 def get_staff_accounts(
     db: Annotated[Session, Depends(get_db)],
+    params: Annotated[PageParams, Depends(page_params)],
     email: Annotated[
         str | None,
         Query(
@@ -95,22 +91,15 @@ def get_staff_accounts(
             description="Only addresses that contain this text, in any case.",
         ),
     ] = None,
-    page: Annotated[int, Query(ge=1)] = 1,
-    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> StaffAccountPage:
     """Every staff and admin account with its role, content rights, status and last login,
     deactivated ones too, by username in any case. Students are not listed. `email` searches
     the addresses. Paged with page and page_size (default 20, at most 100); a page past the
     end has no items.
     """
-    staff = list_staff_accounts((page - 1) * page_size, page_size, db, email=email)
-    return StaffAccountPage(
-        items=[StaffAccount.model_validate(user) for user in staff.items],
-        page=page,
-        page_size=page_size,
-        total=staff.total,
-        has_next_page=page * page_size < staff.total,
-    )
+    staff = list_staff_accounts(params.offset, params.page_size, db, email=email)
+    items = [StaffAccount.model_validate(user) for user in staff.items]
+    return StaffAccountPage.of(items, params, staff.total)
 
 
 @admin_router.post(

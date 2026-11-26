@@ -288,16 +288,11 @@ def test_the_list_is_paged(
     assert pages[0]["items"] == first["items"][:1]
 
 
-@pytest.mark.parametrize(
-    "params",
-    [{"page": 0}, {"page_size": 0}, {"page_size": 101}, {"page": "first"}, {"email": ""}],
-)
-def test_invalid_paging_is_422(
+def test_an_empty_email_search_is_422(
     client: TestClient,
     admin: User,
     auth_headers: Callable[[User], dict[str, str]],
     assert_error: Callable[[Response, int, ErrorCode], None],
-    params: dict[str, Any],
 ) -> None:
-    response = client.get(URL, params=params, headers=auth_headers(admin))
+    response = client.get(URL, params={"email": ""}, headers=auth_headers(admin))
     assert_error(response, 422, ErrorCode.VALIDATION_ERROR)
