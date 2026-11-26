@@ -97,13 +97,17 @@ def require_code_class_role(*allowed_roles: ClassStaffRole) -> Callable[..., Non
 def _check_class_role(
     user_id: UUID, class_id: UUID, allowed_roles: tuple[ClassStaffRole, ...], db: Session
 ) -> None:
-    role = db.scalar(
+    if _class_role(user_id, class_id, db) not in allowed_roles:
+        raise AppError(ErrorCode.FORBIDDEN_ROLE)
+
+
+def _class_role(user_id: UUID, class_id: UUID, db: Session) -> str | None:
+    """The user's staff role in the class, or None if they aren't staff there."""
+    return db.scalar(
         select(ClassStaff.role).where(
             ClassStaff.user_id == user_id, ClassStaff.class_id == class_id
         )
     )
-    if role not in allowed_roles:
-        raise AppError(ErrorCode.FORBIDDEN_ROLE)
 
 
 def require_admin(user: Annotated[User, Depends(get_current_user)]) -> None:
@@ -127,18 +131,8 @@ def require_player(user: Annotated[User, Depends(get_current_user)]) -> User:
 
 
 def is_class_staff(user_id: UUID, class_id: UUID, db: Session) -> bool:
-    """Return True when the user is an assistant or owner for the provided class`."""
-    stmt = (
-        select(ClassStaff.user_id, ClassStaff.role)
-        .where(ClassStaff.user_id == user_id, ClassStaff.class_id == class_id)
-        .limit(1)
-    )
-    result = db.execute(stmt)
-    for user, role in result:
-        return user == user_id and (
-            role == ClassStaffRole.ASSISTANT or role == ClassStaffRole.OWNER
-        )
-    return False
+    """Return True when the user is an owner or assistant of the class (the only staff roles)."""
+    return _class_role(user_id, class_id, db) is not None
 
 
 def can_manage_content(user: Annotated[User, Depends(get_current_user)]) -> None:
