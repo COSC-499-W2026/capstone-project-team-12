@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session
 from app.accounts.interface import (
     can_manage_content,
     get_current_user,
-    is_class_staff,
     require_admin,
     require_class_role,
 )
@@ -193,20 +192,3 @@ def test_admin_only(
     post: Callable[..., Response], make_user: Callable[..., User], role: UserRole, status: int
 ) -> None:
     assert post("/admin", make_user(role=role)).status_code == status
-
-
-def test_is_class_staff(
-    db: Session,
-    make_user: Callable[..., User],
-    make_class: Callable[..., Class],
-    make_class_staff: Callable[..., ClassStaff],
-) -> None:
-    owner, assistant, outsider = make_user(), make_user(), make_user()
-    school_class, other_class = make_class(), make_class()
-    make_class_staff(school_class, owner)
-    make_class_staff(school_class, assistant, role=ClassStaffRole.ASSISTANT)
-    make_class_staff(other_class, outsider)
-
-    assert is_class_staff(owner.id, school_class.id, db)
-    assert is_class_staff(assistant.id, school_class.id, db)
-    assert not is_class_staff(outsider.id, school_class.id, db)

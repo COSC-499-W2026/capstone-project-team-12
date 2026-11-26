@@ -63,6 +63,30 @@ def semester_end_expiration(semester: str) -> datetime:
     return next_month.astimezone(UTC)
 
 
+def _clean_class_name(name: str) -> str:
+    """The name without surrounding spaces; 422 VALIDATION_ERROR if empty or containing NUL."""
+    cleaned = name.strip()
+    if not cleaned:
+        raise AppError(
+            ErrorCode.VALIDATION_ERROR,
+            "Class name cannot be empty",
+            details=[{"in": "body", "field": "name", "message": "Class name cannot be empty"}],
+        )
+    if "\x00" in cleaned:
+        raise AppError(
+            ErrorCode.VALIDATION_ERROR,
+            "Class name contains a NUL character",
+            details=[
+                {
+                    "in": "body",
+                    "field": "name",
+                    "message": "Class name cannot contain NUL characters",
+                }
+            ],
+        )
+    return cleaned
+
+
 def create_class(
     teacher: User,
     name: str,
@@ -75,27 +99,7 @@ def create_class(
     The caller checks that the teacher is a staff account and owns the transaction; this
     function never commits.
     """
-    normalized_name = name.strip()
-
-    if not normalized_name:
-        raise AppError(
-            ErrorCode.VALIDATION_ERROR,
-            "Class name cannot be empty",
-            details=[{"in": "body", "field": "name", "message": "Class name cannot be empty"}],
-        )
-
-    if "\x00" in normalized_name:
-        raise AppError(
-            ErrorCode.VALIDATION_ERROR,
-            "Class name contains a NUL character",
-            details=[
-                {
-                    "in": "body",
-                    "field": "name",
-                    "message": "Class name cannot contain NUL characters",
-                }
-            ],
-        )
+    normalized_name = _clean_class_name(name)
 
     if not SEMESTER_PATTERN.fullmatch(semester):
         raise AppError(
@@ -242,35 +246,7 @@ def update_class_settings(
         raise AppError(ErrorCode.CLASS_ARCHIVED)
 
     if name is not None:
-        cleaned_name = name.strip()
-
-        if not cleaned_name:
-            raise AppError(
-                ErrorCode.VALIDATION_ERROR,
-                "Class name cannot be empty",
-                details=[
-                    {
-                        "in": "body",
-                        "field": "name",
-                        "message": "Class name cannot be empty",
-                    }
-                ],
-            )
-
-        if "\x00" in cleaned_name:
-            raise AppError(
-                ErrorCode.VALIDATION_ERROR,
-                "Class name contains a NUL character",
-                details=[
-                    {
-                        "in": "body",
-                        "field": "name",
-                        "message": "Class name cannot contain NUL characters",
-                    }
-                ],
-            )
-
-        school_class.name = cleaned_name
+        school_class.name = _clean_class_name(name)
 
     if leaderboard_enabled is not None:
         school_class.leaderboard_enabled = leaderboard_enabled

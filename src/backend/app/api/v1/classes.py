@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session
 
 from app.accounts.interface import (
     get_current_user,
-    is_class_staff,
     require_class_role,
+    require_class_viewer,
     require_code_class_role,
     require_staff,
 )
@@ -34,7 +34,6 @@ from app.engagement.interface import (
     list_class_access_codes,
     list_staff_classes,
     remove_student,
-    require_active_enrolment,
     restore_student,
     update_class_settings,
 )
@@ -91,14 +90,11 @@ class ClassLeaderboardResponse(Page[LeaderboardItem]):
 def get_class_leaderboard_endpoint(
     class_id: UUID,
     user: Annotated[User, Depends(get_current_user)],
+    staff: Annotated[bool, Depends(require_class_viewer)],
     db: Annotated[Session, Depends(get_db)],
     params: Annotated[PageParams, Depends(page_params)],
 ) -> ClassLeaderboardResponse:
     """Return class rankings to enrolled students and assigned staff."""
-    staff = is_class_staff(user.id, class_id, db)
-    if not staff:
-        require_active_enrolment(user.id, class_id, db)
-
     school_class = db.get_one(Class, class_id)
     if not school_class.leaderboard_enabled:
         raise AppError(ErrorCode.LEADERBOARD_DISABLED)

@@ -1,5 +1,5 @@
 Closes #
-<!-- Use "Part of #N" instead if the issue needs more than one PR. The PR metadata workflow copies the area, owner and milestone from this issue. Start the title with feat:, fix:, docs:, test:, chore: or ci: so the type label is set too. -->
+<!-- Use "Part of #N" instead if the issue needs more than one PR. The PR metadata workflow copies the area, owner and milestone from this issue. Start the title with feat:, fix:, refactor:, docs:, test:, style:, chore: or ci: so the type label is set too. -->
 
 ## What
 
