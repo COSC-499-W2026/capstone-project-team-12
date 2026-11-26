@@ -59,7 +59,14 @@ def test_link_emails_need_a_token_and_other_kinds_have_no_template_yet() -> None
     with pytest.raises(ValueError, match="needs a token"):
         render(mail(EmailKind.RESET_PASSWORD, token=None), BASE)
     with pytest.raises(ValueError, match="No template"):
-        render(mail(EmailKind.TA_INVITATION, token=None), BASE)
+        render(mail(EmailKind.EMAIL_CHANGED_NOTICE, token=None), BASE)
+
+
+def test_ta_invitation_names_the_class_and_sends_the_invitee_to_the_dashboard() -> None:
+    email = render(mail(EmailKind.TA_INVITATION, token=None, class_name="JAPN 101"), BASE)
+    assert "JAPN 101" in email.body
+    assert "Open https://hunt.example.ca/home to accept or decline" in email.body
+    assert "expires in 7 days" in email.body
 
 
 class FakeSmtp:

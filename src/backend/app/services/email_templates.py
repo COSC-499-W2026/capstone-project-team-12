@@ -7,6 +7,7 @@ The web app isn't designed yet, so the page paths live in LINK_PATHS and change 
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
+from app.models.accounts import INVITATION_TTL
 from app.models.enums import EmailKind
 from app.services.email import TOKEN_TTL
 from app.services.email_sender import OutgoingMail
@@ -17,6 +18,8 @@ LINK_PATHS = {
     EmailKind.RESET_PASSWORD: "/reset-password",
     EmailKind.SET_PASSWORD: "/set-password",
 }
+# the dashboard that lists the user's TA invitations (spec, Frontend: student area)
+INVITATIONS_PAGE = "/home"
 
 _SIGN_OFF = "\n\nIf you didn't expect this email, you can ignore it.\n\n- Japanese Scavenger Hunt\n"
 
@@ -33,11 +36,13 @@ class RenderedEmail:
 
 
 def render(mail: OutgoingMail, app_base_url: str) -> RenderedEmail:
-    """The email for `mail`, which needs its link token.
+    """The email for `mail`. A kind with a link needs its token.
 
     Only the kinds that something queues have a template; the feature that queues another kind
-    (email change, TA invitations) adds its own.
+    (email change) adds its own.
     """
+    if mail.kind == EmailKind.TA_INVITATION:
+        return _ta_invitation(mail, app_base_url)
     if mail.kind not in LINK_PATHS:
         raise ValueError(f"No template for {mail.kind!r}")
     if mail.token is None:
@@ -66,3 +71,14 @@ def render(mail: OutgoingMail, app_base_url: str) -> RenderedEmail:
                 "An administrator created a teacher account for you. Open this link to choose "
                 f"your password:\n\n{link}\n\nThe link works once, for {lasts}." + _SIGN_OFF,
             )
+
+
+def _ta_invitation(mail: OutgoingMail, app_base_url: str) -> RenderedEmail:
+    # no link token: the invitee answers on their dashboard after logging in
+    page = f"{app_base_url.rstrip('/')}{INVITATIONS_PAGE}"
+    return RenderedEmail(
+        "You're invited to assist a class",
+        f"You have been invited to be a teaching assistant for {mail.params['class_name']}. "
+        f"Open {page} to accept or decline the invitation.\n\n"
+        f"The invitation expires in {INVITATION_TTL.days} days." + _SIGN_OFF,
+    )
