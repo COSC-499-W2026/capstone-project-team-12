@@ -3,7 +3,7 @@
 from collections.abc import Callable
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.engagement.classes import create_class
@@ -117,13 +117,14 @@ def test_class_name_rejects_nul_character(
     make_user: Callable[..., User],
 ) -> None:
     teacher = make_user(role=UserRole.STAFF)
+    before = db.scalar(select(func.count()).select_from(Class))
 
     with pytest.raises(AppError) as exc:
         create_class(teacher, "Japanese\x00 101", "2026W1", Language.JA, db)
 
     assert exc.value.code == ErrorCode.VALIDATION_ERROR
     assert exc.value.details[0]["field"] == "name"
-    assert db.scalars(select(Class)).all() == []
+    assert db.scalar(select(func.count()).select_from(Class)) == before
 
 
 @pytest.mark.parametrize(
