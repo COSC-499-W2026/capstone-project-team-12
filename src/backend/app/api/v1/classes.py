@@ -15,12 +15,15 @@ from sqlalchemy.orm import Session
 
 from app.accounts.interface import (
     get_current_user,
+    invite_assistant,
     is_class_staff,
+    remove_assistant,
     require_class_role,
     require_code_class_role,
     require_staff,
 )
 from app.api.pagination import Page, PageParams, page_params
+from app.api.v1.email_links import EmailRequest
 from app.db import get_db
 from app.engagement.interface import (
     archive_class,
@@ -42,7 +45,13 @@ from app.errors import AppError, ErrorCode, error_responses
 from app.game.interface import end_open_sessions
 from app.models.accounts import User
 from app.models.engagement import Class
-from app.models.enums import ClassStaffRole, Difficulty, DifficultySuggestion, Language
+from app.models.enums import (
+    ClassStaffRole,
+    Difficulty,
+    DifficultySuggestion,
+    InvitationStatus,
+    Language,
+)
 
 leaderboard_router = APIRouter(prefix="/classes", tags=["classes"])
 teacher_classes_router = APIRouter(
@@ -753,6 +762,93 @@ def restore_class_student_endpoint(
 ) -> None:
     try:
         restore_student(student_id, class_id, db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+class InvitationResponse(BaseModel):
+    """An open invitation to assist the class."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    class_id: UUID
+    email: str = Field(description="Address the invitation was sent to.")
+    status: InvitationStatus
+    expires_at: datetime
+
+
+@teacher_classes_router.post(
+    "/{class_id}/staff",
+    response_model=InvitationResponse,
+    status_code=HTTPStatus.CREATED,
+    operation_id="inviteClassAssistant",
+    summary="Invite a teaching assistant",
+    description=(
+        "Only the owner can invite. Invites the existing staff or student account that uses the "
+        "email and emails it the invitation, which expires 7 days after the email is sent. "
+        "Inviting the same account again while its invitation is open returns that invitation. "
+        "Returns 404 USER_NOT_FOUND when no staff or student account uses the email, 403 "
+        "FORBIDDEN_ROLE for an admin account, 409 TA_SAME_CLASS_CONFLICT for a student enrolled "
+        "in this class (checked again when the invitation is accepted), 409 CLASS_ARCHIVED for an "
+        "archived class, and 422 VALIDATION_ERROR for an account that already owns or assists it."
+    ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER))],
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.CONFLICT,
+        HTTPStatus.UNPROCESSABLE_ENTITY,
+    ),
+)
+def invite_class_assistant(
+    class_id: UUID,
+    request: EmailRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> InvitationResponse:
+    """Invite an assistant and queue the invitation email in one transaction."""
+    try:
+        invitation = invite_assistant(class_id, user, request.email, db)
+        response = InvitationResponse.model_validate(invitation)
+        db.commit()
+        return response
+    except Exception:
+        db.rollback()
+        raise
+
+
+@teacher_classes_router.delete(
+    "/{class_id}/staff",
+    status_code=HTTPStatus.NO_CONTENT,
+    operation_id="removeClassAssistant",
+    summary="Remove a teaching assistant or a pending invitation",
+    description=(
+        "Only the owner can remove. Removes the teaching assistant who uses the email, or "
+        "cancels their pending invitation. The email goes in the body, as for an invitation, so "
+        "it never appears in a URL. Repeating the request, or naming the owner or an account with "
+        "no part in the class, changes nothing. Archived classes cannot be modified."
+    ),
+    dependencies=[Depends(require_class_role(ClassStaffRole.OWNER))],
+    responses=error_responses(
+        HTTPStatus.UNAUTHORIZED,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.CONFLICT,
+        HTTPStatus.UNPROCESSABLE_ENTITY,
+    ),
+)
+def remove_class_assistant(
+    class_id: UUID,
+    request: EmailRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Remove an assistant or cancel their invitation in one transaction."""
+    try:
+        remove_assistant(class_id, request.email, db)
         db.commit()
     except Exception:
         db.rollback()
