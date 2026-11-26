@@ -11,7 +11,14 @@ from sqlalchemy import Engine, delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.accounts.interface import accept_invitation, invite_assistant, remove_assistant
+from app.accounts.interface import (
+    PendingInvitation,
+    accept_invitation,
+    decline_invitation,
+    invite_assistant,
+    list_invitations,
+    remove_assistant,
+)
 from app.engagement.interface import validate_code_and_enrol
 from app.errors import AppError, ErrorCode
 from app.models.accounts import INVITATION_TTL, ClassStaff, ClassStaffInvitation, User
@@ -290,6 +297,66 @@ def test_an_invitation_to_an_archived_class_cannot_be_accepted(
     assert accept == ErrorCode.CLASS_ARCHIVED
 
 
+def test_declining_answers_the_invitation_once(
+    db: Session, make_user: Callable[..., User], school_class: Class, owner: User
+) -> None:
+    student = make_user()
+    invitation = invite_assistant(school_class.id, owner, student.email, db)
+
+    assert decline_invitation(student.id, invitation.id, db) == school_class.id
+
+    assert invitation.status == InvitationStatus.DECLINED
+    assert invitation.responded_at is not None
+    responded_at = invitation.responded_at
+    assert decline_invitation(student.id, invitation.id, db) == school_class.id  # no change
+    assert invitation.responded_at == responded_at
+
+
+def test_an_accepted_invitation_cannot_be_declined(
+    db: Session, make_user: Callable[..., User], school_class: Class, owner: User
+) -> None:
+    student = make_user()
+    invitation = invite_assistant(school_class.id, owner, student.email, db)
+    accept_invitation(student.id, invitation.id, db)
+
+    decline = error_code(lambda: decline_invitation(student.id, invitation.id, db))
+
+    assert decline == ErrorCode.NOT_FOUND
+    assert staff_role(db, school_class.id, student.id) == ClassStaffRole.ASSISTANT
+
+
+def test_an_invitation_to_an_archived_class_can_still_be_declined(
+    db: Session, make_user: Callable[..., User], school_class: Class, owner: User
+) -> None:
+    student = make_user()
+    invitation = invite_assistant(school_class.id, owner, student.email, db)
+    school_class.archived_at = datetime.now(UTC)
+    db.flush()
+
+    assert decline_invitation(student.id, invitation.id, db) == school_class.id
+
+
+def test_the_list_holds_only_invitations_the_user_can_still_answer(
+    db: Session, make_user: Callable[..., User], make_class: Callable[..., Class], owner: User
+) -> None:
+    student = make_user()
+    classes = [make_class(name=f"JAPN {number}") for number in range(5)]
+    older, newer, declined, expired, archived = [
+        invite_assistant(school_class.id, owner, student.email, db) for school_class in classes
+    ]
+    older.created_at = datetime.now(UTC) - timedelta(days=1)
+    decline_invitation(student.id, declined.id, db)
+    expired.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    classes[4].archived_at = datetime.now(UTC)
+    invite_assistant(classes[0].id, owner, make_user().email, db)  # someone else's
+    db.flush()
+
+    assert list_invitations(student.id, db) == [
+        PendingInvitation(newer.id, classes[1].id, "JAPN 1", newer.expires_at),
+        PendingInvitation(older.id, classes[0].id, "JAPN 0", older.expires_at),
+    ]
+
+
 def test_staff_changes_leave_the_transaction_to_the_caller(
     db: Session,
     make_user: Callable[..., User],
@@ -303,6 +370,8 @@ def test_staff_changes_leave_the_transaction_to_the_caller(
     invitation = invite_assistant(school_class.id, owner, student.email, db)
     accept_invitation(student.id, invitation.id, db)
     remove_assistant(school_class.id, student.email, db)
+    declined = invite_assistant(school_class.id, owner, student.email, db)
+    decline_invitation(student.id, declined.id, db)
 
     assert "commit" not in transaction_calls
     assert "rollback" not in transaction_calls

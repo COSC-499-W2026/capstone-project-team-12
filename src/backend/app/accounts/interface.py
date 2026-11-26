@@ -10,7 +10,14 @@ from jwt import InvalidTokenError, decode
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.accounts.staff import accept_invitation, invite_assistant, remove_assistant
+from app.accounts.staff import (
+    PendingInvitation,
+    accept_invitation,
+    decline_invitation,
+    invite_assistant,
+    list_invitations,
+    remove_assistant,
+)
 from app.accounts.tokens import revoke_refresh_tokens
 from app.config import get_settings
 from app.db import get_db
@@ -32,6 +39,9 @@ __all__ = [
     "invite_assistant",
     "remove_assistant",
     "accept_invitation",
+    "decline_invitation",
+    "PendingInvitation",
+    "list_invitations",
 ]
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
