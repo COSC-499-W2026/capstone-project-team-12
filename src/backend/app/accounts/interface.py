@@ -14,6 +14,7 @@ from app.accounts.staff import create_teacher
 from app.accounts.tokens import revoke_refresh_tokens
 from app.config import get_settings
 from app.db import get_db
+from app.engagement.interface import require_active_enrolment
 from app.errors import AppError, ErrorCode
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import AccessCode, Class
@@ -24,7 +25,7 @@ __all__ = [
     "user_id_from_token",
     "require_class_role",
     "require_code_class_role",
-    "is_class_staff",
+    "require_class_viewer",
     "can_manage_content",
     "require_admin",
     "require_staff",
@@ -94,6 +95,21 @@ def require_code_class_role(*allowed_roles: ClassStaffRole) -> Callable[..., Non
     return role_checker
 
 
+def require_class_viewer(
+    user: Annotated[User, Depends(get_current_user)],
+    class_id: Annotated[UUID, Path()],
+    db: Annotated[Session, Depends(get_db)],
+) -> bool:
+    """Whether the user is staff of the class; anyone else needs an active enrolment in it.
+
+    Raises the 404 NOT_FOUND or 409 CLASS_ARCHIVED of require_active_enrolment for others.
+    """
+    if _class_role(user.id, class_id, db) is not None:
+        return True
+    require_active_enrolment(user.id, class_id, db)
+    return False
+
+
 def _check_class_role(
     user_id: UUID, class_id: UUID, allowed_roles: tuple[ClassStaffRole, ...], db: Session
 ) -> None:
@@ -128,11 +144,6 @@ def require_player(user: Annotated[User, Depends(get_current_user)]) -> User:
     if user.role == UserRole.ADMIN:
         raise AppError(ErrorCode.FORBIDDEN_ROLE, "Admins don't play")
     return user
-
-
-def is_class_staff(user_id: UUID, class_id: UUID, db: Session) -> bool:
-    """Return True when the user is an owner or assistant of the class (the only staff roles)."""
-    return _class_role(user_id, class_id, db) is not None
 
 
 def can_manage_content(user: Annotated[User, Depends(get_current_user)]) -> None:
