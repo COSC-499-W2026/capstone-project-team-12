@@ -105,11 +105,12 @@ def test_change_email_link_is_for_the_new_address(
 def test_mail_without_a_link_gets_no_token(
     db: Session, make_user: Callable[..., User], kind: EmailKind
 ) -> None:
-    row = EmailService.queue_email(make_user(), kind, db, params={"class_name": "JAPN 101"})
+    params = {"class_name": "JAPN 101", "invitation_id": str(uuid4())}
+    row = EmailService.queue_email(make_user(), kind, db, params=params)
     db.commit()
     mailer = FakeMailer()
     send_due_emails(mailer, db)
-    assert mailer.sent == [OutgoingMail(row.to_email, kind, {"class_name": "JAPN 101"}, None)]
+    assert mailer.sent == [OutgoingMail(row.to_email, kind, params, None)]
     assert tokens(db, row.user_id) == 0
 
 
