@@ -9,6 +9,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from conftest import audit_entries
 from fastapi.testclient import TestClient
 from httpx2 import Response
 from sqlalchemy import func, select
@@ -17,16 +18,10 @@ from sqlalchemy.orm import Session
 from app.accounts.interface import create_teacher
 from app.errors import ErrorCode
 from app.models.accounts import User
-from app.models.audit import AuditEvent
 from app.models.email import EmailOutbox
 from app.models.enums import AuditAction, EmailKind, EmailStatus, UserRole
 
 URL = "/api/v1/admin/staff"
-
-
-@pytest.fixture
-def admin(make_user: Callable[..., User]) -> User:
-    return make_user(role=UserRole.ADMIN)
 
 
 @pytest.fixture
@@ -44,10 +39,6 @@ def create_as(
 def new_teacher() -> dict[str, str]:
     """An address and a username no account has."""
     return {"email": f"{uuid4().hex[:12]}@example.com", "username": f"t_{uuid4().hex[:8]}"}
-
-
-def audit_entries(db: Session, actor: User) -> list[AuditEvent]:
-    return list(db.scalars(select(AuditEvent).where(AuditEvent.actor_id == actor.id)))
 
 
 def user_count(db: Session) -> int:
