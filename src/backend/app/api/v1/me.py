@@ -10,7 +10,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.accounts.email_links import cancel_waiting_reset_mail
-from app.accounts.interface import get_current_user, require_player, revoke_all_refresh_tokens
+from app.accounts.interface import (
+    accept_invitation,
+    decline_invitation,
+    get_current_user,
+    list_invitations,
+    require_player,
+    revoke_all_refresh_tokens,
+)
 from app.accounts.password import hash_password, validate_password_security, verified_password_hash
 from app.accounts.profile import current_class_id, select_class, set_practice_language
 from app.accounts.tokens import create_refresh_token, set_refresh_cookie
@@ -36,6 +43,7 @@ from app.models.enums import (
     DailyChallengeType,
     Difficulty,
     EmailKind,
+    InvitationStatus,
     Language,
     SessionEndReason,
     SessionState,
@@ -617,3 +625,97 @@ def leave_class_endpoint(
     except Exception:
         db.rollback()
         raise
+
+
+class InvitationItem(BaseModel):
+    """An invitation to assist a class that the user can still answer."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    class_id: UUID
+    class_name: str
+    expires_at: datetime
+
+
+class InvitationAnswerResponse(BaseModel):
+    """The class an invitation was for and the user's answer to it."""
+
+    class_id: UUID
+    status: InvitationStatus
+
+
+@me_router.get(
+    "/invitations",
+    response_model=list[InvitationItem],
+    operation_id="listMyInvitations",
+    summary="List my invitations to assist a class",
+    description=(
+        "Return the teaching assistant invitations the signed-in user can still answer, newest "
+        "first. Expired invitations and invitations to archived classes are left out. Staff and "
+        "student accounts can be invited; admin accounts never are, so their list is empty."
+    ),
+    responses=error_responses(HTTPStatus.UNAUTHORIZED),
+)
+def list_my_invitations(
+    user: Annotated[User, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]
+) -> list[InvitationItem]:
+    """List the user's open invitations without modifying them."""
+    return [InvitationItem.model_validate(item) for item in list_invitations(user.id, db)]
+
+
+@me_router.post(
+    "/invitations/{invitation_id}/accept",
+    response_model=InvitationAnswerResponse,
+    operation_id="acceptInvitation",
+    summary="Accept an invitation to assist a class",
+    description=(
+        "Make the signed-in user a teaching assistant of the class; the account's role does not "
+        "change. A student enrolled in the class gets 409 TA_SAME_CLASS_CONFLICT, checked again "
+        "here because they may have joined after being invited; the invitation stays open. An "
+        "archived class gets 409 CLASS_ARCHIVED. Another user's invitation, or one that was "
+        "declined, cancelled or has expired, gets 404 NOT_FOUND. Accepting again returns 200 "
+        "and changes nothing."
+    ),
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT),
+)
+def accept_my_invitation(
+    invitation_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> InvitationAnswerResponse:
+    """Accept the invitation in one transaction."""
+    try:
+        class_id = accept_invitation(user.id, invitation_id, db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return InvitationAnswerResponse(class_id=class_id, status=InvitationStatus.ACCEPTED)
+
+
+@me_router.post(
+    "/invitations/{invitation_id}/decline",
+    response_model=InvitationAnswerResponse,
+    operation_id="declineInvitation",
+    summary="Decline an invitation to assist a class",
+    description=(
+        "Decline the signed-in user's invitation, including one to a class that has since been "
+        "archived. Another user's invitation, or one that was accepted, cancelled or has "
+        "expired, gets 404 NOT_FOUND. Declining again returns 200 and changes nothing."
+    ),
+    responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.NOT_FOUND),
+)
+def decline_my_invitation(
+    invitation_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> InvitationAnswerResponse:
+    """Decline the invitation in one transaction."""
+    try:
+        class_id = decline_invitation(user.id, invitation_id, db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return InvitationAnswerResponse(class_id=class_id, status=InvitationStatus.DECLINED)

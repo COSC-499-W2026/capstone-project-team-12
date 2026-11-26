@@ -1,11 +1,12 @@
 """Teaching assistant invitations, owned by the accounts component.
 
-The class owner invites assistants by email and removes them; the invited user accepts.
-Classes and enrolments belong to engagement, so they are read only through its interface.
-Every change for one invitee locks that user first, so two of them never interleave. The
-caller owns the transaction; nothing here commits.
+The class owner invites assistants by email and removes them; the invited user lists their
+invitations and accepts or declines them. Classes and enrolments belong to engagement, so they
+are read only through its interface. Every change for one invitee locks that user first, so
+two of them never interleave. The caller owns the transaction; nothing here commits.
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -159,19 +160,7 @@ def accept_invitation(user_id: UUID, invitation_id: UUID, db: Session) -> UUID:
         TA_SAME_CLASS_CONFLICT: The user is enrolled in the class as a student.
     """
     lock_user(user_id, db)
-
-    not_found = AppError(ErrorCode.NOT_FOUND, "Invitation not found")
-    # read under the user lock, so an owner's cancel that committed meanwhile is seen
-    invitation = db.scalar(
-        select(ClassStaffInvitation)
-        .where(
-            ClassStaffInvitation.id == invitation_id,
-            ClassStaffInvitation.invitee_id == user_id,
-        )
-        .execution_options(populate_existing=True)
-    )
-    if invitation is None:
-        raise not_found
+    invitation = _users_invitation(user_id, invitation_id, db)
 
     class_id = invitation.class_id
     _require_open_class(class_id, db)
@@ -180,8 +169,8 @@ def accept_invitation(user_id: UUID, invitation_id: UUID, db: Session) -> UUID:
         return class_id
 
     now = datetime.now(UTC)
-    if invitation.status != InvitationStatus.PENDING or invitation.expires_at <= now:
-        raise not_found
+    if not _is_open(invitation, now):
+        raise AppError(ErrorCode.NOT_FOUND, _NOT_FOUND)
 
     if is_actively_enrolled(user_id, class_id, db):
         raise AppError(ErrorCode.TA_SAME_CLASS_CONFLICT)
@@ -196,6 +185,74 @@ def accept_invitation(user_id: UUID, invitation_id: UUID, db: Session) -> UUID:
     )
     db.flush()
     return class_id
+
+
+def decline_invitation(user_id: UUID, invitation_id: UUID, db: Session) -> UUID:
+    """Decline the user's invitation to assist a class and return the class's id.
+
+    Declining an invitation that was already declined changes nothing. Declining doesn't
+    change the class, so an invitation to an archived class can be declined too.
+
+    Locks the user first, as accepting does, so an accept and a decline of the same invitation
+    can't both pass. The caller checks that the user is signed in and owns the transaction;
+    this function never commits.
+
+    Raises:
+        NOT_FOUND: No such invitation for this user, or it was accepted, cancelled or has
+            expired.
+    """
+    lock_user(user_id, db)
+    invitation = _users_invitation(user_id, invitation_id, db)
+
+    if invitation.status == InvitationStatus.DECLINED:
+        return invitation.class_id
+
+    now = datetime.now(UTC)
+    if not _is_open(invitation, now):
+        raise AppError(ErrorCode.NOT_FOUND, _NOT_FOUND)
+
+    invitation.status = InvitationStatus.DECLINED
+    invitation.responded_at = now
+    db.flush()
+    return invitation.class_id
+
+
+@dataclass(frozen=True)
+class PendingInvitation:
+    """An invitation to assist a class that the user can still answer."""
+
+    id: UUID
+    class_id: UUID
+    class_name: str
+    expires_at: datetime
+
+
+def list_invitations(user_id: UUID, db: Session) -> list[PendingInvitation]:
+    """Return the invitations the user can still answer, newest first.
+
+    Expired invitations and invitations to archived classes are left out, since they can no
+    longer be accepted. This operation is read-only and does not commit or flush.
+    """
+    invitations = db.scalars(
+        select(ClassStaffInvitation)
+        .where(
+            ClassStaffInvitation.invitee_id == user_id,
+            ClassStaffInvitation.status == InvitationStatus.PENDING,
+            ClassStaffInvitation.expires_at > datetime.now(UTC),
+        )
+        .order_by(ClassStaffInvitation.created_at.desc(), ClassStaffInvitation.id)
+    ).all()
+
+    pending = []
+    for invitation in invitations:
+        class_name = get_class_name(invitation.class_id, db)
+        if class_name is not None and not is_class_archived(invitation.class_id, db):
+            pending.append(
+                PendingInvitation(
+                    invitation.id, invitation.class_id, class_name, invitation.expires_at
+                )
+            )
+    return pending
 
 
 def _require_open_class(class_id: UUID, db: Session) -> str:
@@ -238,3 +295,27 @@ def _open_invitation(
     pending.status = InvitationStatus.EXPIRED
     db.flush()  # before the new invitation takes the one-pending slot
     return None
+
+
+_NOT_FOUND = "Invitation not found"
+
+
+def _users_invitation(user_id: UUID, invitation_id: UUID, db: Session) -> ClassStaffInvitation:
+    """The user's invitation, read again under the user's lock so an owner's cancel that
+    committed meanwhile is seen."""
+    invitation = db.scalar(
+        select(ClassStaffInvitation)
+        .where(
+            ClassStaffInvitation.id == invitation_id,
+            ClassStaffInvitation.invitee_id == user_id,
+        )
+        .execution_options(populate_existing=True)
+    )
+    if invitation is None:
+        raise AppError(ErrorCode.NOT_FOUND, _NOT_FOUND)
+    return invitation
+
+
+def _is_open(invitation: ClassStaffInvitation, now: datetime) -> bool:
+    """Whether the invitee can still answer the invitation."""
+    return invitation.status == InvitationStatus.PENDING and invitation.expires_at > now
