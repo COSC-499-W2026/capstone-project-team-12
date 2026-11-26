@@ -16,11 +16,6 @@ from app.services import audit
 
 
 @pytest.fixture
-def admin(make_user: Callable[..., User]) -> User:
-    return make_user(role=UserRole.ADMIN)
-
-
-@pytest.fixture
 def teacher(make_user: Callable[..., User]) -> User:
     return make_user(role=UserRole.STAFF)
 

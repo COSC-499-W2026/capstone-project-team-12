@@ -20,8 +20,8 @@ from app.accounts.interface import (
     get_current_user,
     list_staff_accounts,
     require_admin,
+    set_staff_active,
 )
-from app.accounts.staff import set_staff_active
 from app.api.pagination import Page, PageParams, page_params
 from app.db import get_db
 from app.errors import error_responses
@@ -138,7 +138,6 @@ def post_staff_account(
 )
 def deactivate_user(
     user_id: UUID,
-    request: Request,
     admin: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> StaffAccount:
@@ -147,9 +146,9 @@ def deactivate_user(
     are kept. Returns the account.
 
     403 FORBIDDEN_ROLE for an admin or student account, 404 USER_NOT_FOUND for an unknown id.
-    Each attempt is recorded in the audit log as user_deactivated, a refused one with its code.
+    The change is recorded in the admin audit log as deactivate.
     """
-    return _set_active(user_id, False, request, admin, db)
+    return _set_active(user_id, False, admin, db)
 
 
 @admin_router.post(
@@ -161,25 +160,16 @@ def deactivate_user(
 )
 def reactivate_user(
     user_id: UUID,
-    request: Request,
     admin: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> StaffAccount:
     """Let a deactivated staff account sign in again; sessions ended by the deactivation stay
-    ended. Returns the account. Errors and audit as for deactivating (user_reactivated).
+    ended. Returns the account. Errors as for deactivating; recorded as reactivate.
     """
-    return _set_active(user_id, True, request, admin, db)
+    return _set_active(user_id, True, admin, db)
 
 
-def _set_active(
-    user_id: UUID, active: bool, request: Request, admin: User, db: Session
-) -> StaffAccount:
-    ip_address = request.client.host if request.client else None
-    try:
-        user = set_staff_active(admin.id, user_id, active, db, ip_address=ip_address)
-    except AppError:
-        db.commit()  # keeps the DENIED or FAILURE entry; nothing else was written
-        raise
-    account = StaffAccount.model_validate(user)
+def _set_active(user_id: UUID, active: bool, admin: User, db: Session) -> StaffAccount:
+    account = StaffAccount.model_validate(set_staff_active(admin.id, user_id, active, db))
     db.commit()
     return account

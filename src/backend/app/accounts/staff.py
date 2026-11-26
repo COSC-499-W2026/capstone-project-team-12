@@ -1,11 +1,13 @@
-"""Staff (teacher) accounts as admins manage them through the admin API: creating and listing.
+"""Staff (teacher) accounts as admins manage them through the admin API: creating, listing,
+deactivating and reactivating.
 
 To create one, the admin gives the address, the username and whether the teacher has content
 rights; the teacher then chooses a password from the emailed set-password link (valid 3 days),
-so the account has no password until then. The list holds both staff and admin accounts.
+so the account has no password until then. The list holds both staff and admin accounts. Only
+staff accounts can be deactivated or reactivated; admin and student accounts are refused.
 
-Nothing here commits: the route commits the account, its email and its audit entry together,
-and a refused request rolls back with nothing written. Reading the list writes nothing.
+Nothing here commits: the route commits each change and its audit entry together, and a
+refused request rolls back with nothing written. Reading the list writes nothing.
 """
 
 from dataclasses import dataclass
@@ -25,6 +27,7 @@ from app.services.locks import lock_user
 
 USER_NOT_FOUND_MESSAGE = "No account has this id."
 ONLY_STAFF_MESSAGE = "Only staff accounts can be deactivated or reactivated."
+
 
 def create_teacher(
     admin_id: UUID, email: str, username: str, can_manage_content: bool, db: Session
@@ -88,10 +91,10 @@ def list_staff_accounts(
     return StaffPage(items=tuple(users), total=total)
 
 
-def set_staff_active(
-    admin_id: UUID, user_id: UUID, active: bool, db: Session, *, ip_address: str | None = None
-) -> User:
-    """Deactivate (active=False) or reactivate a staff account; repeating either is allowed.
+def set_staff_active(admin_id: UUID, user_id: UUID, active: bool, db: Session) -> User:
+    """Deactivate (active=False) or reactivate a staff account and record deactivate or
+    reactivate in the audit log with the account as the target. Repeating either is allowed
+    and recorded again.
 
     Deactivating also revokes every refresh token, so the account is signed out everywhere: it
     can't sign in or refresh, and get_current_user refuses its access tokens. The tokens stay
@@ -101,40 +104,27 @@ def set_staff_active(
     holds FOR SHARE on it while adding a token, so one in progress commits first and its token
     is revoked too; a later one sees the account is deactivated.
 
-    404 USER_NOT_FOUND for an unknown id (audited as FAILURE), 403 FORBIDDEN_ROLE for an admin
-    or student account (DENIED). Entries name the account's address, username and role, and
-    whether it was active before.
+    404 USER_NOT_FOUND for an unknown id, 403 FORBIDDEN_ROLE for an admin or student account;
+    either records nothing, since nothing changed.
     """
-    action = AuditAction.REACTIVATE_USER if active else AuditAction.DEACTIVATE_USER
     user = lock_user(user_id, db)
-    details: dict[str, Any] = {}
-    if user is not None:
-        details = {
-            "email": user.email,
-            "username": user.username,
-            "role": user.role,
-            "was_active": user.is_active,
-        }
-    if user is None or user.role != UserRole.STAFF:
+    if user is None:
+        raise AppError(ErrorCode.USER_NOT_FOUND, USER_NOT_FOUND_MESSAGE)
+    if user.role != UserRole.STAFF:
         # admin accounts are managed with the command-line tool; students are not staff
-        error = (
-            AppError(ErrorCode.USER_NOT_FOUND, USER_NOT_FOUND_MESSAGE)
-            if user is None
-            else AppError(ErrorCode.FORBIDDEN_ROLE, ONLY_STAFF_MESSAGE)
-        )
-        audit.record(
-            admin_id,
-            action,
-            db,
-            result=AuditResult.FAILURE if user is None else AuditResult.DENIED,
-            target_id=user_id,
-            details=details | {"error": error.code.value},
-            ip_address=ip_address,
-        )
-        raise error
+        raise AppError(ErrorCode.FORBIDDEN_ROLE, ONLY_STAFF_MESSAGE)
+    was_active = user.is_active
     user.is_active = active
     db.flush()
     if not active:
         revoke_refresh_tokens(user.id, db)
-    audit.record(admin_id, action, db, target_id=user.id, details=details, ip_address=ip_address)
+    # only whether it changed: an address or username here would outlive the account being
+    # anonymised
+    audit.record(
+        admin_id,
+        AuditAction.REACTIVATE if active else AuditAction.DEACTIVATE,
+        db,
+        target_user_id=user.id,
+        details={"was_active": was_active},
+    )
     return user

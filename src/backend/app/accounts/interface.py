@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.accounts.profile import get_profile_classes
-from app.accounts.staff import create_teacher, list_staff_accounts
+from app.accounts.staff import create_teacher, list_staff_accounts, set_staff_active
 from app.accounts.tokens import revoke_refresh_tokens
 from app.config import get_settings
 from app.db import get_db
@@ -33,6 +33,7 @@ __all__ = [
     "require_player",
     "create_teacher",
     "list_staff_accounts",
+    "set_staff_active",
     "get_profile_classes",
 ]
 
