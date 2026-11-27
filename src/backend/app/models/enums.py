@@ -79,6 +79,14 @@ class PhotoResult(StrEnum):
     NO_MATCH = "no_match"
 
 
+class PhotoAttemptStatus(StrEnum):
+    """Where one photo upload is in its OCR run (spec, Stage 2: Verification)."""
+
+    PROCESSING = "processing"  # reserved and committed before OCR starts
+    DONE = "done"  # has a result; counts as an attempt
+    ERROR = "error"  # server error or timed out; releases its attempt
+
+
 class AudioSourceType(StrEnum):
     UPLOADED = "uploaded"  # recorded and uploaded by a content manager
     AI_GENERATED = "ai_generated"  # TTS when the location is drawn (Future Work, spec AudioService)
