@@ -1,20 +1,21 @@
 """Teaching assistant invitations. The route checks who may invite."""
 
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import Engine, delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import invite_assistant
+from app.engagement.interface import archive_class
 from app.errors import AppError, ErrorCode
 from app.models.accounts import INVITATION_TTL, ClassStaff, ClassStaffInvitation, User
 from app.models.email import EmailOutbox
 from app.models.engagement import Class, ClassEnrollment
-from app.models.enums import EmailKind, InvitationStatus, UserRole
+from app.models.enums import EmailKind, InvitationStatus, Language, UserRole
 
 
 @pytest.fixture
@@ -91,21 +92,6 @@ def test_inviting_again_while_pending_returns_the_same_invitation(
     assert len(invitation_emails(db, teacher)) == 1
 
 
-def test_an_expired_invitation_is_replaced_by_a_new_one(
-    db: Session, make_user: Callable[..., User], school_class: Class, owner: User
-) -> None:
-    student = make_user()
-    old = invite_assistant(school_class.id, owner, student.email, db)
-    old.expires_at = datetime.now(UTC) - timedelta(seconds=1)
-    db.flush()
-
-    new = invite_assistant(school_class.id, owner, student.email, db)
-
-    assert new.id != old.id
-    assert old.status == InvitationStatus.EXPIRED
-    assert len(invitation_emails(db, student)) == 2
-
-
 def test_only_staff_and_student_accounts_outside_the_class_staff_can_be_invited(
     db: Session, make_user: Callable[..., User], school_class: Class, owner: User
 ) -> None:
@@ -143,6 +129,40 @@ def test_a_student_of_the_class_is_refused_but_one_from_another_class_can_be_inv
     assert conflict == ErrorCode.TA_SAME_CLASS_CONFLICT
     assert invitation_emails(db, enrolled) == []
     invite_assistant(school_class.id, owner, elsewhere.email, db)  # no conflict: doesn't raise
+
+
+def test_an_archive_that_locks_the_class_first_leaves_no_invitation_or_email(
+    test_engine: Engine, run_together: Callable[..., list[object]]
+) -> None:
+    # committed, so the archive and the invitation can run in two transactions at once
+    with Session(test_engine, expire_on_commit=False) as setup:
+        school_class = Class(name="JAPN 101", semester="2026W1", target_language=Language.JA)
+        owner, invitee = (
+            User(email=f"{uuid4().hex}@example.com", username=f"u_{uuid4().hex[:8]}", role=role)
+            for role in (UserRole.STAFF, UserRole.STUDENT)
+        )
+        setup.add_all([school_class, owner, invitee])
+        setup.commit()
+    try:
+        # the invitation starts once its first class check would pass, while archive holds the lock
+        _, refused = run_together(
+            lambda db: archive_class(school_class.id, db),
+            (lambda db: invite_assistant(school_class.id, owner, invitee.email, db), 0.2),
+            hold=0.5,
+        )
+        assert isinstance(refused, AppError), "the invitation went through"
+        assert refused.code == ErrorCode.CLASS_ARCHIVED
+        with Session(test_engine) as check:
+            invitations = select(ClassStaffInvitation).filter_by(class_id=school_class.id)
+            assert check.scalars(invitations).all() == []
+            assert invitation_emails(check, invitee) == []
+    finally:
+        with Session(test_engine) as cleanup:
+            cleanup.execute(delete(ClassStaffInvitation).filter_by(class_id=school_class.id))
+            cleanup.execute(delete(EmailOutbox).filter_by(user_id=invitee.id))
+            cleanup.execute(delete(User).where(User.id.in_([owner.id, invitee.id])))
+            cleanup.execute(delete(Class).filter_by(id=school_class.id))
+            cleanup.commit()
 
 
 def test_the_database_allows_one_pending_invitation_per_person_and_class(

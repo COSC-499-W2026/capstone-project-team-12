@@ -4,12 +4,14 @@ from http import HTTPStatus
 
 from fastapi import APIRouter
 
+from app.api.v1.admin import admin_router
 from app.api.v1.auth import auth_router
 from app.api.v1.classes import (
     leaderboard_router,
     teacher_access_codes_router,
     teacher_classes_router,
 )
+from app.api.v1.clue_plays import clue_plays_router
 from app.api.v1.content import content_router
 from app.api.v1.email_links import email_links_router
 from app.api.v1.games import games_router
@@ -24,11 +26,13 @@ api_router = APIRouter(
     prefix="/api/v1",
     responses=error_responses(HTTPStatus.UNPROCESSABLE_ENTITY, HTTPStatus.TOO_MANY_REQUESTS),
 )
+api_router.include_router(admin_router)
 api_router.include_router(auth_router)
 api_router.include_router(me_classes_router)
 api_router.include_router(leaderboard_router)
 api_router.include_router(teacher_classes_router)
 api_router.include_router(teacher_access_codes_router)
+api_router.include_router(clue_plays_router)
 api_router.include_router(content_router)
 api_router.include_router(email_links_router)
 api_router.include_router(games_router)

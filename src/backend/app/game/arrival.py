@@ -12,7 +12,7 @@ from app.errors import AppError, ErrorCode
 from app.game.control import lock_open_game, session_not_active
 from app.game.current_location import CurrentLocation, Stage, describe
 from app.game.navigation import NavigationRules, is_weak, override_available_at
-from app.game.progress import current_row, game_details, inactive_location, wrong_stage
+from app.game.progress import current_row, inactive_location, moved_on, wrong_stage
 from app.models.enums import (
     ArrivalOverride,
     FeedbackCode,
@@ -48,7 +48,7 @@ def confirm_arrival(
     """
     game = lock_open_game(student_id, game_id, db)
     if position != game.current_position:
-        raise _moved_on(game)
+        raise moved_on(game)
     row = current_row(game, db)
     if row.status == LocationStatus.VERIFYING:
         return _arrival(game, describe(game, row, db), db)
@@ -112,12 +112,3 @@ def _arrival(game: GameSession, location: CurrentLocation, db: Session) -> Arriv
     code = FeedbackCode.VERIFY_START
     language = Language(game.target_language)
     return Arrival(location, code, get_audio_service().feedback_audio_url(code, language, db))
-
-
-def _moved_on(game: GameSession) -> AppError:
-    """409 STATE_CHANGED: the app's position is out of date (e.g. a very late retry)."""
-    return AppError(
-        ErrorCode.STATE_CHANGED,
-        "The game has moved on since this location",
-        details=[game_details(game)],
-    )

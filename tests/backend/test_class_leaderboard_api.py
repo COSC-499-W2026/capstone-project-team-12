@@ -4,13 +4,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.errors import ErrorCode
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import Class, ClassEnrollment, PointsLedger
-from app.models.enums import EnrollmentEndReason, UserRole
+from app.models.enums import ClassStaffRole, EnrollmentEndReason, UserRole
 
 URL = "/api/v1/classes"
 
@@ -65,18 +66,25 @@ def test_enrolled_student_sees_class_scores_only(
     }
 
 
-def test_owner_can_view_leaderboard(
+# an assistant can be a student account that isn't enrolled in the class
+@pytest.mark.parametrize(
+    ("staff_role", "account_role"),
+    [(ClassStaffRole.OWNER, UserRole.STAFF), (ClassStaffRole.ASSISTANT, UserRole.STUDENT)],
+)
+def test_class_staff_can_view_leaderboard(
     client: TestClient,
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
     make_class_staff: Callable[..., ClassStaff],
     auth_headers: Callable[[User], dict[str, str]],
+    staff_role: ClassStaffRole,
+    account_role: UserRole,
 ) -> None:
-    owner = make_user(role=UserRole.STAFF)
+    staff = make_user(role=account_role)
     school_class = make_class()
-    make_class_staff(school_class, owner)
+    make_class_staff(school_class, staff, role=staff_role)
 
-    response = client.get(f"{URL}/{school_class.id}/leaderboard", headers=auth_headers(owner))
+    response = client.get(f"{URL}/{school_class.id}/leaderboard", headers=auth_headers(staff))
 
     assert response.status_code == 200, response.text
     assert response.json()["items"] == []

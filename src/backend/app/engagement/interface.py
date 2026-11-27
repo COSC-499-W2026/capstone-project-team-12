@@ -7,6 +7,8 @@ Implemented:
   services (update_class_settings), classroom listing via list_staff_classes,
   and code deactivation.
 - Issue #85: Student leave-class service and current-class reassignment.
+- Issue #413: The student's active classes with their names and languages
+  (list_active_classes), for GET /me/profile.
 
 Implemented in part:
 - Issue #15: Location scoring, per-language levels, and completion badges.
@@ -106,10 +108,13 @@ __all__ = [
     "enrolment_ended_by_archive",
     "generate_access_code",
     "get_active_class_ids",
+    "ActiveClass",
+    "list_active_classes",
     "get_class_language",
     "get_class_name",
     "is_actively_enrolled",
     "is_class_archived",
+    "lock_class",
     "leave_class",
     "list_class_access_codes",
     "remove_student",
@@ -472,18 +477,49 @@ def get_class_name(class_id: UUID, db: Session) -> str | None:
     return None if school_class is None else school_class.name
 
 
+@dataclass(frozen=True)
+class ActiveClass:
+    """A class the student is actively enrolled in, for the student's class switcher.
+
+    `language` is the class's target language; `joined_at` is the first join date, kept on rejoin.
+    """
+
+    id: UUID
+    name: str
+    language: Language
+    joined_at: datetime
+
+
+def list_active_classes(student_id: UUID, db: Session) -> list[ActiveClass]:
+    """Return the classes the student is actively enrolled in, most recently joined first.
+
+    Each with its name, language and the student's first join date. get_active_class_ids lists
+    their ids from this same query.
+    """
+    statement = (
+        select(Class.id, Class.name, Class.target_language, ClassEnrollment.joined_at)
+        .join(Class, Class.id == ClassEnrollment.class_id)
+        .where(ClassEnrollment.student_id == student_id, ClassEnrollment.is_active.is_(True))
+        .order_by(ClassEnrollment.joined_at.desc(), ClassEnrollment.class_id)
+    )
+    return [
+        ActiveClass(
+            id=row.id,
+            name=row.name,
+            language=Language(row.target_language),
+            joined_at=row.joined_at,
+        )
+        for row in db.execute(statement)
+    ]
+
+
 def get_active_class_ids(student_id: UUID, db: Session) -> list[UUID]:
     """Return the classes the student is actively enrolled in, most recently joined first.
 
     An archived class has no active enrolments, so it is never listed. A class the student left
     and rejoined keeps its first `joined_at`, so it can rank lower than "most recent" suggests.
     """
-    statement = (
-        select(ClassEnrollment.class_id)
-        .where(ClassEnrollment.student_id == student_id, ClassEnrollment.is_active.is_(True))
-        .order_by(ClassEnrollment.joined_at.desc(), ClassEnrollment.class_id)
-    )
-    return list(db.scalars(statement))
+    return [c.id for c in list_active_classes(student_id, db)]
 
 
 def is_actively_enrolled(student_id: UUID, class_id: UUID, db: Session) -> bool:
@@ -542,8 +578,8 @@ def require_active_enrolment(student_id: UUID, class_id: UUID, db: Session) -> L
     return language
 
 
-def _lock_class(class_id: UUID, db: Session) -> Class:
-    """Lock and refresh a classroom whose existence has been established."""
+def lock_class(class_id: UUID, db: Session) -> Class:
+    """Lock and refresh a class that exists. Lock any user first, as joining and archiving do."""
     return db.execute(
         select(Class)
         .where(Class.id == class_id)
@@ -649,7 +685,7 @@ def validate_code_and_enrol(
     ):
         raise AppError(ErrorCode.INVALID_ACCESS_CODE)
 
-    school_class = _lock_class(access_code.class_id, db)
+    school_class = lock_class(access_code.class_id, db)
     if school_class.archived_at is not None:
         raise AppError(ErrorCode.CLASS_ARCHIVED)
 
@@ -766,7 +802,7 @@ def _lock_class_enrolment(
     if student is None:
         raise AppError(ErrorCode.NOT_FOUND)
 
-    school_class = _lock_class(class_id, db)
+    school_class = lock_class(class_id, db)
     if school_class.archived_at is not None:
         raise AppError(ErrorCode.CLASS_ARCHIVED)
 
@@ -829,7 +865,7 @@ def archive_class(class_id: UUID, db: Session) -> None:
             .with_for_update(key_share=True)
             .execution_options(populate_existing=True)
         ).all()
-        school_class = _lock_class(class_id, db)
+        school_class = lock_class(class_id, db)
         if school_class.archived_at is not None:
             locks.commit()
             return

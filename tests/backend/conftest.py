@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from gps_replay import Api, Step, replay
 from httpx2 import Response
 from jwt import encode
-from sqlalchemy import Engine, create_engine, event, text
+from sqlalchemy import Engine, create_engine, event, select, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -28,6 +28,7 @@ from app.engagement import daily_challenges
 from app.errors import AppError, ErrorCode
 from app.main import create_app
 from app.models.accounts import ClassStaff, User
+from app.models.audit import AuditEvent
 from app.models.content import AudioAsset, Clue, FeedbackAudio, Location
 from app.models.engagement import ACCESS_CODE_ALPHABET, AccessCode, Class, ClassEnrollment
 from app.models.enums import (
@@ -255,6 +256,33 @@ def client(db: Session) -> TestClient:
     return TestClient(app)
 
 
+@pytest.fixture
+def login(client: TestClient) -> Callable[[str, str], Response]:
+    """POST /auth/login with an email and a password. The client's cookies are cleared after,
+    so the refresh cookie doesn't leak into later requests; tests send it with `refresh`."""
+
+    def send(email: str, password: str) -> Response:
+        form = {"username": email, "password": password}
+        response = client.post("/api/v1/auth/login", data=form)
+        client.cookies.clear()
+        return response
+
+    return send
+
+
+@pytest.fixture
+def refresh(client: TestClient) -> Callable[[str], Response]:
+    """POST /auth/refresh with the refresh token as its cookie, then clear the client's cookies."""
+
+    def send(refresh_token: str) -> Response:
+        headers = {"Cookie": f"refresh_token={refresh_token}"}
+        response = client.post("/api/v1/auth/refresh", headers=headers)
+        client.cookies.clear()
+        return response
+
+    return send
+
+
 # Factories for the core tables (#8). Each one adds a valid row with unique values and flushes,
 # so the row has an id. Pass any column to override a default, e.g. make_user(role=UserRole.STAFF).
 
@@ -281,6 +309,17 @@ def make_user(db: Session) -> Callable[..., User]:
         return _add(db, User(**(values | fields)))
 
     return make
+
+
+@pytest.fixture
+def admin(make_user: Callable[..., User]) -> User:
+    return make_user(role=UserRole.ADMIN)
+
+
+def audit_entries(db: Session, actor: User) -> list[AuditEvent]:
+    """The admin audit log entries `actor` made, oldest first."""
+    entries = select(AuditEvent).where(AuditEvent.actor_id == actor.id)
+    return list(db.scalars(entries.order_by(AuditEvent.created_at)))
 
 
 @pytest.fixture

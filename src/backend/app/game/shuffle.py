@@ -16,12 +16,12 @@ from app.config import get_settings
 from app.errors import AppError, ErrorCode
 from app.game.control import lock_open_game, session_not_active
 from app.game.draw import draw_replacements
-from app.game.progress import game_details
+from app.game.progress import game_changed
 from app.game.sessions import UNFINISHED
 from app.game.start import new_location_row
 from app.game.status import GameStatus, status_of
 from app.models.enums import Difficulty, Language, LocationStatus, SessionState, SkipReason
-from app.models.game import GameSession, SessionLocation
+from app.models.game import SessionLocation
 from app.services.audio import get_audio_service
 
 
@@ -52,7 +52,7 @@ def shuffle_game(student_id: UUID, game_id: UUID, shuffles_used: int, db: Sessio
     if game.state != SessionState.ACTIVE:
         raise session_not_active(game, "Resume the game before shuffling")
     if shuffles_used != game.shuffles_used:
-        raise _state_changed(game)
+        raise game_changed(game)
     limit = get_settings().max_shuffles_per_session
     if game.shuffles_used >= limit:
         raise AppError(ErrorCode.SHUFFLE_LIMIT_REACHED, f"You can shuffle {limit} times a game")
@@ -68,7 +68,7 @@ def shuffle_game(student_id: UUID, game_id: UUID, shuffles_used: int, db: Sessio
     # replaced rows. If it isn't, the game is out of step (e.g. a finish didn't move the
     # position on): refuse before writing anything, rather than fail with a 500.
     if game.current_position not in {row.position for row in replaced}:
-        raise _state_changed(game)
+        raise game_changed(game)
     in_game = set(
         db.scalars(select(SessionLocation.location_id).where(SessionLocation.session_id == game.id))
     )
@@ -106,13 +106,3 @@ def shuffle_game(student_id: UUID, game_id: UUID, shuffles_used: int, db: Sessio
     game.last_activity_at = now
     db.flush()
     return ShuffledGame(status_of(game, db), clue_url)
-
-
-def _state_changed(game: GameSession) -> AppError:
-    """409 STATE_CHANGED with what the app needs to try again: the current shuffles_used, state
-    and position. The locations themselves come from GET /games/{id}."""
-    return AppError(
-        ErrorCode.STATE_CHANGED,
-        "The game changed since it was loaded",
-        details=[{**game_details(game), "shuffles_used": game.shuffles_used}],
-    )

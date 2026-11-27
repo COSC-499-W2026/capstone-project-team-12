@@ -63,7 +63,14 @@ def test_register_lists_its_error_statuses() -> None:
 
 def test_game_actions_declare_a_conflict() -> None:
     by_id = {op["operationId"]: op for op in operations(export_openapi.build_spec())}
-    for operation_id in ("pauseGame", "resumeGame", "quitGame", "resetGame", "shuffleGame"):
+    for operation_id in (
+        "pauseGame",
+        "resumeGame",
+        "quitGame",
+        "resetGame",
+        "shuffleGame",
+        "recordCluePlay",
+    ):
         assert "409" in by_id[operation_id]["responses"]
 
 

@@ -1,6 +1,7 @@
 """Tests for GET /api/v1/me/profile."""
 
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 from conftest import TwoClassStudent
@@ -38,6 +39,11 @@ def get_profile(
     return get
 
 
+def class_ids(body: dict[str, Any]) -> list[str]:
+    """The ids of the classes in a profile response, in order."""
+    return [item["id"] for item in body["classes"]]
+
+
 def login(client: TestClient, email: str = VALID_EMAIL, password: str = VALID_PASSWORD) -> Response:
     """POST /auth/login and return the response.
 
@@ -73,16 +79,32 @@ def test_profile_of_a_new_student(get_profile: Callable[[User], Response], stude
     }
 
 
-def test_profile_lists_classes_most_recently_joined_first(
-    get_profile: Callable[[User], Response], two_class_student: TwoClassStudent
+def test_profile_lists_each_class_with_its_name_language_and_join_date(
+    db: Session, get_profile: Callable[[User], Response], two_class_student: TwoClassStudent
 ) -> None:
+    # joined Japanese, then French a day later
     roster = two_class_student
+    roster.french.name = "FREN 101 - Fall 2026"
+    db.flush()
 
     response = get_profile(roster.student)
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["classes"] == [str(roster.french.id), str(roster.japanese.id)]
+    assert body["classes"] == [
+        {
+            "id": str(roster.french.id),
+            "name": "FREN 101 - Fall 2026",
+            "language": "fr",
+            "joined_at": "2026-10-02T12:00:00Z",
+        },
+        {
+            "id": str(roster.japanese.id),
+            "name": "JAPN 101 - Fall 2026",
+            "language": "ja",
+            "joined_at": "2026-10-01T12:00:00Z",
+        },
+    ]
     assert body["current_class_id"] == str(roster.japanese.id)
     assert body["preferred_language"] == Language.JA.value
 
@@ -102,7 +124,9 @@ def test_profile_keeps_the_first_join_date_of_a_rejoined_class(
 
     assert response.status_code == 200, response.text
     # rejoining reuses the enrolment, so Japanese still ranks by the date it was first joined
-    assert response.json()["classes"] == [str(roster.french.id), str(roster.japanese.id)]
+    body = response.json()
+    assert class_ids(body) == [str(roster.french.id), str(roster.japanese.id)]
+    assert body["classes"][1]["joined_at"] == "2026-10-01T12:00:00Z"
 
 
 def test_profile_leaves_out_ended_enrolments(
@@ -116,7 +140,7 @@ def test_profile_leaves_out_ended_enrolments(
     response = get_profile(roster.student)
 
     assert response.status_code == 200, response.text
-    assert response.json()["classes"] == [str(roster.japanese.id)]
+    assert class_ids(response.json()) == [str(roster.japanese.id)]
 
 
 def test_profile_falls_back_when_the_current_class_ended(
@@ -131,7 +155,7 @@ def test_profile_falls_back_when_the_current_class_ended(
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["classes"] == [str(roster.french.id)]
+    assert class_ids(body) == [str(roster.french.id)]
     assert body["current_class_id"] == str(roster.french.id)
 
 
