@@ -2,25 +2,33 @@
 
 An upload reserves its attempt as `processing` and commits before OCR starts; the OCR run then
 sets the row `done` with its result, or `error` (spec, Stage 2: Verification, "Retries and
-concurrency"). Two rules here are proposed, not in the spec (A10 plan Q3, team to confirm):
+concurrency"). A row never goes back to `processing`: a retry inserts a new row, so `created_at`
+is when the row's own OCR run started, and the stale-run timeout is measured from it.
 
-- An `error` row has no `attempt_no`, so a failed or timed-out run releases its number and the
-  retry can take it without breaking `UNIQUE (session_location_id, attempt_no)`.
+Proposed, not in the spec (A10 plan Q3 and Q10, team to confirm):
+
+- The spec's `UNIQUE (session_location_id, attempt_no)` and `(session_location_id,
+  idempotency_key)` leave out `error` rows (partial unique indexes). An `error` row keeps its
+  number and key as history, while the retry takes the same number and key, which is how the
+  spec's "the attempt is released and the upload can be retried" is kept.
 - At most one `processing` row per session location, so one location's photos are read one at a
   time and two uploads can never both use the last attempt.
+- An Idempotency-Key is 1-128 visible ASCII characters.
 """
 
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, Index, UniqueConstraint, text
+from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, Index, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 from app.models.columns import created_at, in_check, uuid_pk
 from app.models.enums import PhotoAttemptStatus, PhotoResult
+
+NOT_ERROR = text(f"status <> '{PhotoAttemptStatus.ERROR}'")
 
 
 class PhotoAttempt(Base):
@@ -31,11 +39,23 @@ class PhotoAttempt(Base):
 
     __tablename__ = "photo_attempts"
     __table_args__ = (
-        # attempt numbers count per session location row; NULL (an error row) never collides
-        UniqueConstraint("session_location_id", "attempt_no"),
+        # attempt numbers count per session location row; an error row's number is free again
+        Index(
+            "uq_photo_attempts_session_location_id_attempt_no",
+            "session_location_id",
+            "attempt_no",
+            unique=True,
+            postgresql_where=NOT_ERROR,
+        ),
         # a key is valid for one session location (spec, "Key scope"); uploads without one are
-        # always new attempts, and NULLs never collide
-        UniqueConstraint("session_location_id", "idempotency_key"),
+        # always new attempts (NULLs never collide), and an error row's key can be retried
+        Index(
+            "uq_photo_attempts_session_location_id_idempotency_key",
+            "session_location_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=NOT_ERROR,
+        ),
         Index(
             "uq_photo_attempts_one_processing",
             "session_location_id",
@@ -49,21 +69,18 @@ class PhotoAttempt(Base):
             f"(status = '{PhotoAttemptStatus.DONE}') = (result IS NOT NULL)",
             name="result_matches_status",
         ),
-        # an error row has released its attempt number
-        CheckConstraint(
-            f"(status = '{PhotoAttemptStatus.ERROR}') = (attempt_no IS NULL)",
-            name="attempt_no_matches_status",
-        ),
         # the upper limit is a setting (max_photo_attempts), so the services check it
         CheckConstraint("attempt_no >= 1", name="attempt_no"),
         CheckConstraint("ocr_confidence BETWEEN 0 AND 1", name="ocr_confidence"),
         CheckConstraint("processing_ms >= 0", name="processing_ms"),
         CheckConstraint("content_sha256 ~ '^[0-9a-f]{64}$'", name="content_sha256"),
+        # visible ASCII only, and short enough for the unique index
+        CheckConstraint("idempotency_key ~ '^[!-~]{1,128}$'", name="idempotency_key"),
     )
 
     id: Mapped[UUID] = uuid_pk()
     session_location_id: Mapped[UUID] = mapped_column(ForeignKey("session_locations.id"))
-    attempt_no: Mapped[int | None]
+    attempt_no: Mapped[int]
     # random storage key of the re-encoded photo; cleared when the photo is purged
     photo_path: Mapped[str | None]
     # OCR output stays on the server: it may contain the room number, so never send it to students

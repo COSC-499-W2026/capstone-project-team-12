@@ -14,7 +14,20 @@ from app.models.verification import PhotoAttempt
 
 MakeAttempt = Callable[..., PhotoAttempt]
 DONE = {"status": PhotoAttemptStatus.DONE, "result": PhotoResult.NO_MATCH}
-ERROR = {"status": PhotoAttemptStatus.ERROR, "attempt_no": None}
+ERROR = {"status": PhotoAttemptStatus.ERROR}
+PARTIAL_INDEXES = [
+    ("uq_photo_attempts_one_processing", ["session_location_id"], "status = 'processing'"),
+    (
+        "uq_photo_attempts_session_location_id_attempt_no",
+        ["session_location_id", "attempt_no"],
+        "status <> 'error'",
+    ),
+    (
+        "uq_photo_attempts_session_location_id_idempotency_key",
+        ["session_location_id", "idempotency_key"],
+        "status <> 'error'",
+    ),
+]
 
 
 @pytest.fixture
@@ -90,27 +103,13 @@ def test_a_location_brought_in_by_a_shuffle_starts_at_attempt_1(
     make_photo_attempt(replacement, **DONE)
 
 
-def test_error_attempts_release_their_number(
+def test_error_attempts_keep_their_number_and_key_but_release_them(
     location: SessionLocation, make_photo_attempt: MakeAttempt
 ) -> None:
-    make_photo_attempt(location, **ERROR)
-    make_photo_attempt(location, **ERROR)
-    make_photo_attempt(location, attempt_no=1)
-
-
-@pytest.mark.parametrize(
-    "fields",
-    [
-        {"status": PhotoAttemptStatus.ERROR, "attempt_no": 1},
-        {"status": PhotoAttemptStatus.PROCESSING, "attempt_no": None},
-        DONE | {"attempt_no": None},
-    ],
-)
-def test_only_an_error_attempt_has_no_number(
-    location: SessionLocation, make_photo_attempt: MakeAttempt, fields: dict[str, object]
-) -> None:
-    with pytest.raises(IntegrityError, match="ck_photo_attempts_attempt_no_matches_status"):
-        make_photo_attempt(location, **fields)
+    """The spec's "the attempt is released and the upload can be retried", with the same key."""
+    make_photo_attempt(location, **ERROR, idempotency_key="retry-me")
+    make_photo_attempt(location, **ERROR, idempotency_key="retry-me")
+    make_photo_attempt(location, **DONE, idempotency_key="retry-me")
 
 
 @pytest.mark.parametrize(
@@ -144,20 +143,23 @@ def test_finished_attempts_do_not_block_a_new_reading(
     make_photo_attempt(location, attempt_no=2)
 
 
-def test_the_processing_index_is_partial_in_the_model_and_the_database(db: Session) -> None:
+@pytest.mark.parametrize(("name", "columns", "where"), PARTIAL_INDEXES)
+def test_the_unique_indexes_are_partial_in_the_model_and_the_database(
+    db: Session, name: str, columns: list[str], where: str
+) -> None:
     # alembic check doesn't compare an index's WHERE, so this catches the two drifting apart
-    name = "uq_photo_attempts_one_processing"
     indexdef = db.scalar(
         text("SELECT indexdef FROM pg_indexes WHERE indexname = :name"), {"name": name}
     )
+    column, value = where.rsplit(" ", 1)
     assert indexdef == (
-        f"CREATE UNIQUE INDEX {name} ON public.photo_attempts USING btree (session_location_id)"
-        " WHERE (status = 'processing'::text)"
+        f"CREATE UNIQUE INDEX {name} ON public.photo_attempts USING btree"
+        f" ({', '.join(columns)}) WHERE ({column} {value}::text)"
     )
     index = next(index for index in PhotoAttempt.__table__.indexes if index.name == name)
     assert index.unique
-    assert [column.name for column in index.columns] == ["session_location_id"]
-    assert str(index.dialect_options["postgresql"]["where"]) == "status = 'processing'"
+    assert [column.name for column in index.columns] == columns
+    assert str(index.dialect_options["postgresql"]["where"]) == where
 
 
 def test_an_idempotency_key_is_used_once_per_location(
@@ -176,6 +178,9 @@ def test_keys_are_scoped_to_one_location_and_may_be_missing(
     make_photo_attempt: MakeAttempt,
 ) -> None:
     make_photo_attempt(location, **DONE, idempotency_key="retry-me")
+    visible_ascii = "".join(chr(code) for code in range(ord("!"), ord("~") + 1))  # 94 characters
+    longest = (visible_ascii * 2)[:128]
+    make_photo_attempt(location, **DONE, attempt_no=4, idempotency_key=longest)
     make_photo_attempt(location, **DONE, attempt_no=2, idempotency_key=None)
     make_photo_attempt(location, **DONE, attempt_no=3, idempotency_key=None)
     game = db.get_one(GameSession, location.session_id)
@@ -196,6 +201,10 @@ def test_keys_are_scoped_to_one_location_and_may_be_missing(
         ({"content_sha256": "a" * 63}, "content_sha256"),
         ({"content_sha256": "a" * 65}, "content_sha256"),
         ({"content_sha256": "g" * 64}, "content_sha256"),
+        ({"idempotency_key": ""}, "idempotency_key"),
+        ({"idempotency_key": "k" * 129}, "idempotency_key"),
+        ({"idempotency_key": "two words"}, "idempotency_key"),
+        ({"idempotency_key": "clé"}, "idempotency_key"),
     ],
 )
 def test_attempt_values_stay_in_range(

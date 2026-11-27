@@ -1,8 +1,8 @@
 """add photo attempts
 
-Revision ID: 266ba4027b0c
+Revision ID: cb2b89a8fc49
 Revises: c4aead9614f3
-Create Date: 2026-11-26 18:24:18.910155
+Create Date: 2026-11-26 18:43:04.167422
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "266ba4027b0c"
+revision: str = "cb2b89a8fc49"
 down_revision: str | None = "c4aead9614f3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -22,7 +22,7 @@ def upgrade() -> None:
         "photo_attempts",
         sa.Column("id", sa.Uuid(), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("session_location_id", sa.Uuid(), nullable=False),
-        sa.Column("attempt_no", sa.Integer(), nullable=True),
+        sa.Column("attempt_no", sa.Integer(), nullable=False),
         sa.Column("photo_path", sa.Text(), nullable=True),
         sa.Column("ocr_raw_text", sa.Text(), nullable=True),
         sa.Column("extracted_candidate", sa.Text(), nullable=True),
@@ -47,11 +47,10 @@ def upgrade() -> None:
             name=op.f("ck_photo_attempts_result_matches_status"),
         ),
         sa.CheckConstraint(
-            "(status = 'error') = (attempt_no IS NULL)",
-            name=op.f("ck_photo_attempts_attempt_no_matches_status"),
+            "content_sha256 ~ '^[0-9a-f]{64}$'", name=op.f("ck_photo_attempts_content_sha256")
         ),
         sa.CheckConstraint(
-            "content_sha256 ~ '^[0-9a-f]{64}$'", name=op.f("ck_photo_attempts_content_sha256")
+            "idempotency_key ~ '^[!-~]{1,128}$'", name=op.f("ck_photo_attempts_idempotency_key")
         ),
         sa.CheckConstraint(
             "result IN ('match', 'unclear', 'no_match')", name=op.f("ck_photo_attempts_result")
@@ -70,16 +69,6 @@ def upgrade() -> None:
             name=op.f("fk_photo_attempts_session_location_id_session_locations"),
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_photo_attempts")),
-        sa.UniqueConstraint(
-            "session_location_id",
-            "attempt_no",
-            name=op.f("uq_photo_attempts_session_location_id_attempt_no"),
-        ),
-        sa.UniqueConstraint(
-            "session_location_id",
-            "idempotency_key",
-            name=op.f("uq_photo_attempts_session_location_id_idempotency_key"),
-        ),
     )
     op.create_index(
         "uq_photo_attempts_one_processing",
@@ -88,9 +77,33 @@ def upgrade() -> None:
         unique=True,
         postgresql_where=sa.text("status = 'processing'"),
     )
+    op.create_index(
+        "uq_photo_attempts_session_location_id_attempt_no",
+        "photo_attempts",
+        ["session_location_id", "attempt_no"],
+        unique=True,
+        postgresql_where=sa.text("status <> 'error'"),
+    )
+    op.create_index(
+        "uq_photo_attempts_session_location_id_idempotency_key",
+        "photo_attempts",
+        ["session_location_id", "idempotency_key"],
+        unique=True,
+        postgresql_where=sa.text("status <> 'error'"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_index(
+        "uq_photo_attempts_session_location_id_idempotency_key",
+        table_name="photo_attempts",
+        postgresql_where=sa.text("status <> 'error'"),
+    )
+    op.drop_index(
+        "uq_photo_attempts_session_location_id_attempt_no",
+        table_name="photo_attempts",
+        postgresql_where=sa.text("status <> 'error'"),
+    )
     op.drop_index(
         "uq_photo_attempts_one_processing",
         table_name="photo_attempts",
