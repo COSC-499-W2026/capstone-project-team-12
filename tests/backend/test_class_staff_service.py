@@ -63,7 +63,7 @@ def test_invite_stores_a_pending_invitation_and_queues_one_email(
     student = make_user()
     before = datetime.now(UTC)
 
-    invitation = invite_assistant(school_class.id, owner, f" {student.email.upper()} ", db)
+    invitation = invite_assistant(school_class.id, owner.id, f" {student.email.upper()} ", db)
 
     assert (invitation.class_id, invitation.invitee_id, invitation.invited_by) == (
         school_class.id,
@@ -85,8 +85,8 @@ def test_inviting_again_while_pending_returns_the_same_invitation(
 ) -> None:
     teacher = make_user(role=UserRole.STAFF)
 
-    first = invite_assistant(school_class.id, owner, teacher.email, db)
-    again = invite_assistant(school_class.id, owner, teacher.email, db)
+    first = invite_assistant(school_class.id, owner.id, teacher.email, db)
+    again = invite_assistant(school_class.id, owner.id, teacher.email, db)
 
     assert again.id == first.id
     assert len(invitation_emails(db, teacher)) == 1
@@ -98,7 +98,7 @@ def test_only_staff_and_student_accounts_outside_the_class_staff_can_be_invited(
     admin = make_user(role=UserRole.ADMIN)
 
     def invite(email: str) -> ErrorCode:
-        return error_code(lambda: invite_assistant(school_class.id, owner, email, db))
+        return error_code(lambda: invite_assistant(school_class.id, owner.id, email, db))
 
     assert invite(f"{uuid4().hex}@example.com") == ErrorCode.USER_NOT_FOUND
     assert invite(admin.email) == ErrorCode.FORBIDDEN_ROLE
@@ -124,11 +124,21 @@ def test_a_student_of_the_class_is_refused_but_one_from_another_class_can_be_inv
     elsewhere = make_user()
     make_enrollment(elsewhere, make_class())  # another class in the same language
 
-    conflict = error_code(lambda: invite_assistant(school_class.id, owner, enrolled.email, db))
+    conflict = error_code(lambda: invite_assistant(school_class.id, owner.id, enrolled.email, db))
 
     assert conflict == ErrorCode.TA_SAME_CLASS_CONFLICT
     assert invitation_emails(db, enrolled) == []
-    invite_assistant(school_class.id, owner, elsewhere.email, db)  # no conflict: doesn't raise
+    invite_assistant(school_class.id, owner.id, elsewhere.email, db)  # no conflict: doesn't raise
+
+
+def test_inviting_to_an_unknown_class_is_not_found(
+    db: Session, make_user: Callable[..., User], owner: User
+) -> None:
+    student = make_user()
+
+    missing = error_code(lambda: invite_assistant(uuid4(), owner.id, student.email, db))
+
+    assert missing == ErrorCode.NOT_FOUND
 
 
 def test_an_archive_that_locks_the_class_first_leaves_no_invitation_or_email(
@@ -144,10 +154,10 @@ def test_an_archive_that_locks_the_class_first_leaves_no_invitation_or_email(
         setup.add_all([school_class, owner, invitee])
         setup.commit()
     try:
-        # the invitation starts once its first class check would pass, while archive holds the lock
+        # the invitation starts while archive holds the class lock, so it waits for the commit
         _, refused = run_together(
             lambda db: archive_class(school_class.id, db),
-            (lambda db: invite_assistant(school_class.id, owner, invitee.email, db), 0.2),
+            (lambda db: invite_assistant(school_class.id, owner.id, invitee.email, db), 0.2),
             hold=0.5,
         )
         assert isinstance(refused, AppError), "the invitation went through"
@@ -169,7 +179,7 @@ def test_the_database_allows_one_pending_invitation_per_person_and_class(
     db: Session, make_user: Callable[..., User], school_class: Class, owner: User
 ) -> None:
     student = make_user()
-    invite_assistant(school_class.id, owner, student.email, db)
+    invite_assistant(school_class.id, owner.id, student.email, db)
 
     db.add(
         ClassStaffInvitation(

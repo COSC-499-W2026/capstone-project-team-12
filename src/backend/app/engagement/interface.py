@@ -111,10 +111,9 @@ __all__ = [
     "ActiveClass",
     "list_active_classes",
     "get_class_language",
-    "get_class_name",
     "is_actively_enrolled",
     "is_class_archived",
-    "lock_class",
+    "lock_open_class",
     "leave_class",
     "list_class_access_codes",
     "remove_student",
@@ -471,12 +470,6 @@ def get_class_language(class_id: UUID, db: Session) -> Language | None:
     return Language(school_class.target_language)
 
 
-def get_class_name(class_id: UUID, db: Session) -> str | None:
-    """Return the class name, or None if the class does not exist."""
-    school_class = db.get(Class, class_id)
-    return None if school_class is None else school_class.name
-
-
 @dataclass(frozen=True)
 class ActiveClass:
     """A class the student is actively enrolled in, for the student's class switcher.
@@ -578,8 +571,22 @@ def require_active_enrolment(student_id: UUID, class_id: UUID, db: Session) -> L
     return language
 
 
-def lock_class(class_id: UUID, db: Session) -> Class:
-    """Lock and refresh a class that exists. Lock any user first, as joining and archiving do."""
+def lock_open_class(class_id: UUID, db: Session) -> str:
+    """Lock and reload a class that isn't archived, and return its name. Lock any user first,
+    as joining and archiving do, so an archive that commits meanwhile is seen.
+
+    Raises 404 NOT_FOUND for an unknown class and 409 CLASS_ARCHIVED for an archived one.
+    """
+    if db.get(Class, class_id) is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+    school_class = _lock_class(class_id, db)
+    if school_class.archived_at is not None:
+        raise AppError(ErrorCode.CLASS_ARCHIVED)
+    return school_class.name
+
+
+def _lock_class(class_id: UUID, db: Session) -> Class:
+    """Lock and refresh a classroom whose existence has been established."""
     return db.execute(
         select(Class)
         .where(Class.id == class_id)
@@ -685,7 +692,7 @@ def validate_code_and_enrol(
     ):
         raise AppError(ErrorCode.INVALID_ACCESS_CODE)
 
-    school_class = lock_class(access_code.class_id, db)
+    school_class = _lock_class(access_code.class_id, db)
     if school_class.archived_at is not None:
         raise AppError(ErrorCode.CLASS_ARCHIVED)
 
@@ -802,7 +809,7 @@ def _lock_class_enrolment(
     if student is None:
         raise AppError(ErrorCode.NOT_FOUND)
 
-    school_class = lock_class(class_id, db)
+    school_class = _lock_class(class_id, db)
     if school_class.archived_at is not None:
         raise AppError(ErrorCode.CLASS_ARCHIVED)
 
@@ -865,7 +872,7 @@ def archive_class(class_id: UUID, db: Session) -> None:
             .with_for_update(key_share=True)
             .execution_options(populate_existing=True)
         ).all()
-        school_class = lock_class(class_id, db)
+        school_class = _lock_class(class_id, db)
         if school_class.archived_at is not None:
             locks.commit()
             return
