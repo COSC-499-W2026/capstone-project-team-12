@@ -16,9 +16,9 @@ from app.errors import AppError, ErrorCode
 from app.game.control import quit_game
 from app.game.current_location import Stage
 from app.game.photo import (
+    PhotographedLocation,
     PhotoProgress,
     apply_photo_result,
-    finish_photo_location,
     lock_photo_game,
     lock_photo_location,
     lock_photographed_location,
@@ -104,14 +104,19 @@ def lock(game: GameSession, db: Session) -> SessionLocation:
     return lock_photo_location(game.student_id, game.id, db)
 
 
+def target_of(game: GameSession, row: SessionLocation, db: Session) -> PhotographedLocation | None:
+    """The lock step after OCR for `row`; None means the route drops the result."""
+    return lock_photographed_location(game.student_id, game.id, row.id, db)
+
+
 def finish(
     game: GameSession, matched: bool, db: Session, row: SessionLocation | None = None
 ) -> PhotoProgress:
-    """Finish the current location (or `row`), which is expected to take the result."""
-    row = row or row_at(game, game.current_position, db)
-    progress = finish_photo_location(game.student_id, game.id, row.id, matched, db)
-    assert progress is not None
-    return progress
+    """Apply a result to the current location (or `row`) as the route does after OCR: the lock
+    step, then `apply_photo_result`. The location is expected to take the result."""
+    target = target_of(game, row or row_at(game, game.current_position, db), db)
+    assert target is not None
+    return apply_photo_result(target, matched, db)
 
 
 def outcome(progress: PhotoProgress) -> tuple[LocationStatus, int, int, int]:
@@ -140,10 +145,7 @@ def _first_index(statements: list[str], table: str, lock_clause: str) -> int:
 
 STEPS: dict[str, Callable[[GameSession, Session], object]] = {
     "lock": lock,
-    "finish": lambda game, db: finish(game, True, db),
-    "lock photographed": lambda game, db: lock_photographed_location(
-        game.student_id, game.id, row_at(game, 1, db).id, db
-    ),
+    "lock photographed": lambda game, db: target_of(game, row_at(game, 1, db), db),
 }
 
 
@@ -255,14 +257,14 @@ def test_lock_refuses_a_new_photo_and_writes_nothing(
     assert game.last_activity_at == AN_HOUR_AGO
 
 
-# finish_photo_location
+# lock_photographed_location and apply_photo_result
 
 
 def test_a_match_completes_the_location_scores_it_and_moves_on(
     db: Session, verifying_game: Callable[..., GameSession]
 ) -> None:
     game = verifying_game()
-    row = lock(game, db)  # the route locks, reads the photo, then finishes in one transaction
+    row = lock(game, db)  # before OCR; `finish` runs the steps after it
 
     progress = finish(game, True, db, row)
 
@@ -320,7 +322,7 @@ def test_the_lock_step_counts_nothing_and_a_result_is_applied_only_in_stage_2(
     db: Session, verifying_game: Callable[..., GameSession]
 ) -> None:
     game = verifying_game()  # the route checks the attempt's OCR run between the two steps
-    target = lock_photographed_location(game.student_id, game.id, row_at(game, 1, db).id, db)
+    target = target_of(game, row_at(game, 1, db), db)
     assert target is not None and (target.game, target.row.attempts_used) == (game, 0)
 
     apply_photo_result(target, True, db)
@@ -410,9 +412,7 @@ def test_perfect_session_uses_the_five_live_location_results(
     assert progress.game_state == SessionState.COMPLETED
     assert progress.engagement is not None
     assert ("perfect_session" in progress.engagement.achievements_unlocked) is expected_unlock
-    assert refused(lambda: finish_photo_location(game.student_id, game.id, fifth.id, True, db)) == (
-        ErrorCode.SESSION_NOT_ACTIVE
-    )
+    assert refused(lambda: target_of(game, fifth, db)) == ErrorCode.SESSION_NOT_ACTIVE
 
     languages = db.scalars(
         select(UserAchievement.language)
@@ -436,41 +436,29 @@ def test_a_paused_game_takes_the_result_and_stays_paused(
     assert (game.state, game.paused_at, game.total_score) == (SessionState.PAUSED, AN_HOUR_AGO, 100)
 
 
-def test_a_location_replaced_by_a_shuffle_gets_nothing(
+def test_the_lock_step_drops_a_result_for_a_location_replaced_by_a_shuffle(
     db: Session, verifying_game: Callable[..., GameSession]
 ) -> None:
-    # A9: shuffled while the photo was being read; the result must not reach the new location
+    # A9: shuffled while the photo was being read. None makes the route drop the result, so it
+    # never reaches the new location (route test: test_photo_api.py, "shuffled")
     game = verifying_game()
     photographed = lock(game, db)
     shuffle_game(game.student_id, game.id, 0, db)
 
-    progress = finish_photo_location(game.student_id, game.id, photographed.id, True, db)
-
-    assert progress is None
-    assert (photographed.status, photographed.attempts_used) == (LocationStatus.SKIPPED, 0)
-    assert ledger_rows(photographed, db) == 0
-    replacement = row_at(game, 1, db)
-    assert (replacement.status, replacement.attempts_used) == (LocationStatus.NAVIGATING, 0)
-    assert (game.current_position, game.total_score) == (1, 0)
+    assert target_of(game, photographed, db) is None
 
 
 @pytest.mark.parametrize(("attempts_used", "matched"), [(0, True), (5, False)])
-def test_a_second_result_for_a_finished_location_gets_nothing(
+def test_the_lock_step_drops_a_second_result_for_a_finished_location(
     db: Session, verifying_game: Callable[..., GameSession], attempts_used: int, matched: bool
 ) -> None:
-    # completed, then failed: a repeated result must not count again or move the game on twice
+    # completed, then failed. A result applied twice under one lock is refused by
+    # apply_photo_result itself (test_the_lock_step_counts_nothing_and_...)
     game = verifying_game(locations=3, attempts_used=attempts_used)
     finished = row_at(game, 1, db)
     finish(game, matched, db, finished)
-    before = (finished.status, finished.attempts_used, game.current_position, game.total_score)
 
-    assert finish_photo_location(game.student_id, game.id, finished.id, True, db) is None
-
-    after = (finished.status, finished.attempts_used, game.current_position, game.total_score)
-    assert after == before
-    assert ledger_rows(finished, db) == int(matched)  # only a match writes a ledger row
-    following = row_at(game, 2, db)
-    assert (following.status, following.attempts_used) == (LocationStatus.NAVIGATING, 0)
+    assert target_of(game, finished, db) is None
 
 
 def test_another_students_game_is_never_touched(
@@ -481,9 +469,9 @@ def test_another_students_game_is_never_touched(
 
     error = refused(lambda: lock_photo_location(game.student_id, other_game.id, db))
     game_error = refused(lambda: lock_photo_game(game.student_id, other_game.id, db))
-    progress = finish_photo_location(game.student_id, game.id, others.id, True, db)
+    target = target_of(game, others, db)
 
-    assert (error, game_error, progress) == (ErrorCode.NOT_FOUND, ErrorCode.NOT_FOUND, None)
+    assert (error, game_error, target) == (ErrorCode.NOT_FOUND, ErrorCode.NOT_FOUND, None)
     assert (others.status, others.attempts_used) == (LocationStatus.VERIFYING, 0)
     assert (other_game.last_activity_at, other_game.total_score) == (AN_HOUR_AGO, 0)
 

@@ -1,24 +1,21 @@
 """Finishing a location with a photo, the game side (A10; spec Stage 2; DFD 2.0 process 2.6).
 
-The photo route calls `lock_photo_location` before the photo is read and `finish_photo_location`
-with the result. Verification reads the photo and never imports game; game owns every change to
-the game and its locations: the attempt count, the final status, scoring through
-`score_finalized_location` and the next location through `move_on`.
-
-For the spec's two transactions, with OCR between them and no lock held while it runs, the route
-can also call the steps one by one (A10 plan, section 3.3):
+Verification reads the photo and never imports game; game owns every change to the game and its
+locations: the attempt count, the final status, scoring through `score_finalized_location` and the
+next location through `move_on`. The photo route calls these steps around the spec's two
+transactions, with OCR between them and no lock held while it runs:
 
 1. Before OCR: `lock_photo_game` locks the game in any state, so an Idempotency-Key can be looked
    up before any state check (a replay is answered even after the game ended); then
-   `lock_photo_location` as above for a new upload.
+   `lock_photo_location` locks the current location for a new upload.
 2. After OCR: `lock_photographed_location` locks the location the photo was taken of, the route
    checks that the attempt still belongs to its OCR run, and `apply_photo_result` counts it.
-   `finish_photo_location` is these two steps without the check in between.
 
-Lock order, as everywhere: the user, then the game, then the location. Every function here locks
-the user first, because scoring needs that lock and the route may call several of them in one
-transaction: taking it only when finishing would put it after the game, the reverse of start and
-reset.
+Lock order, as everywhere: the user, then the game, then the location. Each lock step takes the
+user first: `lock_photographed_location` because `apply_photo_result` scores, which needs the user
+lock, and the steps before OCR so that any of them can share a transaction without reversing the
+order of start and reset. `apply_photo_result` locks nothing: call it in the transaction of the
+`lock_photographed_location` that returned its target.
 """
 
 from dataclasses import dataclass
@@ -98,16 +95,6 @@ def lock_photo_location(student_id: UUID, game_id: UUID, db: Session) -> Session
     game.last_activity_at = datetime.now(UTC)
     db.flush()
     return row
-
-
-def finish_photo_location(
-    student_id: UUID, game_id: UUID, session_location_id: UUID, matched: bool, db: Session
-) -> PhotoProgress | None:
-    """Apply a photo's result to the location it was taken of: `lock_photographed_location`,
-    then `apply_photo_result`. None, without counting anything, when the location can't take
-    it."""
-    target = lock_photographed_location(student_id, game_id, session_location_id, db)
-    return None if target is None else apply_photo_result(target, matched, db)
 
 
 def lock_photographed_location(
