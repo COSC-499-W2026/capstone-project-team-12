@@ -1,6 +1,7 @@
-"""draw_locations (A11): carry-over after a quit, then uncompleted locations first."""
+"""draw_locations (A11): carry-over after a quit, then uncompleted locations first; a Basic game
+in one building (#434)."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -76,6 +77,14 @@ def _ids(snapshots: list[content.LocationSnapshot]) -> list[UUID]:
     return [snapshot.location_id for snapshot in snapshots]
 
 
+def _only_eligible(monkeypatch: pytest.MonkeyPatch, *groups: Iterable[UUID]) -> None:
+    """Make only these locations eligible, each group in a building of its own."""
+    buildings = {
+        location_id: f"B{number:02}" for number, group in enumerate(groups) for location_id in group
+    }
+    monkeypatch.setattr(content, "eligible_location_buildings", lambda *_: buildings)
+
+
 def test_five_different_eligible_locations(
     db: Session, make_user: Callable[..., User], eligible: list[UUID]
 ) -> None:
@@ -113,13 +122,19 @@ def test_uncompleted_locations_come_first(
     assert _completed(student.id, Language.KO, BASIC, db) == set()
 
 
+@pytest.mark.parametrize(
+    "groups",
+    [[slice(0, 4)], [slice(0, 4), slice(4, 8)]],
+    ids=["too few in total", "no building big enough"],
+)
 def test_not_enough_eligible_locations(
     db: Session,
     make_user: Callable[..., User],
     eligible: list[UUID],
     monkeypatch: pytest.MonkeyPatch,
+    groups: list[slice],
 ) -> None:
-    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: frozenset(eligible[:4]))
+    _only_eligible(monkeypatch, *(eligible[group] for group in groups))
 
     with pytest.raises(AppError) as raised:
         draw_locations(make_user().id, None, JA, BASIC, db)
@@ -146,7 +161,7 @@ def test_snapshot_failures_are_skipped(
             raise content.LocationNotEligibleError(location_id)
         return real_snapshot(location_id, language, difficulty, db)
 
-    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: frozenset(six))
+    _only_eligible(monkeypatch, six)
     monkeypatch.setattr(content, "location_snapshot", snapshot)
     # try the failing ones first, so they are always reached
     monkeypatch.setattr("app.game.draw.random.shuffle", lambda ids: ids.sort(key=six.index))
@@ -278,8 +293,8 @@ def test_carried_location_no_longer_eligible_is_left_out(
 ) -> None:
     student = make_user()
     quit_game(student)
-    monkeypatch.setattr(
-        content, "eligible_location_ids", lambda *_: frozenset(eligible) - {eligible[1]}
+    _only_eligible(
+        monkeypatch, (location_id for location_id in eligible if location_id != eligible[1])
     )
 
     drawn = _ids(draw_locations(student.id, None, JA, BASIC, db))
@@ -329,7 +344,7 @@ def test_replacements_skip_the_excluded_locations_and_prefer_new_ones(
         points_awarded=100,
         completed_at=datetime.now(UTC),
     )
-    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: frozenset(eligible[:7]))
+    _only_eligible(monkeypatch, eligible[:7])
 
     drawn = _ids(draw_replacements(student.id, JA, BASIC, eligible[:4], 3, db))
 
@@ -350,6 +365,99 @@ def test_drawing_only_reads(
     draw_locations(student.id, None, JA, BASIC, db)
 
     assert transaction_calls == []
+
+
+def test_a_basic_game_is_drawn_from_the_building_with_most_uncompleted_locations(
+    db: Session,
+    make_user: Callable[..., User],
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    eligible: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # building 0 has 10 locations, 7 of them completed; building 1 has 8, none completed
+    student, now = make_user(), datetime.now(UTC)
+    done = make_game_session(student, state=SessionState.COMPLETED, completed_at=now)
+    for position, location_id in enumerate(eligible[:7], start=1):
+        make_session_location(
+            done,
+            position,
+            location_id=location_id,
+            status=LocationStatus.COMPLETED,
+            points_awarded=100,
+            completed_at=now,
+        )
+    _only_eligible(monkeypatch, eligible[:10], eligible[10:18])
+
+    drawn = _ids(draw_locations(student.id, None, JA, BASIC, db))
+
+    assert set(drawn) <= set(eligible[10:18])
+
+
+def test_an_advancing_game_can_mix_buildings(
+    db: Session,
+    make_user: Callable[..., User],
+    playable_location_ids: Callable[..., list[UUID]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    advancing = playable_location_ids(JA, Difficulty.ADVANCING, count=5)
+    _only_eligible(monkeypatch, *([location_id] for location_id in advancing))
+
+    drawn = _ids(draw_locations(make_user().id, None, JA, Difficulty.ADVANCING, db))
+
+    assert sorted(drawn) == advancing
+
+
+def test_a_carry_over_keeps_its_building(
+    db: Session,
+    make_user: Callable[..., User],
+    quit_game: Callable[..., GameSession],
+    eligible: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the quit game is in building 0; building 1 has more the student hasn't completed
+    student = make_user()
+    quit_game(student)
+    _only_eligible(monkeypatch, eligible[:6], eligible[6:20])
+
+    drawn = _ids(draw_locations(student.id, None, JA, BASIC, db))
+
+    assert drawn[:2] == eligible[1:3] and set(drawn) <= set(eligible[:6])
+
+
+def test_a_carry_over_whose_building_is_too_small_now_is_dropped(
+    db: Session,
+    make_user: Callable[..., User],
+    quit_game: Callable[..., GameSession],
+    eligible: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the quit game's building has only 4 eligible locations left, so another one is drawn
+    student = make_user()
+    quit_game(student)
+    _only_eligible(monkeypatch, eligible[:4], eligible[4:12])
+
+    drawn = _ids(draw_locations(student.id, None, JA, BASIC, db))
+
+    assert set(drawn) <= set(eligible[4:12])
+
+
+def test_basic_replacements_stay_in_the_games_building(
+    db: Session,
+    make_user: Callable[..., User],
+    eligible: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the game holds eligible[:5] in building 0, which has 3 more; building 1 has plenty
+    student = make_user()
+    _only_eligible(monkeypatch, eligible[:8], eligible[8:20])
+
+    drawn = _ids(draw_replacements(student.id, JA, BASIC, eligible[:5], 3, db))
+
+    assert sorted(drawn) == eligible[5:8]
+    with pytest.raises(AppError) as raised:
+        draw_replacements(student.id, JA, BASIC, eligible[:5], 4, db)
+    assert raised.value.code == ErrorCode.NOT_ENOUGH_CONTENT
 
 
 def _only_carry_over_could_pick(monkeypatch: pytest.MonkeyPatch, eligible: list[UUID]) -> None:

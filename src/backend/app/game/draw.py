@@ -6,10 +6,13 @@ Practice), language and difficulty was quit today, its unplayed locations are dr
 quitting cannot be used to reroll. The other places are filled at random, preferring locations
 the student has not completed yet in that language and difficulty. Content decides which
 locations are eligible; this module only picks among them.
+
+A Basic game stays in one building (see `_one_building`).
 """
 
 import random
-from collections.abc import Collection, Sequence
+from collections import Counter, defaultdict
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from uuid import UUID
 
@@ -38,22 +41,25 @@ def draw_locations(
     `carry_over=False` skips the carry-over: a reset passes it, since a reset must reroll and
     the last quit game could otherwise bring its locations back.
 
-    Raises 409 NOT_ENOUGH_CONTENT if fewer than `locations_per_game` locations can be drawn.
-    Only reads.
+    Raises 409 NOT_ENOUGH_CONTENT if fewer than `locations_per_game` locations can be drawn, for
+    Basic from one building. Only reads.
     """
     count = get_settings().locations_per_game
-    eligible = content.eligible_location_ids(language, difficulty, db)
+    buildings = content.eligible_location_buildings(language, difficulty, db)
+    unplayed = _carried_over(student_id, class_id, language, difficulty, db) if carry_over else []
+    carried = [location_id for location_id in unplayed if location_id in buildings]
+    completed = _completed(student_id, language, difficulty, db)
+    eligible = set(buildings)
+    if difficulty == Difficulty.BASIC:
+        eligible = _one_building(buildings, carried, completed, count)
+        carried = [location_id for location_id in carried if location_id in eligible]
     if len(eligible) < count:
         raise _not_enough_content()
-
-    unplayed = _carried_over(student_id, class_id, language, difficulty, db) if carry_over else []
-    carried = [location_id for location_id in unplayed if location_id in eligible]
-    rest = eligible.difference(carried)
     return _pick(
         count=count,
         first=carried,
-        rest=rest,
-        student_id=student_id,
+        rest=eligible.difference(carried),
+        completed=completed,
         language=language,
         difficulty=difficulty,
         db=db,
@@ -72,18 +78,53 @@ def draw_replacements(
 
     `exclude` is every location already in the game, including rows an earlier shuffle
     replaced, so a shuffle never brings one back. Uncompleted locations come first, as in a new
-    game; there is no carry-over. Raises 409 NOT_ENOUGH_CONTENT. Only reads.
+    game; there is no carry-over. A Basic game's replacements come from its building, the one
+    most of its still-eligible locations are in. Raises 409 NOT_ENOUGH_CONTENT. Only reads.
     """
-    eligible = content.eligible_location_ids(language, difficulty, db)
+    buildings = content.eligible_location_buildings(language, difficulty, db)
+    rest = set(buildings).difference(exclude)
+    if difficulty == Difficulty.BASIC:
+        building = next(iter(_buildings_by_size(exclude, buildings)), None)
+        rest = {location_id for location_id in rest if buildings[location_id] == building}
     return _pick(
         count=count,
         first=[],
-        rest=eligible.difference(exclude),
-        student_id=student_id,
+        rest=rest,
+        completed=_completed(student_id, language, difficulty, db),
         language=language,
         difficulty=difficulty,
         db=db,
     )
+
+
+def _one_building(
+    buildings: Mapping[UUID, str],
+    carried: Sequence[UUID],
+    completed: AbstractSet[UUID],
+    count: int,
+) -> set[UUID]:
+    """The eligible locations of the building a new Basic game is drawn from; empty if no
+    building has `count`. The carry-over's building comes first while it still has enough."""
+    by_building: dict[str, set[UUID]] = defaultdict(set)
+    for location_id, building in buildings.items():
+        by_building[building].add(location_id)
+    big_enough = {code: ids for code, ids in by_building.items() if len(ids) >= count}
+    for building in _buildings_by_size(carried, buildings):
+        if building in big_enough:
+            return big_enough[building]
+    if not big_enough:
+        return set()
+    uncompleted = {code: len(ids - completed) for code, ids in big_enough.items()}
+    most = max(uncompleted.values())
+    return big_enough[random.choice([code for code, n in uncompleted.items() if n == most])]
+
+
+def _buildings_by_size(location_ids: Iterable[UUID], buildings: Mapping[UUID, str]) -> list[str]:
+    """Buildings of these locations, most locations first; ineligible locations are ignored."""
+    counts = Counter(
+        buildings[location_id] for location_id in location_ids if location_id in buildings
+    )
+    return [building for building, _ in counts.most_common()]
 
 
 def _pick(
@@ -91,14 +132,13 @@ def _pick(
     count: int,
     first: Sequence[UUID],
     rest: AbstractSet[UUID],
-    student_id: UUID,
+    completed: AbstractSet[UUID],
     language: Language,
     difficulty: Difficulty,
     db: Session,
 ) -> list[content.LocationSnapshot]:
     """`count` snapshots: `first` in order, then `rest` at random, the locations the student
     hasn't completed before the ones they have. Raises NOT_ENOUGH_CONTENT."""
-    completed = _completed(student_id, language, difficulty, db)
     fresh = list(rest - completed)
     played = list(rest & completed)
     random.shuffle(fresh)
