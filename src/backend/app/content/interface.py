@@ -5,8 +5,10 @@ drawn for a language and difficulty, whether a drawn location is still active, a
 snapshot that game copies into `session_locations` when it draws a location. A location is
 eligible when it is active, has a room number and has a primary clue recording in that language
 and difficulty, and every feedback phrase exists in that language (otherwise a feedback URL could
-fail during the game). Content only decides which locations qualify; game does the picking
-(carry-over, preferring uncompleted locations, shuffle exclusions, NOT_ENOUGH_CONTENT).
+fail during the game). A location's building is the code of its room number ("COM" for
+"COM 316"); room numbers are stored in that form, so a building has only one spelling.
+Content only decides which locations qualify; game does the picking (carry-over, preferring
+uncompleted locations, shuffle exclusions, NOT_ENOUGH_CONTENT).
 
 Eligibility is `DRAWABLE` from app.content.coverage, so the coverage report and the draw cannot
 disagree. Each function reads only the columns it returns, so no `Location` is loaded into the
@@ -33,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, and_, select
+from sqlalchemy import Select, and_, func, select
 from sqlalchemy.orm import Session
 
 from app.content.coverage import DRAWABLE, PRIMARY_RECORDING
@@ -47,6 +49,7 @@ __all__ = [
     "Language",
     "LocationNotEligibleError",
     "LocationSnapshot",
+    "eligible_location_buildings",
     "eligible_location_ids",
     "is_location_active",
     "location_snapshot",
@@ -101,9 +104,18 @@ def eligible_location_ids(
     Pass None to include locations drawable at any difficulty. Empty while the
     language is missing a feedback phrase.
     """
+    return frozenset(eligible_location_buildings(language, difficulty, db))
+
+
+def eligible_location_buildings(
+    language: Language, difficulty: Difficulty | None, db: Session
+) -> dict[UUID, str]:
+    """The building of each location eligible_location_ids returns, by location ID."""
     if not get_audio_service().has_all_feedback_phrases(language, db):
-        return frozenset()
-    return frozenset(db.scalars(_drawable(language, difficulty, Location.id)))
+        return {}
+    building = func.split_part(Location.room_number, " ", 1)
+    rows = db.execute(_drawable(language, difficulty, Location.id, building))
+    return {location_id: code for location_id, code in rows}
 
 
 def is_location_active(location_id: UUID, db: Session) -> bool:

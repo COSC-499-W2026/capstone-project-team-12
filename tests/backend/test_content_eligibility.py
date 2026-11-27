@@ -16,6 +16,7 @@ from app.content.interface import (
     Language,
     LocationNotEligibleError,
     LocationSnapshot,
+    eligible_location_buildings,
     eligible_location_ids,
     is_location_active,
     location_snapshot,
@@ -91,6 +92,20 @@ INELIGIBLE: dict[str, Callable[[Callable[..., Clue], Callable[..., Location]], U
 def test_a_drawable_location_is_eligible(db: Session, drawable_clue: Callable[..., Clue]) -> None:
     clue = drawable_clue()
     assert clue.location_id in eligible_location_ids(*FR_2, db)
+
+
+def test_an_eligible_location_comes_with_its_room_numbers_building(
+    db: Session, drawable_clue: Callable[..., Clue]
+) -> None:
+    rooms = ("ZZA 316", "ZZA 312", "ZZB 312")
+    same, also_same, other = (
+        drawable_clue(room_number=room, accepted_answers=[room.replace(" ", "")]).location_id
+        for room in rooms
+    )
+
+    buildings = eligible_location_buildings(*FR_2, db)
+
+    assert (buildings[same], buildings[also_same], buildings[other]) == ("ZZA", "ZZA", "ZZB")
 
 
 @pytest.mark.parametrize("case", INELIGIBLE)
