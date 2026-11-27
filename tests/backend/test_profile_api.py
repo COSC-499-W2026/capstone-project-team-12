@@ -46,9 +46,15 @@ def test_change_class_and_language(
     )
 
     assert response.status_code == 200, response.text
-    assert response.json() == {
+    body = response.json()
+    assert [item["id"] for item in body.pop("classes")] == [
+        str(roster.french.id),
+        str(roster.japanese.id),
+    ]
+    assert body == {
         "id": str(roster.student.id),
         "username": roster.student.username,
+        "email": roster.student.email,
         "role": UserRole.STUDENT.value,
         "current_class_id": str(roster.french.id),
         "preferred_language": Language.ZH.value,

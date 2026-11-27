@@ -54,6 +54,15 @@ def find_current_game(student_id: UUID, db: Session) -> GameStatus | None:
     A game idle for the expiry time is expired first (spec: expiry is checked whenever a game is
     read), so it is never returned. The expiry is written with an UPDATE; doesn't commit.
     """
+    game = expire_open_game(student_id, db)
+    return None if game is None else status_of(game, db)
+
+
+def expire_open_game(student_id: UUID, db: Session) -> GameSession | None:
+    """The student's open game after expiring it if idle; None if there is none or it expired.
+
+    The expiry is written with an UPDATE; doesn't commit.
+    """
     game = db.scalar(
         select(GameSession).where(
             GameSession.student_id == student_id, GameSession.state.in_(OPEN_SESSION_STATES)
@@ -62,9 +71,7 @@ def find_current_game(student_id: UUID, db: Session) -> GameStatus | None:
     if game is None:
         return None
     expire_if_idle(game, db)
-    if game.state not in OPEN_SESSION_STATES:
-        return None
-    return status_of(game, db)
+    return game if game.state in OPEN_SESSION_STATES else None
 
 
 def get_game(student_id: UUID, game_id: UUID, db: Session) -> GameStatus:
@@ -73,17 +80,24 @@ def get_game(student_id: UUID, game_id: UUID, db: Session) -> GameStatus:
     Raises 404 NOT_FOUND for another student's game too, so ids can't be tried out, and that
     game is left as it is. The expiry is written with an UPDATE; doesn't commit.
     """
-    game = db.get(GameSession, game_id)
+    return status_of(load_game(student_id, game_id, db), db)
+
+
+def load_game(student_id: UUID, game_id: UUID, db: Session) -> GameSession:
+    """The student's game read fresh, after expiring it if it has been idle (see get_game)."""
+    # populate_existing: an action earlier in this transaction (a quit) may have just changed it
+    game = db.get(GameSession, game_id, populate_existing=True)
     if game is None or game.student_id != student_id:
         raise AppError(ErrorCode.NOT_FOUND, "Game not found")
     expire_if_idle(game, db)
-    return status_of(game, db)
+    return game
 
 
 def expire_if_idle(game: GameSession, db: Session) -> None:
     """Expire the loaded game if it is open and has been idle for the limit, then reload it.
 
-    Also used by pause and resume. The expiry is written with an UPDATE; doesn't commit.
+    Every game action uses it through lock_open_game, including quit. The expiry is written
+    with an UPDATE; doesn't commit.
     """
     now, limit = datetime.now(UTC), session_idle_limit()
     if game.state not in OPEN_SESSION_STATES or not is_idle(game, now, limit):
@@ -98,10 +112,15 @@ def expire_if_idle(game: GameSession, db: Session) -> None:
 
 
 def status_of(game: GameSession, db: Session) -> GameStatus:
-    """The status of a loaded game and its locations, read fresh from the database."""
+    """The status of a loaded game and its live locations (not the rows a shuffle replaced),
+    read fresh from the database."""
     locations = db.scalars(
         select(SessionLocation)
-        .where(SessionLocation.session_id == game.id)
+        .where(
+            SessionLocation.session_id == game.id,
+            # a row replaced by a shuffle is not a result, so the student never sees it
+            SessionLocation.skip_reason.is_distinct_from(SkipReason.SHUFFLED),
+        )
         .order_by(SessionLocation.position)
         # the locations may have just been skipped by an UPDATE
         .execution_options(populate_existing=True)

@@ -32,6 +32,9 @@ from app.models.enums import (
 from app.models.game import GameSession, SessionLocation
 from app.services.audio import MediaNotFoundError, UploadedAudioService
 
+# most games here are ja/basic; a test in another mode asks for its own content
+pytestmark = pytest.mark.usefixtures("ja_basic_content")
+
 
 class _WithoutRecordings(UploadedAudioService):
     def clue_audio_url(self, audio_asset_id: UUID, db: Session) -> str:
@@ -53,8 +56,11 @@ def _game_count(user: User, db: Session) -> int:
 
 
 def test_practice_game_starts_with_five_locations(
-    db: Session, make_user: Callable[..., User]
+    db: Session,
+    make_user: Callable[..., User],
+    playable_location_ids: Callable[..., list[UUID]],
 ) -> None:
+    playable_location_ids(Language.KO, Difficulty.ADVANCING)
     student = make_user()
 
     started = start_game(student, Difficulty.ADVANCING, db, language=Language.KO)
@@ -91,7 +97,9 @@ def test_class_game_uses_the_class_language(
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
     make_enrollment: Callable[..., ClassEnrollment],
+    playable_location_ids: Callable[..., list[UUID]],
 ) -> None:
+    playable_location_ids(Language.FR, Difficulty.BASIC)
     student, school_class = make_user(), make_class(target_language=Language.FR)
     make_enrollment(student, school_class)
 
@@ -107,10 +115,11 @@ def test_staff_can_play_practice(db: Session, make_user: Callable[..., User]) ->
 
 
 def test_not_enough_content(
-    db: Session, make_user: Callable[..., User], monkeypatch: pytest.MonkeyPatch
+    db: Session,
+    make_user: Callable[..., User],
+    limit_playable_locations: Callable[[int], None],
 ) -> None:
-    four = frozenset(list(content.eligible_location_ids(Language.JA, Difficulty.BASIC, db))[:4])
-    monkeypatch.setattr(content, "eligible_location_ids", lambda *_: four)
+    limit_playable_locations(4)
 
     student = make_user()
 

@@ -15,10 +15,38 @@ class Language(StrEnum):
     ES = "es"
 
 
+class PointsSourceType(StrEnum):
+    """Sources that can award points to a student."""
+
+    LOCATION = "location"
+    DAILY_CHALLENGE = "daily_challenge"
+    STREAK_MILESTONE = "streak_milestone"
+
+
+class DailyChallengeType(StrEnum):
+    """Types of daily challenges available to students."""
+
+    COMPLETION = "completion"
+    DIFFICULTY = "difficulty"
+
+
+class AchievementCategory(StrEnum):
+    """Categories of unlockable achievements."""
+
+    LEARNING = "learning"
+    STREAK = "streak"
+    DIFFICULTY = "difficulty"
+
+
 class Difficulty(IntEnum):
     BASIC = 1  # numbers only
     ADVANCING = 2  # numbers and a simple description
     CHALLENGING = 3  # description only
+
+
+class DifficultySuggestion(StrEnum):
+    EASIER = "suggest_easier"
+    HARDER = "suggest_harder"
 
 
 class FeedbackCode(StrEnum):
@@ -41,6 +69,14 @@ class VerificationType(StrEnum):
     """How Stage 2 checks that the student found a location; other types are Future Work."""
 
     ROOM_NUMBER = "room_number"  # OCR reads the room-number sign
+
+
+class PhotoResult(StrEnum):
+    """What the decision table makes of one photo (spec, Stage 2: Verification)."""
+
+    MATCH = "match"
+    UNCLEAR = "unclear"
+    NO_MATCH = "no_match"
 
 
 class AudioSourceType(StrEnum):
@@ -92,6 +128,8 @@ class LocationStatus(StrEnum):
 class SkipReason(StrEnum):
     SESSION_ENDED = "session_ended"  # quit, reset, expiry or class closed before it was played
     DEACTIVATED = "deactivated"  # a content manager deactivated the location
+    # replaced by a shuffle: the row stays with its photo attempts but is no longer a result
+    SHUFFLED = "shuffled"
 
 
 class ArrivalOverride(StrEnum):
@@ -113,3 +151,18 @@ class EmailStatus(StrEnum):
     PENDING = "pending"
     SENT = "sent"
     FAILED = "failed"
+
+
+class AuditAction(StrEnum):
+    """Changes an admin makes, recorded in admin_audit_log once they succeed."""
+
+    CREATE_STAFF = "create_staff"
+    DEACTIVATE = "deactivate"
+    REACTIVATE = "reactivate"
+    CHANGE_CONTENT_RIGHTS = "change_content_rights"
+    SEND_RESET_LINK = "send_reset_link"
+    TRANSFER_CLASS = "transfer_class"
+    CHANGE_EMAIL = "change_email"
+    # privacy requests
+    EXPORT_USER = "export_user"
+    DELETE_USER = "delete_user"

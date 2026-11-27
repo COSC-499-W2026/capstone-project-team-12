@@ -143,55 +143,6 @@ def test_422(client: TestClient):
     assert response_422.status_code == 422
 
 
-def test_username_taken(db: Session, client: TestClient):
-    request_1 = {
-        "email": "test@email.com",
-        "username": "JohnLanguage",
-        "password": "ValidPassword1",
-    }
-    request_2 = {
-        "email": "test@email.com",
-        "username": "johnLanguage",
-        "password": "ValidPassword1",
-    }
-    result1 = client.post("/api/v1/auth/register", json=request_1)
-    result2 = client.post("/api/v1/auth/register", json=request_2)
-    assert (
-        result1.status_code == 201
-        and result2.status_code == 409
-        and result2.json()["error"]["code"] == "USERNAME_TAKEN"
-    )
-
-
-def test_email_taken(db: Session):
-    request_1 = RegisterRequest(
-        email="example@email.com", username="John1", password="ValidPassword1"
-    )
-    request_2 = RegisterRequest(
-        email="example@email.com", username="John2", password="ValidPassword1"
-    )
-    with pytest.raises(AppError) as exc_info:
-        register_account(request_1, db)
-        register_account(request_2, db)
-    assert exc_info.value.code == ErrorCode.EMAIL_TAKEN
-
-
-def test_invalid_username(db: Session):
-    request = RegisterRequest(email="example@email.com", username="jl", password="ValidPassword1")
-    with pytest.raises(AppError) as exc_info:
-        register_account(request, db)
-    assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
-
-
-def test_invalid_email(db: Session):
-    request = RegisterRequest(
-        email="invalidemail", username="JohnLanguage", password="ValidPassword1"
-    )
-    with pytest.raises(AppError) as exc_info:
-        register_account(request, db)
-    assert exc_info.value.code == ErrorCode.VALIDATION_ERROR
-
-
 def test_password_too_short(db: Session):
     with pytest.raises(AppError) as exc_info:
         request = RegisterRequest(

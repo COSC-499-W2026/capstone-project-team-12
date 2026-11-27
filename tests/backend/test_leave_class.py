@@ -235,7 +235,7 @@ def test_leave_rolls_back_when_game_cleanup_fails(
 
     with (
         patch(
-            "app.api.v1.classes.end_open_sessions",
+            "app.api.v1.me.end_open_sessions",
             side_effect=RuntimeError("Game cleanup failed"),
         ),
         pytest.raises(RuntimeError, match="Game cleanup failed"),

@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 
+_DUMMY_HASH = hashpw(b"DummyPassword", gensalt(12))
+
 
 def validate_password_security(password: str) -> None:
     """Returns a list of criteria that the password did not meet.
@@ -39,16 +41,20 @@ def hash_password(password: str) -> str:
 
 def check_password_hash(email: str, password: str, db: Session) -> bool:
     """Takes a plaintext password and checks it agaist the stored hash for the user"""
-    pw_bytes = password.encode("utf-8")
-    stmt = select(User.email, User.password_hash).where(User.email == email)
-    result = db.execute(stmt)
-    for row in result:
-        hash: str = "" + str(row[1])
-        if row[0] == email and checkpw(pw_bytes, hash.encode("utf-8")):
-            return True
-        else:
-            raise AppError(
-                ErrorCode.INVALID_CREDENTIALS,
-                "The email or password you entered are incorrect.",
-            )
-    return False
+    return verified_password_hash(email, password, db) is not None
+
+
+def verified_password_hash(email: str, password: str, db: Session) -> str | None:
+    """The stored hash the password matched, or None if it didn't.
+
+    Read without a lock: bcrypt is slow, so a caller that must not act on a password changed in
+    the meantime locks the user afterwards and checks the hash is still this one (login).
+    """
+    user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    password_bytes = password.encode()
+    # bcrypt raises past 72 bytes, and registration caps passwords at 70, so longer is never right
+    if user is None or user.password_hash is None or len(password_bytes) > 72:
+        checkpw(password_bytes[:72], _DUMMY_HASH)  # Dummy check so timing does not reveal why
+        return None
+    stored = str(user.password_hash)
+    return stored if checkpw(password_bytes, stored.encode()) else None

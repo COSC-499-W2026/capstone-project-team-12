@@ -1,5 +1,6 @@
 """The student's current class and Practice language (A15, spec Student Profile)."""
 
+from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy.orm import Session, object_session
@@ -11,20 +12,39 @@ from app.models.enums import Language
 from app.services.locks import lock_user
 
 
-def current_class_id(user: User, db: Session) -> UUID | None:
+def current_class_id(user: User, db: Session, active: list[UUID] | None = None) -> UUID | None:
     """The class the student's app follows, or None for Practice.
 
     The stored class stays while the enrolment is active. If it is not (left, removed, archived),
     it is the most recently joined active class, or None. A stored None stays None: the student
     chose Practice, or has no class. This only reads, so a read can't overwrite a class chosen at
     the same time; the stored value is replaced the next time the student selects a class.
+    Pass `active` (from engagement.get_active_class_ids) to reuse a list the caller already has.
     """
     if user.current_class_id is None:
         return None
-    active = engagement.get_active_class_ids(user.id, db)
+    if active is None:
+        active = engagement.get_active_class_ids(user.id, db)
     if user.current_class_id in active:
         return user.current_class_id
     return active[0] if active else None
+
+
+@dataclass(frozen=True)
+class ProfileClasses:
+    """The student's active classes, most recently joined first, and the class their app follows."""
+
+    classes: list[engagement.ActiveClass]
+    current_class_id: UUID | None
+
+
+def get_profile_classes(user: User, db: Session) -> ProfileClasses:
+    """The student's active classes and current class, from one read of the classes.
+
+    The one read means current_class_id is always one of the classes, or None for Practice.
+    """
+    classes = engagement.list_active_classes(user.id, db)
+    return ProfileClasses(classes, current_class_id(user, db, [c.id for c in classes]))
 
 
 def select_class(user: User, class_id: UUID | None, db: Session) -> None:

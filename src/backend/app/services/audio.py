@@ -14,26 +14,25 @@ app is imported (app.db reads the settings), so a bad value stops the app before
 A language is playable only when all its feedback phrases exist (`has_all_feedback_phrases`).
 Content counts a language without them as having no eligible locations, so every game starts
 with all its phrases in place. `feedback_audio_url` can then only fail if a phrase is removed
-while a game is in progress.
+while a game is in progress. The rule lives only here: content's coverage report lists each
+language's `missing_feedback_codes`, so the report and the draw cannot disagree.
 
-UploadedAudioService is a stub: the audio tables do not exist yet, so it ignores `db`. Every clue
-has a recording, with a fixed ID per clue, and every feedback phrase exists. The stub stores
-nothing: IDs and storage keys are worked out from the secret key, so they survive a restart, and
-an ID that `clue_audio_asset_id` did not hand out raises `MediaNotFoundError`. The real version
-will read `audio_assets` and `feedback_audio` through `db`; the signatures will not change.
-Every method only reads: it never commits, rolls back or explicitly flushes the caller's session.
+UploadedAudioService reads clue recordings from `audio_assets` and feedback phrases from
+`feedback_audio` through `db`; a URL signs the row's own storage key, which is random and never
+derived from the clue. Every method only reads: it never commits, rolls back or explicitly
+flushes the caller's session.
 """
 
-import hashlib
-import hmac
 from collections.abc import Callable
 from functools import lru_cache
 from typing import Protocol
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import AudioServiceType, get_settings
+from app.models.content import AudioAsset, FeedbackAudio
 from app.models.enums import FeedbackCode, Language
 
 # Raised when no recording exists; re-exported because callers of AudioService catch it here.
@@ -57,51 +56,59 @@ class AudioService(Protocol):
         none, e.g. a phrase removed during a game (see the module docstring)."""
         ...
 
+    def missing_feedback_codes(self, db: Session) -> dict[Language, list[FeedbackCode]]:
+        """For every language, the `FeedbackCode` phrases it lacks, in `FeedbackCode` order."""
+        ...
+
     def has_all_feedback_phrases(self, language: Language, db: Session) -> bool:
         """True when every `FeedbackCode` phrase exists in `language`."""
         ...
 
 
-def _stub_digest(*parts: object) -> bytes:
-    # Keyed with the secret key, so neither an ID nor a storage key leads back to its clue or
-    # phrase.
-    message = "/".join(("stub-audio", *map(str, parts))).encode()
-    return hmac.new(get_settings().secret_key.encode(), message, hashlib.sha256).digest()
-
-
-def _stub_tag(body: bytes) -> bytes:
-    return _stub_digest("tag", body.hex())[:8]
-
-
-def _stub_key(*parts: object) -> str:
-    # Shaped like the keys StorageService.save makes: a random version 4 UUID plus ".mp3".
-    return f"{UUID(bytes=_stub_digest('key', *parts)[:16], version=4)}.mp3"
-
-
 class UploadedAudioService:
-    """`uploaded`: a clue uses its primary uploaded recording (a stub, see the module docstring).
+    """`uploaded`: a clue uses its primary uploaded recording, and a feedback phrase its uploaded
+    file.
 
     Not a subclass of `AudioService`, so a missing method fails instead of inheriting the
     Protocol's empty body; mypy checks the match through `_IMPLEMENTATIONS`.
     """
 
     def clue_audio_asset_id(self, clue_id: UUID, db: Session) -> UUID:
-        # The first half identifies the recording; the second half shows the stub handed it out.
-        body = _stub_digest("asset", clue_id)[:8]
-        return UUID(bytes=body + _stub_tag(body))
+        asset_id = db.scalar(
+            select(AudioAsset.id).where(AudioAsset.clue_id == clue_id, AudioAsset.is_primary)
+        )
+        if asset_id is None:
+            raise MediaNotFoundError
+        return asset_id
 
     def clue_audio_url(self, audio_asset_id: UUID, db: Session) -> str:
-        body, tag = audio_asset_id.bytes[:8], audio_asset_id.bytes[8:]
-        if not hmac.compare_digest(tag, _stub_tag(body)):
+        # primary or not: a game keeps the recording its snapshot names after the primary moves
+        file_path = db.scalar(select(AudioAsset.file_path).where(AudioAsset.id == audio_asset_id))
+        if file_path is None:
             raise MediaNotFoundError
-        return get_storage_service().signed_url(_stub_key("clue", audio_asset_id))
+        return get_storage_service().signed_url(file_path)
 
     def feedback_audio_url(self, code: FeedbackCode, language: Language, db: Session) -> str:
-        return get_storage_service().signed_url(_stub_key("feedback", code, language))
+        file_path = db.scalar(
+            select(FeedbackAudio.file_path).where(
+                FeedbackAudio.code == code, FeedbackAudio.language == language
+            )
+        )
+        if file_path is None:
+            raise MediaNotFoundError
+        return get_storage_service().signed_url(file_path)
+
+    def missing_feedback_codes(self, db: Session) -> dict[Language, list[FeedbackCode]]:
+        # one query for every language, so a report shows them all as of the same read
+        rows = db.execute(select(FeedbackAudio.language, FeedbackAudio.code))
+        recorded = {(language, code) for language, code in rows}
+        return {
+            language: [code for code in FeedbackCode if (language, code) not in recorded]
+            for language in Language
+        }
 
     def has_all_feedback_phrases(self, language: Language, db: Session) -> bool:
-        # The real version compares the language's `feedback_audio` rows with `FeedbackCode`.
-        return True
+        return not self.missing_feedback_codes(db)[language]
 
 
 _IMPLEMENTATIONS: dict[AudioServiceType, Callable[[], AudioService]] = {

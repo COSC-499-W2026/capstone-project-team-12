@@ -9,12 +9,20 @@ permissions:
   contents: read
 
 concurrency:
-  group: pages
+  group: netlify-docs
   cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, ARM64]
+    environment: netlify
+    env:
+      NETLIFY_SITE_URL: https://cosc499-team12.netlify.app
+      # Cycle day comes from the Netlify billing page: Free plan credits were
+      # granted Nov 16, 2026 and expire Dec 16, 2026, so the cycle starts on the
+      # 16th. Counted in UTC. Update this if the plan or cycle changes.
+      NETLIFY_CYCLE_DAY: "16"
+      MAX_DEPLOYS_PER_CYCLE: "19"
 
     steps:
       - name: Checkout repository
@@ -28,6 +36,11 @@ jobs:
           cache-dependency-path: |
             src/backend/requirements.txt
             src/backend/requirements-dev.txt
+
+      - name: Create a fresh venv
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
@@ -46,21 +59,161 @@ jobs:
           cp .github/pages/*.html site/
           cp docs/api/openapi.json docs/architecture/dependency-graph.md site/
 
-      - name: Upload the site
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: site
+      - name: Check Netlify secrets
+        if: github.ref == 'refs/heads/main'
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          missing=0
+          if [ -z "$NETLIFY_AUTH_TOKEN" ]; then
+            echo "::error::Missing environment secret NETLIFY_AUTH_TOKEN. Add it to the netlify GitHub environment."
+            missing=1
+          fi
+          if [ -z "$NETLIFY_SITE_ID" ]; then
+            echo "::error::Missing environment secret NETLIFY_SITE_ID. Add it to the netlify GitHub environment."
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
+      - name: Check whether the site changed
+        if: github.ref == 'refs/heads/main'
+        id: changed
+        run: |
+          python -c "import textwrap,sys; exec(textwrap.dedent(sys.stdin.read()))" <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          site = Path("site")
+          digest = hashlib.sha256()
+          for path in sorted(p for p in site.rglob("*") if p.is_file() and p.name != "site-hash.txt"):
+              digest.update(path.relative_to(site).as_posix().encode())
+              digest.update(b"\0")
+              digest.update(path.read_bytes())
+              digest.update(b"\0")
+          (site / "site-hash.txt").write_text(digest.hexdigest() + "\n")
+          print(digest.hexdigest())
+          PY
+          local_hash="$(tr -d '[:space:]' < site/site-hash.txt)"
+          if live_hash="$(curl -fsSL --max-time 30 "$NETLIFY_SITE_URL/site-hash.txt")"; then
+            live_hash="$(printf '%s' "$live_hash" | tr -d '[:space:]')"
+            if [ "$live_hash" = "$local_hash" ]; then
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              echo "Live site hash matches; skipping deploy."
+              exit 0
+            fi
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "Site hash differs or the live hash is missing; will deploy if under the cap."
+
+      - name: Count production deploys this cycle
+        if: github.ref == 'refs/heads/main'
+        id: cap
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          tmp="$(mktemp)"
+          trap 'rm -f "$tmp"' EXIT
+          # production=true and state=ready are documented listSiteDeploys filters.
+          # per_page=100 is enough: the cap is 19, and the API returns newest first, so
+          # if this cycle had 100+ production deploys the count would already exceed it.
+          code="$(curl -sS -o "$tmp" -w "%{http_code}" --max-time 30 \
+            -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" \
+            -H "User-Agent: capstone-project-team-12-pages" \
+            "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/deploys?production=true&state=ready&per_page=100")"
+          if [ "$code" != "200" ]; then
+            echo "::error::Netlify deploys API returned HTTP ${code}. Not deploying."
+            sed -n '1,20p' "$tmp" || true
+            exit 1
+          fi
+          python -c "import textwrap,sys; exec(textwrap.dedent(sys.stdin.read()))" "$tmp" <<'PY'
+          import json
+          import os
+          import sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          path = sys.argv[1]
+          cap = int(os.environ["MAX_DEPLOYS_PER_CYCLE"])
+          cycle_day = int(os.environ["NETLIFY_CYCLE_DAY"])
+          now = datetime.now(timezone.utc)
+          if now.day >= cycle_day:
+              start = datetime(now.year, now.month, cycle_day, tzinfo=timezone.utc)
+          else:
+              year = now.year - 1 if now.month == 1 else now.year
+              month = 12 if now.month == 1 else now.month - 1
+              start = datetime(year, month, cycle_day, tzinfo=timezone.utc)
+
+          try:
+              data = json.loads(Path(path).read_text(encoding="utf-8"))
+          except json.JSONDecodeError:
+              print("::error::Netlify deploys API returned non-JSON. Not deploying.", file=sys.stderr)
+              sys.exit(1)
+          if not isinstance(data, list):
+              print("::error::Netlify deploys API returned an unexpected payload. Not deploying.", file=sys.stderr)
+              sys.exit(1)
+
+          count = 0
+          for deploy in data:
+              if deploy.get("context") != "production" or deploy.get("state") != "ready":
+                  continue
+              raw = deploy.get("created_at") or ""
+              try:
+                  created = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+              except ValueError:
+                  print(f"::warning::Skipping a deploy with unreadable created_at: {raw!r}")
+                  continue
+              if created >= start:
+                  count += 1
+
+          under_cap = count < cap
+          if not under_cap:
+              print(
+                  f"::warning::Reached the deploy cap ({count}/{cap} this cycle, "
+                  f"starting {start.date().isoformat()} UTC). Skipping this production deploy."
+              )
+          else:
+              print(f"{count}/{cap} production deploys this cycle (starting {start.date().isoformat()} UTC).")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"count={count}\n")
+              fh.write(f"under_cap={'true' if under_cap else 'false'}\n")
+          PY
+
+      # netlify-cli@27.20.0 requires Node >=22.13.0. The runner image is not assumed to have it.
+      - name: Set up Node.js
+        if: github.ref == 'refs/heads/main' && steps.changed.outputs.changed == 'true' && steps.cap.outputs.under_cap == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Deploy the site to Netlify
+        id: deploy
+        if: github.ref == 'refs/heads/main' && steps.changed.outputs.changed == 'true' && steps.cap.outputs.under_cap == 'true'
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: npx --yes netlify-cli@27.20.0 deploy --dir=site --prod --no-build --message "${{ github.sha }}"
+
+      - name: Write deploy summary
+        if: github.ref == 'refs/heads/main'
+        run: |
+          changed="${{ steps.changed.outputs.changed }}"
+          under_cap="${{ steps.cap.outputs.under_cap }}"
+          count="${{ steps.cap.outputs.count }}"
+          cap="$MAX_DEPLOYS_PER_CYCLE"
+          outcome="${{ steps.deploy.outcome }}"
+          if [ "$outcome" = "success" ]; then
+            line="Deployed to Netlify (site changed; ${count}/${cap} this cycle)."
+          elif [ "$changed" != "true" ]; then
+            line="Skipped deploy: site unchanged (${count}/${cap} this cycle)."
+          elif [ "$under_cap" != "true" ]; then
+            line="Skipped deploy: reached ${count}/${cap} this cycle."
+          else
+            line="Deploy did not run (${count}/${cap} this cycle)."
+          fi
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+          echo "$line"

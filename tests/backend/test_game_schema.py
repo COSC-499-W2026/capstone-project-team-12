@@ -2,6 +2,8 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
@@ -9,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.accounts import User
+from app.models.content import AudioAsset
 from app.models.engagement import Class
 from app.models.enums import Language, LocationStatus, SessionEndReason, SessionState, SkipReason
 from app.models.game import GameSession, SessionLocation
@@ -183,17 +186,18 @@ def test_game_counters_stay_in_range(
 
 
 def test_raw_sql_location_inserts_get_the_server_defaults(
-    db: Session, make_game_session: Callable[..., GameSession]
+    db: Session, make_game_session: Callable[..., GameSession], snapshot_ids: Callable[..., Any]
 ) -> None:
+    game = make_game_session()
     location = db.execute(
         text(
             "INSERT INTO session_locations (session_id, location_id, position, clue_id,"
             " audio_asset_id, accepted_answers_snapshot, gps_points_snapshot, radius_snapshot)"
-            " VALUES (:session_id, gen_random_uuid(), 1, gen_random_uuid(), gen_random_uuid(),"
+            " VALUES (:session_id, :location_id, 1, :clue_id, :audio_asset_id,"
             ' \'["SCI333"]\', \'[{"lat": 49.9, "lng": -119.4}]\', 30)'
             " RETURNING status, attempts_used, points_awarded, flags"
         ),
-        {"session_id": make_game_session().id},
+        {"session_id": game.id, **snapshot_ids(game)._asdict()},
     ).one()
     assert location.status == LocationStatus.PENDING
     assert (location.attempts_used, location.points_awarded) == (0, 0)
@@ -208,6 +212,41 @@ def test_a_position_is_used_once_per_game(
     make_session_location(game, 1)
     with pytest.raises(IntegrityError, match="uq_session_locations_session_id_position"):
         make_session_location(game, 1)
+
+
+def test_a_shuffle_can_replace_the_row_at_a_position(
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    # the unique position only counts rows that weren't shuffled, so a second shuffle can
+    # replace the replacement, and its rows stay too
+    game = make_game_session()
+    for _ in range(2):
+        make_session_location(
+            game, 1, status=LocationStatus.SKIPPED, skip_reason=SkipReason.SHUFFLED
+        )
+    make_session_location(game, 1)
+    with pytest.raises(IntegrityError, match="uq_session_locations_session_id_position"):
+        make_session_location(
+            game, 1, status=LocationStatus.SKIPPED, skip_reason=SkipReason.SESSION_ENDED
+        )
+
+
+def test_the_position_index_is_partial_in_the_model_and_the_database(db: Session) -> None:
+    # alembic check doesn't compare an index's WHERE, so this is what catches the model and the
+    # migration drifting apart
+    name = "uq_session_locations_session_id_position"
+    indexdef = db.scalar(
+        text("SELECT indexdef FROM pg_indexes WHERE indexname = :name"), {"name": name}
+    )
+    assert indexdef is not None
+    assert indexdef.startswith(f"CREATE UNIQUE INDEX {name} ON public.session_locations")
+    assert indexdef.endswith("WHERE (skip_reason IS DISTINCT FROM 'shuffled'::text)")
+    index = next(index for index in SessionLocation.__table__.indexes if index.name == name)
+    assert index.unique
+    assert [column.name for column in index.columns] == ["session_id", "position"]
+    where = index.dialect_options["postgresql"]["where"]
+    assert str(where) == "skip_reason IS DISTINCT FROM 'shuffled'"
 
 
 def test_a_location_is_drawn_once_per_game(
@@ -272,6 +311,35 @@ def test_location_values_stay_in_range(
     # the quotes stop "status" from also matching other constraint names
     with pytest.raises(IntegrityError, match=f'"{constraint}"'):
         make_session_location(make_game_session(), **fields)
+
+
+@pytest.mark.parametrize(
+    ("field", "table"),
+    [("location_id", "locations"), ("clue_id", "clues"), ("audio_asset_id", "audio_assets")],
+)
+def test_a_location_row_points_at_real_content(
+    db: Session,
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+    field: str,
+    table: str,
+) -> None:
+    row = make_session_location(make_game_session(), 1)
+    setattr(row, field, uuid4())
+    with pytest.raises(IntegrityError, match=f'"fk_session_locations_{field}_{table}"'):
+        db.flush()
+
+
+def test_content_a_game_used_cannot_be_deleted(
+    db: Session,
+    make_game_session: Callable[..., GameSession],
+    make_session_location: Callable[..., SessionLocation],
+) -> None:
+    row = make_session_location(make_game_session(), 1)
+    db.delete(db.get_one(AudioAsset, row.audio_asset_id))
+    match = '"fk_session_locations_audio_asset_id_audio_assets"'
+    with pytest.raises(IntegrityError, match=match):
+        db.flush()
 
 
 def test_unknown_skip_reason_is_rejected(

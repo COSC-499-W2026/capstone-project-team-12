@@ -5,12 +5,13 @@
 ```
 .
 ├── docs                      # Documentation
-│   ├── architecture          # Dependency graph between backend components
 │   ├── contract              # Team contract
 │   ├── minutes               # Minutes from team meetings
 │   ├── proposal              # Project proposal
+│   ├── a13-daily-challenges.md  # How A13 daily challenges are generated
 │   ├── api-conventions.md    # API naming, error format and pagination
-│   └── ocr-spike.md          # OCR spike findings
+│   ├── ocr-spike.md          # OCR spike findings
+│   └── ocr-spike-labels.csv  # Expected room for each OCR spike photo
 ├── src
 │   ├── backend               # FastAPI service (M1)
 │   └── frontend              # React + TypeScript web app (M2)
@@ -19,7 +20,7 @@
 │   ├── utils                 # pytest for the scripts in utils/
 │   ├── frontend              # Vitest component tests (M2)
 │   └── e2e                   # Playwright end-to-end tests (M2)
-├── utils                     # Scripts: dependency check (dep_graph.py), OCR spike (ocr_spike.py)
+├── utils                     # Scripts: dependency check (dep_graph.py), OpenAPI export (export_openapi.py), GPS replay (gps_replay.py), OCR spike (ocr_spike.py)
 └── README.md
 ```
 
@@ -31,13 +32,13 @@ All diagrams are drawn in draw.io. The source files are in our shared Google Dri
 
 [System architecture diagram](https://drive.google.com/file/d/1frQja1HkuoyBKi2M8U8e4mutHEq50EL-/view?usp=sharing)
 
-Milestone 1 is the backend only. API consumers (Swagger UI, a Postman collection, and GPS replay and photo-set simulation scripts) call the FastAPI backend over HTTPS with a JWT. In Milestone 2 the React web app (student app, teacher portal and admin panel) is added behind nginx.
+Milestone 1 is the backend only. API consumers (Swagger UI, the GPS replay script, and a Postman collection and photo-set simulation script (planned)) call the FastAPI backend over HTTPS with a JWT. In Milestone 2 the React web app (student app, teacher portal and admin panel) is added behind nginx.
 
-Inside the backend container, the routers under `/api/v1` handle requests and pass them to five components. The components share a core (`config`, `db`, `errors`, `models` and shared `services` such as storage, email and audio), and they only call each other through each component's `interface.py`, which `utils/dep_graph.py --check` enforces in CI. Data lives in PostgreSQL 16 (stores D1 to D7) and a media volume (D8) for clue audio, feedback audio and photos. A scheduler container runs the CLI jobs (send emails, expire idle sessions, purge old photos) and emails go out through an SMTP provider.
+Inside the backend container, the routers under `/api/v1` handle requests and pass them to five components. The components share a core (`config`, `db`, `errors`, `models` and shared `services` such as storage, email, audio and rate limiting), and they only call each other through each component's `interface.py`, which `utils/dep_graph.py --check` enforces in CI. Data lives in PostgreSQL 16 (stores D1 to D7) and a media volume (D8) for clue audio, feedback audio and photos. A scheduler container runs the CLI jobs (send emails, expire idle sessions, and purge old photos (planned)) and emails go out through an SMTP provider.
 
-Each major component has its own Level 1 DFD. In the architecture diagram, clicking a component box opens it.
+Each major component has its own Level 2 DFD. In the architecture diagram, clicking a component box opens it, and clicking the backend container opens the Level 1 overview.
 
-| Component | Code package | Owner | What it does | DFD Level 1 |
+| Component | Code package | Owner | What it does | DFD Level 2 |
 |---|---|---|---|---|
 | 1.0 Auth & Accounts | `app/accounts` | Kaedyn | Sign-up, login and refresh tokens, email verification and password reset, profile, staff accounts and admin support, teaching assistant management, privacy export and anonymisation | [1.0 Auth & Accounts](https://drive.google.com/file/d/1BkW_Tt_Tdvax9GVgqysyoxHLFLn8zJqU/view?usp=sharing) |
 | 2.0 Game Session | `app/game` | Mia | Starts a session and draws 5 locations, serves clues, processes GPS pings and gives closer/farther feedback, confirms arrival, pause/resume/quit/reset/shuffle, finishes locations, game history, expires idle sessions | [2.0 Game Session](https://drive.google.com/file/d/1So7fPBw_lazmH7Ljxl3l1mUTpDaYw8CK/view?usp=sharing) |
@@ -47,10 +48,11 @@ Each major component has its own Level 1 DFD. In the architecture diagram, click
 
 ### Data Flow Diagrams
 
-- [Level 0 (context diagram)](https://drive.google.com/file/d/11wntSjPr60qeLwDX-lv27QMxHI4oW7eI/view?usp=sharing): the whole system as one process, with its six external entities: Student, Teacher / TA, Admin, Content Manager, Email System and Scheduler.
-- Level 1: one diagram per architecture component, linked in the table above. Each one breaks its component into numbered processes (for example 2.1 Start session to 2.8 Expire idle sessions).
+- [Level 0 (context diagram)](https://drive.google.com/file/d/11wntSjPr60qeLwDX-lv27QMxHI4oW7eI/view?usp=sharing): the whole system as one process, with its five external entities: Student, Teacher / TA, Admin, Content Manager (a staff account with content rights) and Email System. The scheduler is not an external entity: it runs inside our system as the scheduler container.
+- [Level 1 (overview)](https://drive.google.com/file/d/196F3QhxwfLmq2BtKo4RNkYGTFfxQy0zY/view?usp=drive_link): the five components (1.0 to 5.0), the data flows between them, the data stores D1 to D8 and the scheduler container with its jobs (1.5, 2.8 and 3.7).
+- Level 2: one diagram per architecture component, linked in the table above. Each one breaks its component into numbered processes (for example 2.1 Start session to 2.8 Expire idle sessions).
 
-How to read the Level 1 diagrams:
+How to read the Level 1 and Level 2 diagrams:
 - Data stores use the same numbers in every diagram: D1 Users & Auth, D2 Email Outbox, D3 Classes, D4 Content, D5 Game Sessions, D6 Photo Attempts, D7 Points & Engagement and D8 Media Storage. A store marked with `*` is drawn again on the same diagram.
 - Dashed circles labelled "Other DFD" show data that goes to or comes from another component. For example, 2.0 sends each location result to 4.0, which sends back the updated points, streak and badges.
 
@@ -72,6 +74,22 @@ docker compose up --build
 
 Database migrations run automatically when the api container starts.
 
+### Behind a reverse proxy
+
+Uvicorn takes the client IP from `X-Forwarded-For` only when the request comes from an address in `FORWARDED_ALLOW_IPS` (default `127.0.0.1`). Logins, sign-ups and requests without a token are rate limited per IP, so behind nginx:
+
+- don't publish port 8000 to the outside. `docker-compose.yml` publishes `8000:8000` for local development; behind nginx, bind it to `127.0.0.1:8000:8000`, or use `expose` if nginx runs in the same compose network. A client that reaches 8000 directly could otherwise send a fake `X-Forwarded-For` and get a fresh limit;
+- set `FORWARDED_ALLOW_IPS` in `.env` to the one address nginx connects from, never a whole subnet or `*`:
+  - nginx in the same compose network: that container's address. Give it a fixed one (`ipv4_address`), since container addresses can change on restart;
+  - nginx on the host: the compose network's gateway, not `127.0.0.1`. Find it with `docker network inspect <project>_default --format '{{(index .IPAM.Config 0).Gateway}}'`. Docker picks this subnet itself, so it differs between machines;
+- check it: with the wrong address, every request seems to come from nginx, so all users share one login limit;
+- have nginx pass the client's address:
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
 ## Backend Development
 
 The backend uses Python 3.11 in a virtual environment (venv).
@@ -86,7 +104,7 @@ pytest                               # tests (in tests/backend)
 ruff check . ../../tests ../../utils   # lint
 ruff format . ../../tests ../../utils  # format
 mypy                                 # type check (strict)
-python ../../utils/dep_graph.py      # dependency rules between components
+python ../../utils/dep_graph.py --check  # dependency rules between components
 alembic revision --autogenerate -m "describe change"   # new migration
 ```
 
@@ -113,8 +131,8 @@ Never commit `.venv/`.
 Feature code goes in one package per component from the architecture diagram: `accounts` (1.0),
 `game` (2.0), `verification` (3.0), `engagement` (4.0) and `content` (5.0). Shared code sits next
 to them: `config`, `db`, `errors` (`AppError` and the error codes), `models` (all ORM models, since
-the schema is shared) and `services` (services used by several components, such as storage and
-email). So does the entry layer (`main`, `api`, and `cli` for the scheduled jobs). A component may
+the schema is shared) and `services` (services used by several components, such as storage, email
+and rate limiting). So does the entry layer (`main`, `api`, and `cli` for the scheduled jobs). A component may
 use another component only through its `interface.py`; when two components need to notify each
 other, the router or CLI command calls both.
 
@@ -123,9 +141,30 @@ python utils/dep_graph.py --graph --check   # draw the graph and fail if a rule 
 python utils/dep_graph.py --graph           # only draw docs/architecture/dependency-graph.md
 ```
 
-The graph is generated from the imports and published on GitHub Pages after each merge to main, at [https://cosc-499-w2026.github.io/capstone-project-team-12/graph.html](https://cosc-499-w2026.github.io/capstone-project-team-12/graph.html). `docs/architecture/dependency-graph.md` is git-ignored, so there is no file to commit.
+The graph is generated from the imports and published on Netlify when a merge to main changes the site (at most 19 deploys a billing cycle, the free plan's limit), at [https://cosc499-team12.netlify.app/graph.html](https://cosc499-team12.netlify.app/graph.html). `docs/architecture/dependency-graph.md` is git-ignored, so there is no file to commit.
 
-The API reference is generated from the FastAPI routes in the same way and published at [https://cosc-499-w2026.github.io/capstone-project-team-12/api.html](https://cosc-499-w2026.github.io/capstone-project-team-12/api.html).
+The API reference is generated from the FastAPI routes in the same way and published at [https://cosc499-team12.netlify.app/api.html](https://cosc499-team12.netlify.app/api.html).
+
+### GPS replay
+
+`utils/gps_replay.py` plays a recorded walking route against a student's game through the API, as the app would, and prints the feedback code returned for each ping. The route is a CSV:
+
+```csv
+t_s,lat,lng,accuracy_m
+0,49.94120,-119.39480,8
+5,49.94114,-119.39480,8
+```
+
+`t_s` is the time in seconds since the start (at least 2 s between rows, the ping rate limit) and `accuracy_m` the GPS accuracy in metres. The positions must lead to the game's current location, since the API never returns its coordinates. The server compares distances about 25 s apart, so the route plays in real time.
+
+Run it from the repository root (not `src/backend`), with the backend running:
+
+```bash
+GPS_REPLAY_PASSWORD=... python utils/gps_replay.py route.csv --email student@example.com
+python utils/gps_replay.py route.csv --email student@example.com --game <game id> --confirm
+```
+
+Without `--game` it uses the student's open game. `--confirm` confirms arrival on the first ping that allows it. `--base-url` defaults to http://localhost:8000. The password comes from `GPS_REPLAY_PASSWORD`, or the script asks for it. It stops when the game changes (paused, ended, another location), the login stops working, the server can't be reached, or an answer is unusable; a refused ping such as 429 is shown and skipped. Exit codes: 0 played (or arrived), 1 stopped or no ping accepted, 2 bad route file.
 
 ## Team Contract
 
@@ -133,7 +172,7 @@ Our team contract can be found [here](docs/contract/team-contract.docx).
 
 ## Project Proposal
 
-Our project proposal can be found [here](docs/proposal/project-proposal.docx)
+Our project proposal can be found [here](docs/proposal/project-proposal.docx).
 
 ## Weekly Logs
 

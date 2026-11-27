@@ -1,9 +1,9 @@
 """Verify-email, resend-verification and forgot-password through the API."""
 
-import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from http import HTTPStatus
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -150,7 +150,9 @@ def test_forgot_password_also_stops_at_three_an_hour(
     assert queued(db, user.email, EmailKind.RESET_PASSWORD) == 3
 
 
-def test_requests_sent_at_once_still_queue_only_one(test_engine: Engine) -> None:
+def test_requests_sent_at_once_still_queue_only_one(
+    test_engine: Engine, run_together: Callable[..., list[Any]]
+) -> None:
     """Five resend requests racing, each in its own committed transaction (the savepoint
     session the other tests use can't run two at once)."""
     with Session(test_engine, expire_on_commit=False) as setup:
@@ -161,27 +163,13 @@ def test_requests_sent_at_once_still_queue_only_one(test_engine: Engine) -> None
         )
         setup.add(user)
         setup.commit()
-    start = threading.Barrier(5, timeout=10)
-    errors: list[BaseException] = []  # a thread's exception is otherwise only printed
 
-    def resend() -> None:
-        try:
-            with Session(test_engine) as session:
-                start.wait()
-                request_verification_email(user.email, session)
-                session.commit()
-        except BaseException as error:
-            errors.append(error)
+    def resend(session: Session) -> None:
+        request_verification_email(user.email, session)
 
     try:
-        threads = [threading.Thread(target=resend) for _ in range(5)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=10)
-        assert not any(thread.is_alive() for thread in threads), "a request is stuck"
-        if errors:
-            raise errors[0]
+        # each job returns None; an AppError would come back in its place
+        assert run_together(*[resend] * 5) == [None] * 5
         with Session(test_engine) as check:
             rows = select(func.count()).where(EmailOutbox.user_id == user.id)
             assert check.scalar(rows) == 1

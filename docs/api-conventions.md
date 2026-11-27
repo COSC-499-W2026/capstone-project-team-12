@@ -2,7 +2,7 @@
 ## Base Path and Authentication
 - All endpoints are under the base path `/api/v1`, except `GET /health`.
 - Request and response bodies are JSON, except file uploads, which use `multipart/form-data`.
-- Endpoints require an `Authorization: Bearer <access_token>` header, except register, login, refresh, verify-email, resend-verification, forgot-password, reset-password, set-password, `GET /health` and `GET /api/v1/media/{key}`.
+- Endpoints require an `Authorization: Bearer <access_token>` header, except register, login, refresh, logout, verify-email, resend-verification, forgot-password, reset-password, set-password, `GET /health` and `GET /api/v1/media/{key}`.
 - `GET /api/v1/media/{key}` serves media files through short-lived signed links made by StorageService. Audio players and image tags cannot send an access token, so the link's signature is the permission: a tampered or expired link returns 403 `FORBIDDEN`.
 - A missing, invalid or expired access token returns 401.
 
@@ -117,7 +117,7 @@ API error responses must not expose stack traces, database errors, internal host
 ### Raising Errors in Code
 - Services and interface functions raise `AppError` from `app/errors.py` with an `ErrorCode`, for example `raise AppError(ErrorCode.CLASS_ARCHIVED, "This class is archived.")`. Routers do not build error responses or raise `HTTPException`.
 - Each `ErrorCode` has one HTTP status (`STATUS` in `app/errors.py`), taken from the Error Codes table in the Technical Specification. A new code is added to `ErrorCode` and `STATUS` together.
-- The handlers in `app/main.py` turn `AppError`, request validation errors (422 `VALIDATION_ERROR`), unknown routes (404 `NOT_FOUND`), wrong methods (405 `METHOD_NOT_ALLOWED`) and unexpected errors (500 `INTERNAL_ERROR`, logged but never shown to the client) into the format above.
+- The handlers in `app/errors.py`, installed by `add_error_handlers` in `app/main.py`, turn `AppError`, request validation errors (422 `VALIDATION_ERROR`), unknown routes (404 `NOT_FOUND`), wrong methods (405 `METHOD_NOT_ALLOWED`) and unexpected errors (500 `INTERNAL_ERROR`, logged but never shown to the client) into the format above.
 - Headers that a code needs, such as `Retry-After` for `UPLOAD_IN_PROGRESS` and `OCR_BUSY`, are passed with `headers=`.
 
 ## Interface and Service Functions
@@ -125,7 +125,7 @@ Functions in a component's `interface.py` and in the shared services (`app/servi
 
 ```python
 location_snapshot(location_id, language, difficulty, db)
-is_class_staff(user_id, class_id, db)
+require_active_enrolment(student_id, class_id, db)
 end_open_sessions(class_id, db, student_id=None)
 ```
 
@@ -173,3 +173,16 @@ Paginated collection responses must use the following structure:
 |page_size|Effective page size|
 |total|Total number of resources matching request filter|
 |has_next_page|Indicates whether another page is available|
+
+## Teacher API: classroom access codes
+
+| Method and path | Who | Purpose |
+| --- | --- | --- |
+| `POST /teacher/classes` | Staff | Create a class and return the initial access code and its `access_code_id`. |
+| `POST /teacher/classes/{id}/access-codes` | Owner, TA | Create an additional code for an active class. |
+| `GET /teacher/classes/{id}/access-codes` | Owner, TA | List all codes newest first, including expired and deactivated codes. Archived classes stay readable. Each entry includes `id`, `code`, `expires_at`, `is_active`, `max_uses`, `uses_count`, and `created_at`. |
+| `PATCH /teacher/access-codes/{id}` | Owner, TA | Deactivate an access code for an active class. |
+
+## Join-class retries
+
+For `POST /api/v1/me/classes/join`, a student with an active enrolment in the code's class can retry with any code for that class and receive `200`, including with an expired, exhausted, or deactivated code. The retry preserves the enrolment, code usage, and current class selection. An unknown code always returns `400 INVALID_ACCESS_CODE`. Expired, exhausted, or deactivated codes also return that error when the student has no active enrolment in the code's class. A valid code for a different class in the same language returns `409 ALREADY_IN_CLASS_FOR_LANGUAGE` when the student already has an active class in that language.

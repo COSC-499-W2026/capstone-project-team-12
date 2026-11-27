@@ -4,6 +4,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -95,19 +96,18 @@ def test_code_defaults_to_semester_end(
     )
 
 
-def test_unassigned_student_cannot_generate_code(
+@pytest.mark.parametrize("role", [UserRole.STUDENT, UserRole.STAFF])
+def test_someone_outside_the_class_cannot_generate_code(
     client: TestClient,
     auth_headers: Callable[[User], dict[str, str]],
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
+    role: UserRole,
 ) -> None:
-    student = make_user()
-    school_class = make_class()
-
     response = client.post(
-        f"{URL}/{school_class.id}/access-codes",
+        f"{URL}/{make_class().id}/access-codes",
         json={},
-        headers=auth_headers(student),
+        headers=auth_headers(make_user(role=role)),
     )
 
     assert response.status_code == 403

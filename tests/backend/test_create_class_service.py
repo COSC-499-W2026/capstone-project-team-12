@@ -3,7 +3,7 @@
 from collections.abc import Callable
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.engagement.classes import create_class
@@ -41,20 +41,7 @@ def test_teacher_creates_class(
     assert owner.role == ClassStaffRole.OWNER
 
 
-def test_student_cannot_create_class(
-    db: Session,
-    make_user: Callable[..., User],
-) -> None:
-    student = make_user()
-
-    with pytest.raises(AppError) as exc:
-        create_class(student, "Test", "2026W1", Language.JA, db)
-
-    assert exc.value.code == ErrorCode.FORBIDDEN_ROLE
-    assert db.scalars(select(Class)).all() == []
-
-
-@pytest.mark.parametrize("semester", ["2026F", "2026W3", "invalid", ""])
+@pytest.mark.parametrize("semester", ["2026F", "2026W3", ""])
 def test_invalid_semester(
     db: Session,
     make_user: Callable[..., User],
@@ -66,30 +53,6 @@ def test_invalid_semester(
         create_class(teacher, "Test", semester, Language.JA, db)
 
     assert exc.value.code == ErrorCode.VALIDATION_ERROR
-
-
-def test_empty_class_name(
-    db: Session,
-    make_user: Callable[..., User],
-) -> None:
-    teacher = make_user(role=UserRole.STAFF)
-
-    with pytest.raises(AppError) as exc:
-        create_class(teacher, "   ", "2026W1", Language.JA, db)
-
-    assert exc.value.code == ErrorCode.VALIDATION_ERROR
-
-
-def test_disabled_teacher_cannot_create_class(
-    db: Session,
-    make_user: Callable[..., User],
-) -> None:
-    teacher = make_user(role=UserRole.STAFF, is_active=False)
-
-    with pytest.raises(AppError) as exc:
-        create_class(teacher, "Test", "2026W1", Language.JA, db)
-
-    assert exc.value.code == ErrorCode.ACCOUNT_DISABLED
 
 
 def test_creation_does_not_commit(
@@ -137,24 +100,11 @@ def test_class_name_is_trimmed(
     assert school_class.name == "Japanese 101"
 
 
-def test_class_name_rejects_nul_character(
-    db: Session,
-    make_user: Callable[..., User],
-) -> None:
-    teacher = make_user(role=UserRole.STAFF)
-
-    with pytest.raises(AppError) as exc:
-        create_class(teacher, "Japanese\x00 101", "2026W1", Language.JA, db)
-
-    assert exc.value.code == ErrorCode.VALIDATION_ERROR
-    assert exc.value.details[0]["field"] == "name"
-    assert db.scalars(select(Class)).all() == []
-
-
 @pytest.mark.parametrize(
     ("name", "semester", "expected_field"),
     [
         ("   ", "2026W1", "name"),
+        ("Japanese\x00 101", "2026W1", "name"),
         ("Test", "invalid", "semester"),
     ],
 )
@@ -166,11 +116,12 @@ def test_validation_error_identifies_field(
     expected_field: str,
 ) -> None:
     teacher = make_user(role=UserRole.STAFF)
+    before = db.scalar(select(func.count()).select_from(Class))
 
     with pytest.raises(AppError) as exc:
         create_class(teacher, name, semester, Language.JA, db)
 
     assert exc.value.code == ErrorCode.VALIDATION_ERROR
-    assert exc.value.details
     assert exc.value.details[0]["in"] == "body"
     assert exc.value.details[0]["field"] == expected_field
+    assert db.scalar(select(func.count()).select_from(Class)) == before

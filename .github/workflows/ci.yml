@@ -5,9 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# Runners are shared, so a new push to a PR cancels its older run
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, ARM64]
 
     services:
       postgres:
@@ -16,16 +21,14 @@ jobs:
           POSTGRES_USER: hunt
           POSTGRES_PASSWORD: hunt
           POSTGRES_DB: hunt_test
+        # A random host port, so jobs on the same VM can run side by side
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U hunt -d hunt_test"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
-    env:
-      DATABASE_URL: postgresql+psycopg://hunt:hunt@localhost:5432/hunt_test
 
     defaults:
       run:
@@ -35,6 +38,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Point DATABASE_URL at this job's Postgres
+        run: |
+          echo "Postgres is on host port ${{ job.services.postgres.ports['5432'] }}"
+          echo "DATABASE_URL=postgresql+psycopg://hunt:hunt@localhost:${{ job.services.postgres.ports['5432'] }}/hunt_test" >> "$GITHUB_ENV"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -43,6 +51,11 @@ jobs:
           cache-dependency-path: |
             src/backend/requirements.txt
             src/backend/requirements-dev.txt
+
+      - name: Create a fresh venv
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
         run: pip install -r requirements-dev.txt

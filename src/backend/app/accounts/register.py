@@ -2,11 +2,12 @@ import re
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import func, insert, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.accounts.password import hash_password, validate_password_security
+from app.db import violated_constraint
 from app.engagement.interface import validate_code_and_enrol
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
@@ -28,63 +29,80 @@ class RegisterResponse(BaseModel):
     role: UserRole
 
 
+EMAIL_TAKEN_MESSAGE = "An account with this email address already exists."
+USERNAME_TAKEN_MESSAGE = "This username is already in use."
+
+
 def register_account(request: RegisterRequest, db: Session) -> User:
-    try:
-        email = request.email.lower()
-        username = request.username
-        password = request.password
-        access_code = request.access_code
+    validate_password_security(request.password)
+    user = insert_user(
+        request.email,
+        request.username,
+        request.password,
+        role=UserRole.STUDENT,
+        can_manage_content=False,
+        db=db,
+    )
+    EmailService.queue_email(user, EmailKind.VERIFY_EMAIL, db)  # spec: sign-up sends it
+    if request.access_code is not None:
+        validate_code_and_enrol(user.id, request.access_code, db)
+    return user
 
-        validate_password_security(password)
 
-        if not email_is_valid(email):
-            raise AppError(ErrorCode.VALIDATION_ERROR, "The email you have entered is not valid.")
+def insert_user(
+    email: str,
+    username: str,
+    password: str | None,
+    role: UserRole,
+    can_manage_content: bool,
+    db: Session,
+) -> User:
+    """Add an account and return it. Doesn't commit.
 
-        if not username_is_valid(username):
-            raise AppError(
-                ErrorCode.VALIDATION_ERROR, "The username you have entered is not valid."
-            )
-
-        if username_exists(username, db):
-            raise AppError(
-                ErrorCode.USERNAME_TAKEN, "The username you have chosen is already in use."
-            )
-
-        if email_exists(email, db):
-            raise AppError(
-                ErrorCode.EMAIL_TAKEN,
-                "The email you have chosen is already associated with an account",
-            )
-
-        hashed_password = hash_password(password)
-        stmt = insert(User).values(
-            email=email,
-            username=username,
-            password_hash=hashed_password,
-            role=UserRole.STUDENT,
-            can_manage_content=False,
+    The address is stored trimmed and lowercase; the password is hashed, or left unset when
+    None. 422 VALIDATION_ERROR with a detail for each badly formed field; 409 EMAIL_TAKEN or
+    USERNAME_TAKEN if any account (deactivated ones too) has the address or the username in
+    any case, including when another request takes either one between the check and the insert.
+    """
+    email = email.strip().lower()
+    details = [
+        {"in": "body", "field": field, "message": message}
+        for field, valid, message in (
+            ("email", email_is_valid(email), "Not a valid email address."),
+            (
+                "username",
+                username_is_valid(username),
+                "Must be 3 to 30 characters with no space at either end.",
+            ),
         )
-        user = db.scalars(stmt.returning(User)).one()
-        EmailService.queue_email(user, EmailKind.VERIFY_EMAIL, db)  # spec: sign-up sends it
-
-        if access_code is not None:
-            class_id = validate_code_and_enrol(user.id, access_code, db)
-            db.execute(update(User).where(User.id == user.id).values(current_class_id=class_id))
-        return user
-
+        if not valid
+    ]
+    if details:
+        raise AppError(ErrorCode.VALIDATION_ERROR, details[0]["message"], details)
+    if username_exists(username, db):
+        raise AppError(ErrorCode.USERNAME_TAKEN, USERNAME_TAKEN_MESSAGE)
+    if email_exists(email, db):
+        raise AppError(ErrorCode.EMAIL_TAKEN, EMAIL_TAKEN_MESSAGE)
+    try:
+        return db.scalars(
+            insert(User)
+            .values(
+                email=email,
+                username=username,
+                password_hash=None if password is None else hash_password(password),
+                role=role,
+                can_manage_content=can_manage_content,
+            )
+            .returning(User)
+        ).one()
     except IntegrityError as err:
-        diag = getattr(err.orig, "diag", None)
-        constraint = getattr(diag, "constraint_name", None)
+        # another request took the address or username after the checks above
+        constraint = violated_constraint(err)
         if constraint == "uq_users_email":
-            raise AppError(
-                ErrorCode.EMAIL_TAKEN, "The email you have chosen is already in use."
-            ) from err
-        elif constraint == "uq_users_username_lower":
-            raise AppError(
-                ErrorCode.USERNAME_TAKEN, "The username you have chosen is already in use."
-            ) from err
-        # any other constraint is a real error
-        raise
+            raise AppError(ErrorCode.EMAIL_TAKEN, EMAIL_TAKEN_MESSAGE) from err
+        if constraint == "uq_users_username_lower":
+            raise AppError(ErrorCode.USERNAME_TAKEN, USERNAME_TAKEN_MESSAGE) from err
+        raise  # any other constraint is a real error
 
 
 def username_exists(username: str, db: Session) -> bool:

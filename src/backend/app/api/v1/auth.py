@@ -6,8 +6,15 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.accounts.login import login_account
+from app.accounts.logout import logout_session
 from app.accounts.register import RegisterRequest, RegisterResponse, register_account
-from app.accounts.tokens import TokenResponse, rotate_tokens
+from app.accounts.tokens import (
+    TokenResponse,
+    delete_refresh_cookie,
+    rotate_tokens,
+    set_refresh_cookie,
+)
+from app.api.rate_limit import login_rate_limit, register_rate_limit
 from app.db import get_db
 from app.errors import AppError, ErrorCode, error_responses
 
@@ -23,6 +30,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
     operation_id="registerUser",
     # EMAIL_TAKEN, USERNAME_TAKEN, INVALID_ACCESS_CODE
     responses=error_responses(HTTPStatus.CONFLICT, HTTPStatus.BAD_REQUEST),
+    dependencies=[Depends(register_rate_limit)],
 )
 def register(request: RegisterRequest, db: Annotated[Session, Depends(get_db)]) -> RegisterResponse:
     """Student sign-up: email, username, password, optional access code."""
@@ -37,6 +45,7 @@ def register(request: RegisterRequest, db: Annotated[Session, Depends(get_db)]) 
     status_code=200,
     operation_id="loginUser",
     responses=error_responses(HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN),
+    dependencies=[Depends(login_rate_limit)],
 )
 def login(
     response: Response,
@@ -48,8 +57,9 @@ def login(
     Returns an access token (expiry 60 minutes) and a refresh token (expiry 14 days).
     """
     tokens = login_account(form_data, db)
-    response.set_cookie("refresh_token", tokens["refresh_token"])
-    return TokenResponse(access_token=tokens["access_token"])
+    db.commit()
+    set_refresh_cookie(response, tokens.refresh_token)
+    return TokenResponse(access_token=tokens.access_token)
 
 
 @auth_router.post(
@@ -68,6 +78,34 @@ def refresh(
     if refresh_token is None:
         raise AppError(ErrorCode.NOT_AUTHENTICATED, "Invalid token: please sign in again")
     else:
-        tokens = rotate_tokens(refresh_token, db)
-        response.set_cookie("refresh_token", tokens["refresh_token"])
-        return TokenResponse(access_token=tokens["access_token"])
+        try:
+            tokens = rotate_tokens(refresh_token, db)
+            set_refresh_cookie(response, tokens.refresh_token)
+            db.commit()
+            return TokenResponse(access_token=tokens.access_token)
+        except AppError:
+            # a replayed token is refused, but revoking its family must still be saved
+            db.commit()
+            raise
+
+
+@auth_router.post(
+    "/logout",
+    tags=["logout"],
+    status_code=204,
+    operation_id="logoutUser",
+)
+def logout(
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    refresh_token: Annotated[str | None, Cookie()] = None,
+) -> None:
+    """Signs out this device: revokes the sign-in named by the refresh cookie and clears the cookie.
+
+    No access token is needed, so this works after the access token has expired, and for a
+    disabled account. The user's other devices stay signed in. Always returns 204, also when the
+    cookie is missing, unknown or already revoked, so a client can always finish logging out.
+    """
+    logout_session(refresh_token, db)
+    db.commit()
+    delete_refresh_cookie(response)

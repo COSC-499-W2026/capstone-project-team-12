@@ -3,7 +3,7 @@
 #8 creates classes, access_codes and class_enrollments; the engagement tables follow later.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from sqlalchemy import (
@@ -15,11 +15,17 @@ from sqlalchemy import (
     text,
     true,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 from app.models.columns import created_at, in_check, language_check, updated_at, uuid_pk
-from app.models.enums import EnrollmentEndReason
+from app.models.enums import (
+    AchievementCategory,
+    DailyChallengeType,
+    EnrollmentEndReason,
+    PointsSourceType,
+)
 
 # Letters and digits that are hard to mix up when read aloud or copied by hand:
 # no 0/O, no 1/I/L. The code generator must pick from these characters too.
@@ -114,3 +120,183 @@ class ClassEnrollment(Base):
     end_reason: Mapped[str | None]
     joined_at: Mapped[datetime] = created_at()
     left_at: Mapped[datetime | None]
+
+
+class PointsLedger(Base):
+    """Immutable record of points earned from a specific source."""
+
+    __tablename__ = "points_ledger"
+    __table_args__ = (
+        UniqueConstraint("user_id", "source_type", "source_ref"),
+        Index("ix_points_ledger_class_created_at", "class_id", "created_at"),
+        in_check("source_type", PointsSourceType, name="source_type"),
+        ForeignKeyConstraint(
+            ["class_id", "language"],
+            ["classes.id", "classes.target_language"],
+        ),
+        language_check(),
+        CheckConstraint("points > 0", name="points_positive"),
+    )
+
+    id: Mapped[UUID] = uuid_pk()
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    source_type: Mapped[str]
+    source_ref: Mapped[str]
+    class_id: Mapped[UUID | None]
+    language: Mapped[str]
+    points: Mapped[int]
+    # keep the transaction's now(), the same as user_achievements.unlocked_at: a game summary
+    # matches a badge to its award by these two times being equal (get_game_engagement)
+    created_at: Mapped[datetime] = created_at()
+
+
+class UserLanguageStats(Base):
+    """Cumulative points earned by one student in one language."""
+
+    __tablename__ = "user_language_stats"
+    __table_args__ = (
+        language_check(),
+        CheckConstraint("total_points >= 0", name="total_points_nonnegative"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    language: Mapped[str] = mapped_column(primary_key=True)
+    total_points: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    updated_at: Mapped[datetime] = updated_at()
+
+
+class Achievement(Base):
+    """Seeded definition of an unlockable achievement."""
+
+    __tablename__ = "achievements"
+    __table_args__ = (
+        UniqueConstraint("achievement_key"),
+        in_check(
+            "category",
+            tuple(category.value for category in AchievementCategory),
+            name="category",
+        ),
+    )
+
+    id: Mapped[UUID] = uuid_pk()
+    achievement_key: Mapped[str]
+    category: Mapped[str]
+    unlock_condition: Mapped[dict[str, object]] = mapped_column(JSONB)
+    icon_key: Mapped[str]
+    is_active: Mapped[bool] = mapped_column(
+        default=True,
+        server_default=true(),
+    )
+
+
+class UserAchievement(Base):
+    """An achievement earned by a user, optionally in a specific language.
+
+    A database trigger enforces the category-language relationship:
+    streak achievements require NULL language, while learning and
+    difficulty achievements require a non-NULL language.
+    """
+
+    __tablename__ = "user_achievements"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "achievement_id",
+            "language",
+            postgresql_nulls_not_distinct=True,
+        ),
+        language_check(),
+    )
+
+    id: Mapped[UUID] = uuid_pk()
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    achievement_id: Mapped[UUID] = mapped_column(ForeignKey("achievements.id"))
+    language: Mapped[str | None]
+    # keep the transaction's now(), the same as points_ledger.created_at: a game summary
+    # matches a badge to its award by these two times being equal (get_game_engagement)
+    unlocked_at: Mapped[datetime] = created_at()
+
+
+class UserStats(Base):
+    """Global streak statistics for a student across all languages."""
+
+    __tablename__ = "user_stats"
+    __table_args__ = (
+        CheckConstraint(
+            "current_streak_days >= 0",
+            name="current_streak_days_nonnegative",
+        ),
+        CheckConstraint(
+            "best_streak_days >= 0",
+            name="best_streak_days_nonnegative",
+        ),
+        CheckConstraint(
+            "best_streak_days >= current_streak_days",
+            name="best_streak_at_least_current",
+        ),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"),
+        primary_key=True,
+    )
+    current_streak_days: Mapped[int] = mapped_column(
+        default=0,
+        server_default=text("0"),
+    )
+    best_streak_days: Mapped[int] = mapped_column(
+        default=0,
+        server_default=text("0"),
+    )
+    last_active_date: Mapped[date | None]
+    reported_break_date: Mapped[date | None]
+    updated_at: Mapped[datetime] = updated_at()
+
+
+class DailyChallenge(Base):
+    """One of three challenges generated per student per local app day."""
+
+    __tablename__ = "daily_challenges"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "challenge_date",
+            "slot",
+        ),
+        CheckConstraint(
+            "slot BETWEEN 1 AND 3",
+            name="slot_range",
+        ),
+        in_check(
+            "challenge_type",
+            DailyChallengeType,
+            name="challenge_type",
+        ),
+        CheckConstraint(
+            "reward_points IN (50, 100)",
+            name="reward_points_allowed",
+        ),
+        CheckConstraint(
+            "progress_required > 0",
+            name="progress_required_positive",
+        ),
+        CheckConstraint(
+            "progress_current >= 0 AND progress_current <= progress_required",
+            name="progress_within_required",
+        ),
+    )
+
+    id: Mapped[UUID] = uuid_pk()
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    challenge_date: Mapped[date]
+    slot: Mapped[int]
+    challenge_type: Mapped[str]
+    params: Mapped[dict[str, object]] = mapped_column(JSONB)
+    description_key: Mapped[str]
+    reward_points: Mapped[int]
+    progress_current: Mapped[int] = mapped_column(
+        default=0,
+        server_default=text("0"),
+    )
+    progress_required: Mapped[int]
+    completed_at: Mapped[datetime | None]

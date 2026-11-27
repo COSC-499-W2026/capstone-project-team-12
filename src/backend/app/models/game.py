@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    SmallInteger,
     UniqueConstraint,
     func,
     text,
@@ -117,7 +118,15 @@ class SessionLocation(Base):
 
     __tablename__ = "session_locations"
     __table_args__ = (
-        UniqueConstraint("session_id", "position"),
+        # one live row per position: a row replaced by a shuffle stays, and its replacement gets
+        # the same position (spec Session Lifecycle, Shuffle)
+        Index(
+            "uq_session_locations_session_id_position",
+            "session_id",
+            "position",
+            unique=True,
+            postgresql_where=text(f"skip_reason IS DISTINCT FROM '{SkipReason.SHUFFLED}'"),
+        ),
         UniqueConstraint("session_id", "location_id"),  # 5 different locations per game
         # upper limits are settings (locations_per_game, max_photo_attempts); services check them
         CheckConstraint("position >= 1", name="position"),
@@ -148,11 +157,15 @@ class SessionLocation(Base):
         CheckConstraint("last_lat BETWEEN -90 AND 90", name="last_lat"),
         CheckConstraint("last_lng BETWEEN -180 AND 180", name="last_lng"),
         CheckConstraint("last_accuracy_m >= 0", name="last_accuracy_m"),
+        CheckConstraint("weak_pings_in_row >= 0", name="weak_pings_in_row"),
+        CheckConstraint("clue_plays >= 0", name="clue_plays"),
     )
 
     id: Mapped[UUID] = uuid_pk()
     session_id: Mapped[UUID] = mapped_column(ForeignKey("game_sessions.id"))
-    location_id: Mapped[UUID]  # FK to locations added once Eddy's content tables exist
+    # content is never deleted (locations are deactivated), so these FKs keep the default
+    # ON DELETE NO ACTION: deleting content a game used fails instead of erasing its history
+    location_id: Mapped[UUID] = mapped_column(ForeignKey("locations.id"))
     position: Mapped[int]
     status: Mapped[str] = mapped_column(
         default=LocationStatus.PENDING, server_default=LocationStatus.PENDING.value
@@ -174,8 +187,14 @@ class SessionLocation(Base):
     ref_at: Mapped[datetime | None]
     last_feedback_code: Mapped[str | None]
     last_spoken_at: Mapped[datetime | None]
+    # weak GPS fixes in a row; 3 allow the GPS override early (spec, Arrival). A good fix resets it
+    weak_pings_in_row: Mapped[int] = mapped_column(
+        SmallInteger, default=0, server_default=text("0")
+    )
 
     attempts_used: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    # times the student played or replayed this location's clue (feedback phrases don't count)
+    clue_plays: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     # copy of the points_ledger row, written in the same transaction
     points_awarded: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     # e.g. ["speed_anomaly", "similar_photo", "not_in_app_capture", "gps_override"]
@@ -186,8 +205,8 @@ class SessionLocation(Base):
     completed_at: Mapped[datetime | None]
 
     # content snapshot taken when the location is drawn (server only, never sent to students)
-    clue_id: Mapped[UUID]  # FK to clues added later
-    audio_asset_id: Mapped[UUID]  # FK to audio_assets added later
+    clue_id: Mapped[UUID] = mapped_column(ForeignKey("clues.id"))
+    audio_asset_id: Mapped[UUID] = mapped_column(ForeignKey("audio_assets.id"))
     accepted_answers_snapshot: Mapped[list[str]] = mapped_column(JSONB)
     gps_points_snapshot: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
     radius_snapshot: Mapped[int]

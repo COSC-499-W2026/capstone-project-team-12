@@ -10,11 +10,13 @@ unknown addresses. Nothing here commits; the route does.
 """
 
 from datetime import timedelta
+from uuid import UUID
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.accounts.password import hash_password, validate_password_security
+from app.accounts.tokens import revoke_refresh_tokens
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
 from app.models.email import EmailOutbox
@@ -44,7 +46,8 @@ def reset_password(token: str, new_password: str, db: Session) -> None:
     The password is checked first, so a weak one (422) doesn't use the link up. A bad link, or
     one for an account that is deactivated or unverified, is INVALID_TOKEN (400) and stays unused.
     The link is looked at twice: unlocked before the hash, so unknown tokens don't pay for
-    bcrypt, and again when it is consumed, which is the check that counts.
+    bcrypt, and again when it is consumed, which is the check that counts. A reset revokes all
+    the user's refresh tokens, in the same transaction; a refused one revokes nothing.
     """
     validate_password_security(new_password)
     # a made-up or stale token is refused before the slow hash, so it costs no CPU
@@ -57,23 +60,29 @@ def reset_password(token: str, new_password: str, db: Session) -> None:
         if not user.is_active or user.email_verified_at is None:
             raise AppError(ErrorCode.INVALID_TOKEN, INVALID_LINK)
     user.password_hash = password_hash
-    # a reset mail still waiting would send another link and keep the one-pending slot taken.
-    # SKIP LOCKED: the send job locks the row before the user, so waiting here could deadlock;
-    # a row it is sending right now just goes out. That is a security gap: it carries a link
-    # that works for 60 minutes after this reset (#199, fixed in the send job).
+    cancel_waiting_reset_mail(user.id, db)
+    # an unused set-password link (3 days) could overwrite the new password
+    EmailService.invalidate_user_tokens(user.id, EmailKind.SET_PASSWORD, db)
+    # spec: resetting revokes every refresh token, so no device can get a new access token.
+    # An access token already issued still works until it expires (60 minutes).
+    revoke_refresh_tokens(user.id, db)
+    db.flush()
+
+
+def cancel_waiting_reset_mail(user_id: UUID, db: Session) -> None:
+    """Mark the user's pending reset mail FAILED, after their password changed.
+
+    A reset mail still waiting would send another link and keep the one-pending slot taken.
+    SKIP LOCKED: the send job locks the row before the user, so waiting here could deadlock.
+    The job checks a row it holds itself and doesn't send it (email_sender, #199).
+    """
     waiting = select(EmailOutbox.id).where(
-        EmailOutbox.user_id == user.id,
+        EmailOutbox.user_id == user_id,
         EmailOutbox.template == EmailKind.RESET_PASSWORD,
         EmailOutbox.status == EmailStatus.PENDING,
     )
     stale = EmailOutbox.id.in_(waiting.with_for_update(skip_locked=True))
     db.execute(update(EmailOutbox).where(stale).values(status=EmailStatus.FAILED))
-    # an unused set-password link (3 days) could overwrite the new password
-    EmailService.invalidate_user_tokens(user.id, EmailKind.SET_PASSWORD, db)
-    # spec: resetting also revokes all refresh tokens. They come with A2 (revoke_refresh_tokens);
-    # whichever of A2 and this merges second adds the call here (#198). Until then a reset
-    # doesn't sign out someone who already has a session.
-    db.flush()
 
 
 def request_verification_email(email: str, db: Session) -> None:
