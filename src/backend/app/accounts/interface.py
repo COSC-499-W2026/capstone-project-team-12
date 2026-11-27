@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.accounts.class_staff import class_role, invite_assistant
+from app.accounts.export import UserExport, export_user
 from app.accounts.profile import get_profile_classes
 from app.accounts.staff import create_teacher, list_staff_accounts, set_staff_active
 from app.accounts.tokens import revoke_refresh_tokens
@@ -37,6 +38,8 @@ __all__ = [
     "set_staff_active",
     "get_profile_classes",
     "invite_assistant",
+    "export_user",
+    "UserExport",
 ]
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")

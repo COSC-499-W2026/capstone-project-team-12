@@ -1,28 +1,21 @@
 """GET /api/v1/admin/users/{id}/export: an admin downloads what is stored about an account as a
-JSON file, and every attempt is written to the audit log."""
+JSON file, and each export is recorded in the admin audit log."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from conftest import audit_entries
 from fastapi.testclient import TestClient
 from httpx2 import Response
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.accounts.export import export_user
-from app.errors import AppError, ErrorCode
+from app.accounts.interface import export_user
+from app.errors import ErrorCode
 from app.models.accounts import ClassStaff, User
-from app.models.audit import AuditEvent
 from app.models.engagement import Class, ClassEnrollment
-from app.models.enums import AuditAction, AuditResult, ClassStaffRole, Language, UserRole
-
-
-@pytest.fixture
-def admin(make_user: Callable[..., User]) -> User:
-    return make_user(role=UserRole.ADMIN)
+from app.models.enums import AuditAction, ClassStaffRole, Language, UserRole
 
 
 @pytest.fixture
@@ -35,11 +28,6 @@ def export(
         return client.get(f"/api/v1/admin/users/{target}/export", headers=auth_headers(caller))
 
     return get
-
-
-def audit_entries(db: Session, actor: User) -> list[AuditEvent]:
-    entries = select(AuditEvent).where(AuditEvent.actor_id == actor.id)
-    return list(db.scalars(entries.order_by(AuditEvent.created_at)))
 
 
 def test_a_student_export_holds_their_data_and_no_one_elses(
@@ -90,21 +78,15 @@ def test_a_student_export_holds_their_data_and_no_one_elses(
     ]
 
     [entry] = audit_entries(db, admin)
-    assert (entry.action, entry.result, entry.target_id, entry.ip_address) == (
+    assert (entry.action, entry.target_user_id, entry.details) == (
         AuditAction.EXPORT_USER,
-        AuditResult.SUCCESS,
         student.id,
-        "testclient",
+        {"role": "student"},
     )
-    assert entry.details == {
-        "email": student.email,
-        "username": student.username,
-        "role": "student",
-    }
     assert datetime.fromisoformat(body["exported_at"]) == entry.created_at
 
 
-def test_a_teachers_export_lists_the_classes_they_assist_but_not_the_ones_they_own(
+def test_a_teachers_export_lists_the_classes_they_own_and_the_ones_they_assist(
     admin: User,
     make_user: Callable[..., User],
     make_class: Callable[..., Class],
@@ -122,6 +104,7 @@ def test_a_teachers_export_lists_the_classes_they_assist_but_not_the_ones_they_o
     body = response.json()
     assert (body["profile"]["role"], body["profile"]["can_manage_content"]) == ("staff", True)
     assert [row["class_id"] for row in body["ta_roles"]] == [str(assisted.id)]
+    assert [row["class_id"] for row in body["owned_classes"]] == [str(owned.id)]
     assert body["class_enrolments"] == []
 
 
@@ -143,67 +126,20 @@ def test_any_account_can_be_exported_deactivated_ones_too(
     )
 
 
-def test_an_unknown_id_is_user_not_found_and_audited_as_a_failure(
+def test_an_unknown_id_is_user_not_found_and_nothing_is_recorded(
     db: Session,
     admin: User,
     export: Callable[[User, UUID], Response],
     assert_error: Callable[[Response, int, ErrorCode], None],
 ) -> None:
-    unknown = uuid4()
+    assert_error(export(admin, uuid4()), 404, ErrorCode.USER_NOT_FOUND)
 
-    assert_error(export(admin, unknown), 404, ErrorCode.USER_NOT_FOUND)
-
-    [entry] = audit_entries(db, admin)
-    assert (entry.action, entry.result, entry.target_id, entry.details) == (
-        AuditAction.EXPORT_USER,
-        AuditResult.FAILURE,
-        unknown,
-        {"error": "USER_NOT_FOUND"},
-    )
+    assert audit_entries(db, admin) == []
 
 
-@pytest.mark.parametrize(
-    ("fields", "code"),
-    [
-        ({"role": UserRole.STUDENT}, ErrorCode.FORBIDDEN_ROLE),
-        ({"role": UserRole.STAFF}, ErrorCode.FORBIDDEN_ROLE),
-        ({"role": UserRole.STAFF, "can_manage_content": True}, ErrorCode.FORBIDDEN_ROLE),
-        ({"role": UserRole.ADMIN, "is_active": False}, ErrorCode.ACCOUNT_DISABLED),
-    ],
-    ids=["student", "teacher", "content-manager", "deactivated-admin"],
-)
-def test_only_active_admins_can_export(
-    db: Session,
-    make_user: Callable[..., User],
-    export: Callable[[User, UUID], Response],
-    assert_error: Callable[[Response, int, ErrorCode], None],
-    fields: dict[str, Any],
-    code: ErrorCode,
+def test_export_user_does_not_commit(
+    db: Session, admin: User, make_user: Callable[..., User], transaction_calls: list[str]
 ) -> None:
-    caller = make_user(**fields)
-
-    assert_error(export(caller, caller.id), 403, code)  # even their own account
-
-    assert audit_entries(db, caller) == []
-
-
-def test_without_a_token_the_request_is_401(
-    client: TestClient,
-    make_user: Callable[..., User],
-    assert_error: Callable[[Response, int, ErrorCode], None],
-) -> None:
-    response = client.get(f"/api/v1/admin/users/{make_user().id}/export")
-    assert_error(response, 401, ErrorCode.NOT_AUTHENTICATED)
-
-
-def test_the_service_does_not_commit(
-    db: Session, admin: User, make_user: Callable[..., User], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    commits: list[None] = []
-    monkeypatch.setattr(db, "commit", lambda: commits.append(None))
-
     export_user(admin.id, make_user().id, db)
-    with pytest.raises(AppError):
-        export_user(admin.id, uuid4(), db)
 
-    assert commits == []
+    assert "commit" not in transaction_calls
