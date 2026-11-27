@@ -79,6 +79,7 @@ from app.models.engagement import (
     AccessCode,
     Class,
     ClassEnrollment,
+    DailyChallenge,
     PointsLedger,
     UserLanguageStats,
     UserStats,
@@ -100,6 +101,8 @@ __all__ = [
     "challenge_expiry",
     "ensure_daily_challenges",
     "get_and_report_streak",
+    "get_stored_streak",
+    "list_daily_challenges",
     "visible_streak",
     "EngagementResult",
     "apply_location_result",
@@ -159,6 +162,23 @@ def get_and_report_streak(student_id: UUID, db: Session, *, today: date) -> tupl
     if broken:
         stats.reported_break_date = stats.last_active_date
     return current, stats.best_streak_days, broken
+
+
+def get_stored_streak(student_id: UUID, db: Session) -> UserStats | None:
+    """The student's streak as last stored, or None before their first completed location.
+
+    For the export of their account: unlike get_and_report_streak, it changes nothing.
+    """
+    return db.get(UserStats, student_id)
+
+
+def list_daily_challenges(student_id: UUID, db: Session) -> list[DailyChallenge]:
+    """Every daily challenge the student was given, oldest day first, with its progress.
+
+    For the export of their account: unlike ensure_daily_challenges, it never creates any.
+    """
+    challenges = select(DailyChallenge).where(DailyChallenge.user_id == student_id)
+    return list(db.scalars(challenges.order_by(DailyChallenge.challenge_date, DailyChallenge.slot)))
 
 
 @dataclass(frozen=True)

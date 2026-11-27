@@ -3,6 +3,8 @@ JSON file, and each export is recorded in the admin audit log."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from http import HTTPStatus
+from itertools import count
 from uuid import UUID, uuid4
 
 import pytest
@@ -13,6 +15,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import export_user
+from app.engagement.interface import ensure_daily_challenges
+from app.engagement.streaks import record_active_day
 from app.errors import ErrorCode
 from app.models.accounts import ClassStaff, User
 from app.models.engagement import (
@@ -33,6 +37,8 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.game import GameSession, SessionLocation
+
+_small_ids = count()
 
 
 @pytest.fixture
@@ -58,8 +64,11 @@ def played_game(
     completed = make_session_location(
         game,
         1,
+        # smaller than any uuid4, so sorting by id alone would put it before the replaced rows
+        id=UUID(int=next(_small_ids)),
         status=LocationStatus.COMPLETED,
         points_awarded=100,
+        clue_plays=3,
         completed_at=datetime.now(UTC),
         last_lat=49.9394,
         last_lng=-119.3948,
@@ -74,8 +83,9 @@ def played_game(
     return game, completed
 
 
-def award_points(db: Session, student: User, source_ref: str) -> None:
-    """100 points in Japanese for `source_ref`, and the first_step badge they unlock."""
+def reward(db: Session, student: User, source_ref: str) -> None:
+    """What completing `source_ref` today gives: 100 points in Japanese, the first_step badge
+    and a one-day streak. The student also gets today's three daily challenges."""
     first_step = db.scalars(
         select(Achievement).where(Achievement.achievement_key == "first_step")
     ).one()
@@ -92,7 +102,8 @@ def award_points(db: Session, student: User, source_ref: str) -> None:
             UserLanguageStats(user_id=student.id, language=Language.JA, total_points=100),
         ]
     )
-    db.flush()
+    record_active_day(student.id, db)
+    ensure_daily_challenges(student.id, db)
 
 
 def test_a_student_export_holds_their_data_and_no_one_elses(
@@ -120,7 +131,7 @@ def test_a_student_export_holds_their_data_and_no_one_elses(
 
     response = export(admin, student.id)
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == HTTPStatus.OK, response.text
     assert response.headers["content-disposition"] == (
         f'attachment; filename="user-{student.id}.json"'
     )
@@ -151,7 +162,7 @@ def test_a_student_export_holds_their_data_and_no_one_elses(
     assert datetime.fromisoformat(body["exported_at"]) == entry.created_at
 
 
-def test_a_students_games_points_and_badges_are_exported_but_not_another_students(
+def test_a_students_games_and_engagement_are_exported_but_not_another_students(
     db: Session,
     admin: User,
     make_user: Callable[..., User],
@@ -161,13 +172,13 @@ def test_a_students_games_points_and_badges_are_exported_but_not_another_student
 ) -> None:
     student, other = make_user(), make_user()
     game, completed = played_game(student, make_game_session, make_session_location)
-    award_points(db, student, str(completed.id))
+    reward(db, student, str(completed.id))
     other_game, other_completed = played_game(other, make_game_session, make_session_location)
-    award_points(db, other, str(other_completed.id))
+    reward(db, other, str(other_completed.id))
 
     response = export(admin, student.id)
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == HTTPStatus.OK, response.text
     body = response.json()
     [session] = body["sessions"]
     assert (session["id"], session["class_id"], session["total_score"]) == (str(game.id), None, 100)
@@ -178,9 +189,12 @@ def test_a_students_games_points_and_badges_are_exported_but_not_another_student
         (1, "completed", None),
         (2, "pending", None),
     ]
-    assert (locations[2]["last_lat"], locations[2]["last_lng"]) == (49.9394, -119.3948)
+    live = locations[2]
+    # its id is what the location's points award names
+    assert (live["id"], live["clue_plays"]) == (str(completed.id), 3)
+    assert (live["last_lat"], live["last_lng"]) == (49.9394, -119.3948)
     # the content snapshot is campus content, not the student's data
-    assert not any(key.endswith("_snapshot") for key in locations[2])
+    assert not any(key.endswith("_snapshot") for key in live)
     assert body["points"]["totals"] == [{"language": "ja", "total_points": 100}]
     assert [
         (award["source_type"], award["source_ref"], award["points"])
@@ -189,7 +203,10 @@ def test_a_students_games_points_and_badges_are_exported_but_not_another_student
     assert [(badge["achievement_key"], badge["language"]) for badge in body["badges"]] == [
         ("first_step", "ja")
     ]
-    assert body["photos"] == []  # photos aren't stored yet
+    assert (body["streak"]["current_streak_days"], body["streak"]["best_streak_days"]) == (1, 1)
+    assert [challenge["slot"] for challenge in body["daily_challenges"]] == [1, 2, 3]
+    # photos aren't stored yet
+    assert body["photos"] == []
     assert str(other_game.id) not in response.text
 
 
@@ -207,13 +224,14 @@ def test_a_teachers_export_lists_the_classes_they_own_and_the_ones_they_assist(
 
     response = export(admin, teacher.id)
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == HTTPStatus.OK, response.text
     body = response.json()
     assert (body["profile"]["role"], body["profile"]["can_manage_content"]) == ("staff", True)
     assert [row["class_id"] for row in body["ta_roles"]] == [str(assisted.id)]
     assert [row["class_id"] for row in body["owned_classes"]] == [str(owned.id)]
     assert body["class_enrolments"] == body["sessions"] == body["badges"] == body["photos"] == []
-    assert body["points"] == {"totals": [], "awards": []}
+    assert body["daily_challenges"] == []
+    assert (body["points"], body["streak"]) == ({"totals": [], "awards": []}, None)
 
 
 @pytest.mark.parametrize("role", list(UserRole))
@@ -227,7 +245,7 @@ def test_any_account_can_be_exported_deactivated_ones_too(
 
     response = export(admin, target.id)
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == HTTPStatus.OK, response.text
     assert (response.json()["profile"]["role"], response.json()["profile"]["is_active"]) == (
         role.value,
         False,

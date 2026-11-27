@@ -2,9 +2,10 @@
 
 The export holds the profile, the class enrolments, the classes the user assists as a TA and
 the classes they own, every game with its locations, the points (the total per language and
-each award), the badges and the photos not yet purged. It leaves out what only the system needs: the
-password hash, refresh tokens and emailed links. The games come from game, which decides what of
-them is the user's data.
+each award), the badges, the streak, the daily challenges and the photos not yet purged. It
+leaves out what only the system needs: the password hash, refresh tokens and emailed links. The
+games come from game, which decides what of them is the user's data, and the streak and daily
+challenges from engagement.
 
 No photo is kept yet: verification reads an upload and drops it, and the photo attempts store
 that will keep photos until the purge job removes them is still to come. Until then `photos` is
@@ -13,7 +14,8 @@ always empty.
 Each export is recorded in the admin audit log as export_user. Nothing here commits.
 """
 
-from datetime import datetime
+from datetime import date, datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.accounts.staff import USER_NOT_FOUND_MESSAGE
+from app.engagement.interface import get_stored_streak, list_daily_challenges
 from app.errors import AppError, ErrorCode
 from app.game.interface import list_games_for_export
 from app.models.accounts import ClassStaff, User
@@ -36,6 +39,7 @@ from app.models.enums import (
     ArrivalOverride,
     AuditAction,
     ClassStaffRole,
+    DailyChallengeType,
     Difficulty,
     EnrollmentEndReason,
     Language,
@@ -89,6 +93,7 @@ class ExportedStaffClass(_FromRow):
 
 
 class ExportedSessionLocation(_FromRow):
+    id: UUID = Field(description="The source_ref of the points award this location earned.")
     location_id: UUID
     position: int
     status: LocationStatus
@@ -97,6 +102,7 @@ class ExportedSessionLocation(_FromRow):
     arrived_at: datetime | None
     arrival_override: ArrivalOverride | None
     attempts_used: int
+    clue_plays: int = Field(description="How often the student played or replayed the clue.")
     points_awarded: int
     flags: list[str]
     completed_at: datetime | None
@@ -136,10 +142,10 @@ class ExportedPointsTotal(_FromRow):
 class ExportedPointsAward(_FromRow):
     source_type: PointsSourceType
     source_ref: str = Field(
-        description="What earned them: the game location's id, the daily challenge's id or the "
-        "streak milestone in days."
+        description="What earned them: the id of a game location, the daily challenge's id or "
+        "the streak milestone in days."
     )
-    class_id: UUID | None = Field(description="Null for Practice and streak milestones.")
+    class_id: UUID | None = Field(description="Null for Practice.")
     language: Language
     points: int
     created_at: datetime
@@ -154,6 +160,30 @@ class ExportedBadge(_FromRow):
     achievement_key: str
     language: Language | None = Field(description="Null for a global badge.")
     unlocked_at: datetime
+
+
+class ExportedStreak(_FromRow):
+    current_streak_days: int = Field(
+        description="As last stored: the streak has ended if last_active_date is before yesterday."
+    )
+    best_streak_days: int
+    last_active_date: date | None
+    reported_break_date: date | None = Field(
+        description="The last active date of the ended streak the student was last told about."
+    )
+
+
+class ExportedChallenge(_FromRow):
+    id: UUID = Field(description="The source_ref of the points award it earned.")
+    challenge_date: date
+    slot: int
+    challenge_type: DailyChallengeType
+    params: dict[str, Any]
+    description_key: str
+    reward_points: int
+    progress_current: int
+    progress_required: int
+    completed_at: datetime | None
 
 
 class ExportedPhoto(BaseModel):
@@ -181,6 +211,8 @@ class UserExport(BaseModel):
     badges: list[ExportedBadge] = Field(
         description="Every badge earned, including ones no longer awarded."
     )
+    streak: ExportedStreak | None = Field(description="Null before the first completed location.")
+    daily_challenges: list[ExportedChallenge] = Field(description="Each with its progress.")
     photos: list[ExportedPhoto] = Field(
         description="The photos not yet purged. Always empty for now: photos are not stored yet."
     )
@@ -199,6 +231,7 @@ def export_user(admin_id: UUID, user_id: UUID, db: Session) -> UserExport:
     entry = audit.record(
         admin_id, AuditAction.EXPORT_USER, db, target_user_id=user.id, details={"role": user.role}
     )
+    streak = get_stored_streak(user.id, db)
     return UserExport(
         exported_at=entry.created_at,
         profile=ExportedProfile.model_validate(user),
@@ -210,7 +243,12 @@ def export_user(admin_id: UUID, user_id: UUID, db: Session) -> UserExport:
         ],
         points=_points(user.id, db),
         badges=_badges(user.id, db),
-        photos=[],  # see the module docstring
+        streak=ExportedStreak.model_validate(streak) if streak else None,
+        daily_challenges=[
+            ExportedChallenge.model_validate(row) for row in list_daily_challenges(user.id, db)
+        ],
+        # see the module docstring
+        photos=[],
     )
 
 

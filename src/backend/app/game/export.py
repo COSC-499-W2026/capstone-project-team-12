@@ -1,10 +1,10 @@
 """A student's games for the export of their account: every game, finished ones too, with every
 location row it has had, rows a shuffle replaced included.
 
-Each location keeps the student's results and their last GPS position. The content snapshot
-(accepted answers, entrance points, radius, clue and recording) is left out because it is campus
-content, not the student's data, and so is the navigation state (reference point, last feedback
-phrase).
+Each location keeps the student's results, how often they played its clue and their last GPS
+position. The content snapshot (accepted answers, entrance points, radius, clue and recording) is
+left out because it is campus content, not the student's data, and so is the navigation state
+(reference point, last feedback phrase).
 """
 
 from collections import defaultdict
@@ -30,6 +30,7 @@ from app.models.game import GameSession, SessionLocation
 
 @dataclass(frozen=True)
 class ExportedGameLocation:
+    id: UUID
     location_id: UUID
     position: int
     status: LocationStatus
@@ -38,6 +39,7 @@ class ExportedGameLocation:
     arrived_at: datetime | None
     arrival_override: ArrivalOverride | None
     attempts_used: int
+    clue_plays: int
     points_awarded: int
     flags: tuple[str, ...]
     completed_at: datetime | None
@@ -51,7 +53,8 @@ class ExportedGameLocation:
 @dataclass(frozen=True)
 class ExportedGame:
     id: UUID
-    class_id: UUID | None  # None for Practice
+    # None for Practice
+    class_id: UUID | None
     target_language: Language
     difficulty: Difficulty
     state: SessionState
@@ -114,6 +117,7 @@ def _game(game: GameSession, locations: tuple[ExportedGameLocation, ...]) -> Exp
 
 def _location(row: SessionLocation) -> ExportedGameLocation:
     return ExportedGameLocation(
+        id=row.id,
         location_id=row.location_id,
         position=row.position,
         status=LocationStatus(row.status),
@@ -122,6 +126,7 @@ def _location(row: SessionLocation) -> ExportedGameLocation:
         arrived_at=row.arrived_at,
         arrival_override=ArrivalOverride(row.arrival_override) if row.arrival_override else None,
         attempts_used=row.attempts_used,
+        clue_plays=row.clue_plays,
         points_awarded=row.points_awarded,
         flags=tuple(row.flags),
         completed_at=row.completed_at,
