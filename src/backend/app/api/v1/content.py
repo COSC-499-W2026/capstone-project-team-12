@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Form, UploadFile
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import can_manage_content, get_current_user, require_staff
+from app.api.body_limit import file_limit
 from app.content.audio_import import import_clue_audio, import_feedback_audio
 from app.content.clue_audio import add_clue_recording
 from app.content.coverage import coverage_report
@@ -41,6 +42,7 @@ from app.errors import error_responses
 from app.models.accounts import User
 from app.models.content import AudioAsset, Clue, Location
 from app.models.enums import Difficulty, Language
+from app.services.uploads import BYTES_PER_KB, BYTES_PER_MB
 
 content_router = APIRouter(prefix="/content", tags=["content"])
 
@@ -48,6 +50,10 @@ content_router = APIRouter(prefix="/content", tags=["content"])
 STAFF = [Depends(require_staff)]
 CONTENT_MANAGER = [Depends(can_manage_content)]
 ACCESS_ERRORS = (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN)
+# the largest upload each route reads (app.api.body_limit)
+RECORDING_LIMIT = file_limit(lambda settings: settings.max_media_file_mb * BYTES_PER_MB)
+CSV_LIMIT = file_limit(lambda settings: settings.max_import_file_kb * BYTES_PER_KB)
+ZIP_LIMIT = file_limit(lambda settings: settings.max_import_zip_mb * BYTES_PER_MB)
 
 
 @content_router.get(
@@ -174,6 +180,7 @@ def put_clue_text(
         HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
     ),
 )
+@RECORDING_LIMIT
 def upload_clue_audio(
     location_id: UUID,
     difficulty: Difficulty,
@@ -231,6 +238,7 @@ def get_coverage(db: Annotated[Session, Depends(get_db)]) -> CoverageReport:
     response_model=LocationImportReport,
     responses=error_responses(*ACCESS_ERRORS, HTTPStatus.REQUEST_ENTITY_TOO_LARGE),
 )
+@CSV_LIMIT
 def post_location_import(
     file: UploadFile, db: Annotated[Session, Depends(get_db)], dry_run: bool = False
 ) -> LocationImportReport:
@@ -267,6 +275,7 @@ def post_location_import(
     response_model=AudioImportReport,
     responses=error_responses(*ACCESS_ERRORS, HTTPStatus.UNSUPPORTED_MEDIA_TYPE),
 )
+@ZIP_LIMIT
 def post_clue_audio_import(
     file: UploadFile,
     user: Annotated[User, Depends(get_current_user)],
@@ -286,6 +295,7 @@ def post_clue_audio_import(
     The old primary recording is kept, as games in progress keep playing it, so importing the
     same zip again adds a new primary recording to each clue.
 
+    413 FILE_TOO_LARGE for a zip over `MAX_IMPORT_ZIP_MB`.
     415 UNSUPPORTED_MEDIA_TYPE if the upload is not a zip; 422 VALIDATION_ERROR on `file` without
     a file, with more than `MAX_IMPORT_FILES` files (100 by default: one zip per language covers
     a campus) or with a list of files longer than that many files need (folders and hidden files
@@ -306,6 +316,7 @@ def post_clue_audio_import(
     response_model=AudioImportReport,
     responses=error_responses(*ACCESS_ERRORS, HTTPStatus.UNSUPPORTED_MEDIA_TYPE),
 )
+@ZIP_LIMIT
 def post_feedback_audio_import(
     file: UploadFile, db: Annotated[Session, Depends(get_db)]
 ) -> AudioImportReport:
@@ -319,6 +330,7 @@ def post_feedback_audio_import(
     `importClueAudio`, with an unknown code rejected by the name format. Every phrase of every
     language (78) fits in one zip.
 
+    413 FILE_TOO_LARGE for a zip over `MAX_IMPORT_ZIP_MB`.
     415 UNSUPPORTED_MEDIA_TYPE if the upload is not a zip; 422 VALIDATION_ERROR on `file` without
     a file, with more than `MAX_IMPORT_FILES` files or with a list of files longer than that many
     files need (folders and hidden files count). Needs content rights: 403 FORBIDDEN_ROLE

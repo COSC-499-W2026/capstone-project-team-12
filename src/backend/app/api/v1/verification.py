@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import get_current_user
+from app.api.body_limit import file_limit
 from app.api.rate_limit import photo_rate_limit
 from app.api.v1.game_actions import play
 from app.api.v1.game_responses import FeedbackResponse, GameSummaryResponse, summary_response
@@ -32,6 +33,7 @@ from app.game.summary import GameSummary, get_summary
 from app.models.accounts import User
 from app.models.enums import FeedbackCode, LocationStatus, PhotoResult, SessionState
 from app.services.audio import get_audio_service
+from app.services.uploads import BYTES_PER_MB
 from app.verification.matching import Decision
 from app.verification.verify import verify_photo
 
@@ -90,6 +92,7 @@ class PhotoResponse(BaseModel):
         HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
     ),
 )
+@file_limit(lambda settings: settings.max_media_file_mb * BYTES_PER_MB)
 def upload_photo(
     game_id: UUID,
     photo: UploadFile,

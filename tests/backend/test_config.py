@@ -42,9 +42,9 @@ def test_upload_limits_default_to_5_mb_and_60_seconds() -> None:
     assert (settings.max_media_file_mb, settings.max_audio_seconds) == (5, 60)
 
 
-def test_request_body_limits_default_to_500_mb_for_uploads_and_1_mb_otherwise() -> None:
+def test_request_body_limits_default_to_500_mb_for_zips_and_1_mb_otherwise() -> None:
     settings = Settings(_env_file=None)
-    assert (settings.max_upload_body_mb, settings.max_request_body_mb) == (500, 1)
+    assert (settings.max_import_zip_mb, settings.max_request_body_mb) == (500, 1)
 
 
 def test_upload_limits_can_be_changed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,7 +91,7 @@ def test_expire_sessions_batch_cap_defaults_to_20(monkeypatch: pytest.MonkeyPatc
         "MAX_IMPORT_FILES",
         "MAX_PHOTO_MEGAPIXELS",
         "EXPIRE_SESSIONS_MAX_BATCHES",
-        "MAX_UPLOAD_BODY_MB",
+        "MAX_IMPORT_ZIP_MB",
         "MAX_REQUEST_BODY_MB",
     ],
 )

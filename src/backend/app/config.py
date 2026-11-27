@@ -39,10 +39,11 @@ class Settings(BaseSettings):
     # clue and feedback recordings at most 60 s
     max_media_file_mb: PositiveInt = 5
     max_audio_seconds: PositiveInt = 60
-    # proposed, not in the spec: the largest request body (MiB), so a request cannot make the
-    # server read without limit. A multipart upload to a route that takes a file (streamed to
-    # disk; fits a zip import of a whole campus), and any other body (held in memory)
-    max_upload_body_mb: PositiveInt = 500
+    # proposed, not in the spec: request body limits (MiB, app.api.body_limit), so a request
+    # cannot make the server read without limit before the route can refuse it. An audio zip
+    # import (streamed to disk; MAX_IMPORT_FILES recordings of MAX_MEDIA_FILE_MB fit), and any
+    # body that is not an upload (held in memory). Other uploads use their own file limit
+    max_import_zip_mb: PositiveInt = 500
     max_request_body_mb: PositiveInt = 1
     # proposed, not in the spec: pixels in one photo, in millions (checked before decoding). A
     # 24-megapixel phone photo (5712 x 4284) fits; a PNG cannot be decoded at a smaller scale, so
