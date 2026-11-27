@@ -2,18 +2,17 @@
 
 The export holds the profile, the class enrolments, the classes the user assists as a TA and
 the classes they own, every game with its locations, the points (the total per language and
-each award) and the photos not yet purged. It leaves out what only the system needs: the
-password hash, refresh tokens, emailed links, and the content snapshot a game keeps of each
-location (its answers and entrances), which is campus content rather than the user's data.
+each award), the badges and the photos not yet purged. It leaves out what only the system needs: the
+password hash, refresh tokens and emailed links. The games come from game, which decides what of
+them is the user's data.
 
 No photo is kept yet: verification reads an upload and drops it, and the photo attempts store
-(D6) that will keep photos until the purge job removes them is still to come. Until then
-`photos` is always empty.
+that will keep photos until the purge job removes them is still to come. Until then `photos` is
+always empty.
 
 Each export is recorded in the admin audit log as export_user. Nothing here commits.
 """
 
-from collections import defaultdict
 from datetime import datetime
 from uuid import UUID
 
@@ -23,8 +22,16 @@ from sqlalchemy.orm import Session
 
 from app.accounts.staff import USER_NOT_FOUND_MESSAGE
 from app.errors import AppError, ErrorCode
+from app.game.interface import list_games_for_export
 from app.models.accounts import ClassStaff, User
-from app.models.engagement import Class, ClassEnrollment, PointsLedger, UserLanguageStats
+from app.models.engagement import (
+    Achievement,
+    Class,
+    ClassEnrollment,
+    PointsLedger,
+    UserAchievement,
+    UserLanguageStats,
+)
 from app.models.enums import (
     ArrivalOverride,
     AuditAction,
@@ -39,7 +46,6 @@ from app.models.enums import (
     SkipReason,
     UserRole,
 )
-from app.models.game import GameSession, SessionLocation
 from app.services import audit
 
 
@@ -103,10 +109,6 @@ class ExportedSessionLocation(_FromRow):
 
 
 class ExportedSession(_FromRow):
-    # `locations` has a default only so a game row validates before its locations are added;
-    # it is always sent, so the response schema lists it as required
-    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
-
     id: UUID
     class_id: UUID | None = Field(description="Null for a Practice game.")
     target_language: Language
@@ -121,9 +123,8 @@ class ExportedSession(_FromRow):
     shuffles_used: int
     total_score: int
     locations: list[ExportedSessionLocation] = Field(
-        default_factory=list,
-        description="In game order; where a shuffle replaced a location, the replaced one "
-        "comes first.",
+        description="In game order. At a position a shuffle changed, the replaced locations come "
+        "first, in no set order, and the one now in the game last."
     )
 
 
@@ -149,6 +150,12 @@ class ExportedPoints(BaseModel):
     awards: list[ExportedPointsAward] = Field(description="Every award, oldest first.")
 
 
+class ExportedBadge(_FromRow):
+    achievement_key: str
+    language: Language | None = Field(description="Null for a global badge.")
+    unlocked_at: datetime
+
+
 class ExportedPhoto(BaseModel):
     """A sign photo that hasn't been purged yet. Provisional: photos are not stored yet."""
 
@@ -171,6 +178,9 @@ class UserExport(BaseModel):
     owned_classes: list[ExportedStaffClass] = Field(description="The classes the user owns.")
     sessions: list[ExportedSession] = Field(description="Every game, finished ones too.")
     points: ExportedPoints
+    badges: list[ExportedBadge] = Field(
+        description="Every badge earned, including ones no longer awarded."
+    )
     photos: list[ExportedPhoto] = Field(
         description="The photos not yet purged. Always empty for now: photos are not stored yet."
     )
@@ -195,8 +205,11 @@ def export_user(admin_id: UUID, user_id: UUID, db: Session) -> UserExport:
         class_enrolments=_enrolments(user.id, db),
         ta_roles=_staff_classes(user.id, ClassStaffRole.ASSISTANT, db),
         owned_classes=_staff_classes(user.id, ClassStaffRole.OWNER, db),
-        sessions=_sessions(user.id, db),
+        sessions=[
+            ExportedSession.model_validate(game) for game in list_games_for_export(user.id, db)
+        ],
         points=_points(user.id, db),
+        badges=_badges(user.id, db),
         photos=[],  # see the module docstring
     )
 
@@ -235,35 +248,6 @@ def _staff_classes(user_id: UUID, role: ClassStaffRole, db: Session) -> list[Exp
     return [ExportedStaffClass.model_validate(row) for row in rows]
 
 
-def _sessions(user_id: UUID, db: Session) -> list[ExportedSession]:
-    games = list(
-        db.scalars(
-            select(GameSession)
-            .where(GameSession.student_id == user_id)
-            .order_by(GameSession.started_at, GameSession.id)
-        )
-    )
-    # every game's locations in one query, not one per game
-    rows = db.scalars(
-        select(SessionLocation)
-        .join(GameSession, GameSession.id == SessionLocation.session_id)
-        .where(GameSession.student_id == user_id)
-        .order_by(
-            SessionLocation.position,
-            # a shuffle keeps the replaced row at the same position: false sorts first
-            SessionLocation.skip_reason.is_distinct_from(SkipReason.SHUFFLED),
-            SessionLocation.id,
-        )
-    )
-    locations: defaultdict[UUID, list[ExportedSessionLocation]] = defaultdict(list)
-    for row in rows:
-        locations[row.session_id].append(ExportedSessionLocation.model_validate(row))
-    return [
-        ExportedSession.model_validate(game).model_copy(update={"locations": locations[game.id]})
-        for game in games
-    ]
-
-
 def _points(user_id: UUID, db: Session) -> ExportedPoints:
     totals = db.scalars(
         select(UserLanguageStats)
@@ -279,3 +263,16 @@ def _points(user_id: UUID, db: Session) -> ExportedPoints:
         totals=[ExportedPointsTotal.model_validate(row) for row in totals],
         awards=[ExportedPointsAward.model_validate(row) for row in awards],
     )
+
+
+def _badges(user_id: UUID, db: Session) -> list[ExportedBadge]:
+    rows = db.execute(
+        select(Achievement.achievement_key, UserAchievement.language, UserAchievement.unlocked_at)
+        .join(Achievement, Achievement.id == UserAchievement.achievement_id)
+        .where(UserAchievement.user_id == user_id)
+        # one award can unlock several badges at the same time
+        .order_by(
+            UserAchievement.unlocked_at, Achievement.achievement_key, UserAchievement.language
+        )
+    )
+    return [ExportedBadge.model_validate(row) for row in rows]

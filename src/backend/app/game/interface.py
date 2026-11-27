@@ -15,6 +15,9 @@ expire_idle_sessions: the expire-sessions job (spec, Scheduled Jobs) ends games 
 idle for the limit.
 
 list_history: GET /me/games reads one page of the student's finished games.
+
+list_games_for_export: an admin's export of an account holds every game the student played,
+with its locations.
 """
 
 from datetime import UTC, datetime
@@ -23,6 +26,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.game.export import list_games_for_export
 from app.game.history import list_history
 from app.game.sessions import (
     abandon_sessions,
@@ -38,6 +42,7 @@ __all__ = [
     "end_open_sessions",
     "expire_idle_sessions",
     "get_open_session_id",
+    "list_games_for_export",
     "list_history",
     "refuse_if_game_open",
 ]

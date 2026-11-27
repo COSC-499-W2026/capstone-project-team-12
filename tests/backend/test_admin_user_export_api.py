@@ -9,12 +9,20 @@ import pytest
 from conftest import audit_entries
 from fastapi.testclient import TestClient
 from httpx2 import Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.accounts.interface import export_user
 from app.errors import ErrorCode
 from app.models.accounts import ClassStaff, User
-from app.models.engagement import Class, ClassEnrollment, PointsLedger, UserLanguageStats
+from app.models.engagement import (
+    Achievement,
+    Class,
+    ClassEnrollment,
+    PointsLedger,
+    UserAchievement,
+    UserLanguageStats,
+)
 from app.models.enums import (
     AuditAction,
     ClassStaffRole,
@@ -44,8 +52,8 @@ def played_game(
     make_game_session: Callable[..., GameSession],
     make_session_location: Callable[..., SessionLocation],
 ) -> tuple[GameSession, SessionLocation]:
-    """A Practice game whose first location was shuffled away, then completed; the second is
-    pending. Returns the game and the completed location."""
+    """A Practice game whose first location was shuffled away twice, then completed; the second
+    is pending. Returns the game and the completed location."""
     game = make_game_session(student, total_score=100)
     completed = make_session_location(
         game,
@@ -57,15 +65,23 @@ def played_game(
         last_lng=-119.3948,
         last_accuracy_m=8.0,
     )
-    # added after its replacement, so only the ordering can put it first
-    make_session_location(game, 1, status=LocationStatus.SKIPPED, skip_reason=SkipReason.SHUFFLED)
+    # added after their replacement, so only the ordering can put them first
+    for _ in range(2):
+        make_session_location(
+            game, 1, status=LocationStatus.SKIPPED, skip_reason=SkipReason.SHUFFLED
+        )
     make_session_location(game, 2)
     return game, completed
 
 
 def award_points(db: Session, student: User, source_ref: str) -> None:
+    """100 points in Japanese for `source_ref`, and the first_step badge they unlock."""
+    first_step = db.scalars(
+        select(Achievement).where(Achievement.achievement_key == "first_step")
+    ).one()
     db.add_all(
         [
+            UserAchievement(user_id=student.id, achievement_id=first_step.id, language=Language.JA),
             PointsLedger(
                 user_id=student.id,
                 source_type=PointsSourceType.LOCATION,
@@ -135,7 +151,7 @@ def test_a_student_export_holds_their_data_and_no_one_elses(
     assert datetime.fromisoformat(body["exported_at"]) == entry.created_at
 
 
-def test_a_students_games_and_points_are_exported_but_not_another_students(
+def test_a_students_games_points_and_badges_are_exported_but_not_another_students(
     db: Session,
     admin: User,
     make_user: Callable[..., User],
@@ -158,17 +174,21 @@ def test_a_students_games_and_points_are_exported_but_not_another_students(
     locations = session["locations"]
     assert [(row["position"], row["status"], row["skip_reason"]) for row in locations] == [
         (1, "skipped", "shuffled"),
+        (1, "skipped", "shuffled"),
         (1, "completed", None),
         (2, "pending", None),
     ]
-    assert (locations[1]["last_lat"], locations[1]["last_lng"]) == (49.9394, -119.3948)
+    assert (locations[2]["last_lat"], locations[2]["last_lng"]) == (49.9394, -119.3948)
     # the content snapshot is campus content, not the student's data
-    assert not any(key.endswith("_snapshot") for key in locations[1])
+    assert not any(key.endswith("_snapshot") for key in locations[2])
     assert body["points"]["totals"] == [{"language": "ja", "total_points": 100}]
     assert [
         (award["source_type"], award["source_ref"], award["points"])
         for award in body["points"]["awards"]
     ] == [("location", str(completed.id), 100)]
+    assert [(badge["achievement_key"], badge["language"]) for badge in body["badges"]] == [
+        ("first_step", "ja")
+    ]
     assert body["photos"] == []  # photos aren't stored yet
     assert str(other_game.id) not in response.text
 
@@ -192,7 +212,7 @@ def test_a_teachers_export_lists_the_classes_they_own_and_the_ones_they_assist(
     assert (body["profile"]["role"], body["profile"]["can_manage_content"]) == ("staff", True)
     assert [row["class_id"] for row in body["ta_roles"]] == [str(assisted.id)]
     assert [row["class_id"] for row in body["owned_classes"]] == [str(owned.id)]
-    assert (body["class_enrolments"], body["sessions"], body["photos"]) == ([], [], [])
+    assert body["class_enrolments"] == body["sessions"] == body["badges"] == body["photos"] == []
     assert body["points"] == {"totals": [], "awards": []}
 
 

@@ -191,9 +191,9 @@ def get_user_export(
     db: Annotated[Session, Depends(get_db)],
 ) -> UserExport:
     """Download what is stored about an account of any role: the profile, class enrolments, TA
-    roles, owned classes, games with their locations, points, and photos not yet purged (none
-    are stored yet, so `photos` is empty). Sent as an attachment named user-{id}.json and never
-    cached. The password hash and tokens are never included.
+    roles, owned classes, games with their locations, points, badges, and photos not yet purged
+    (none are stored yet, so `photos` is empty). Sent as an attachment named user-{id}.json and
+    never cached. The password hash and tokens are never included.
 
     404 USER_NOT_FOUND for an unknown id. The export is recorded in the admin audit log as
     export_user.

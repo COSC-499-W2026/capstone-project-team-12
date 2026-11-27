@@ -15,7 +15,8 @@ from app.errors import AppError, ErrorCode
 from app.models.enums import LocationStatus, SessionState, SkipReason
 from app.models.game import GameSession, SessionLocation
 
-_LIVE = SessionLocation.skip_reason.is_distinct_from(SkipReason.SHUFFLED)
+# true for a row a shuffle didn't replace: one per position
+LIVE = SessionLocation.skip_reason.is_distinct_from(SkipReason.SHUFFLED)
 
 
 def current_row(game: GameSession, db: Session) -> SessionLocation:
@@ -30,7 +31,7 @@ def current_row(game: GameSession, db: Session) -> SessionLocation:
         .where(
             SessionLocation.session_id == game.id,
             SessionLocation.position == game.current_position,
-            _LIVE,
+            LIVE,
         )
         .with_for_update()
         .execution_options(populate_existing=True)
@@ -75,7 +76,7 @@ def move_on(game: GameSession, now: datetime, db: Session) -> None:
         .where(
             SessionLocation.session_id == game.id,
             SessionLocation.position > game.current_position,
-            _LIVE,
+            LIVE,
         )
         .order_by(SessionLocation.position)
         .with_for_update()
