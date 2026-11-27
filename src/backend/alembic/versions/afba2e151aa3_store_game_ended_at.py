@@ -6,7 +6,7 @@ for an expired or class-closed game is the student's last action, not the end. G
 already ended get completed_at, or last_activity_at, the best value there is for them.
 
 Revision ID: afba2e151aa3
-Revises: 16ab665a7245
+Revises: c4aead9614f3
 Create Date: 2026-11-25 12:00:00.000000
 """
 
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "afba2e151aa3"
-down_revision: str | None = "16ab665a7245"
+down_revision: str | None = "c4aead9614f3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
