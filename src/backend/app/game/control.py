@@ -140,9 +140,22 @@ def lock_open_game(student_id: UUID, game_id: UUID, db: Session) -> GameSession:
     Raises 404 NOT_FOUND for another student's game or an unknown id, and 409
     SESSION_NOT_ACTIVE for a finished game or one that has been idle for the limit.
     """
+    # An idle game is expired here and not committed: the caller commits before re-raising the 409.
+    game = lock_game(student_id, game_id, db)
+    expire_if_idle(game, db)
+    if game.state not in OPEN_SESSION_STATES:
+        raise session_not_active(game, "The game has ended")
+    return game
+
+
+def lock_game(student_id: UUID, game_id: UUID, db: Session) -> GameSession:
+    """The student's game in any state, locked until the transaction ends. Changes nothing, so
+    an idle game is not expired here.
+
+    Raises 404 NOT_FOUND for another student's game or an unknown id.
+    """
     # locked and read again, so a quit, the expire job or a second pause can't change the game
-    # between this check and the update. Another student's game is never locked. An idle game is
-    # expired here and not committed: the caller commits before re-raising the 409.
+    # between the caller's check and its update. Another student's game is never locked.
     game = db.scalar(
         select(GameSession)
         .where(GameSession.id == game_id, GameSession.student_id == student_id)
@@ -151,9 +164,6 @@ def lock_open_game(student_id: UUID, game_id: UUID, db: Session) -> GameSession:
     )
     if game is None:
         raise AppError(ErrorCode.NOT_FOUND, "Game not found")
-    expire_if_idle(game, db)
-    if game.state not in OPEN_SESSION_STATES:
-        raise session_not_active(game, "The game has ended")
     return game
 
 
