@@ -48,7 +48,7 @@ from app.services.storage import MEDIA_URL_PREFIX, get_storage_service
 if TYPE_CHECKING:  # only for the annotation, so pytest_plugins below still imports it first
     from content_fixtures import SnapshotIds
 
-# game content and photo attempt factories; importing them here would skip assert rewriting
+# game content and photo test fixtures; importing them here would skip assert rewriting
 pytest_plugins = ["content_fixtures", "verification_fixtures"]
 
 
