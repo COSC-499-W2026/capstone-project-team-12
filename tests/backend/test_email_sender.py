@@ -101,15 +101,14 @@ def test_change_email_link_is_for_the_new_address(
     assert EmailService.consume_token(raw, EmailKind.CHANGE_EMAIL, db).new_email == row.to_email
 
 
-@pytest.mark.parametrize("kind", [EmailKind.EMAIL_CHANGED_NOTICE, EmailKind.TA_INVITATION])
-def test_mail_without_a_link_gets_no_token(
-    db: Session, make_user: Callable[..., User], kind: EmailKind
-) -> None:
-    row = EmailService.queue_email(make_user(), kind, db, params={"class_name": "JAPN 101"})
+# a TA invitation has no link either; test_class_staff_service.py sends one, as it needs a class
+def test_mail_without_a_link_gets_no_token(db: Session, make_user: Callable[..., User]) -> None:
+    kind = EmailKind.EMAIL_CHANGED_NOTICE
+    row = EmailService.queue_email(make_user(), kind, db)
     db.commit()
     mailer = FakeMailer()
     send_due_emails(mailer, db)
-    assert mailer.sent == [OutgoingMail(row.to_email, kind, {"class_name": "JAPN 101"}, None)]
+    assert mailer.sent == [OutgoingMail(row.to_email, kind, {}, None)]
     assert tokens(db, row.user_id) == 0
 
 

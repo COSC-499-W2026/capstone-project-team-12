@@ -14,11 +14,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Protocol
+from uuid import UUID
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
-from app.models.accounts import User
+from app.models.accounts import INVITATION_TTL, ClassStaffInvitation, User
 from app.models.email import (
     MAX_EMAIL_ATTEMPTS,
     PENDING_WHERE,
@@ -26,7 +27,7 @@ from app.models.email import (
     EmailOutbox,
     EmailToken,
 )
-from app.models.enums import EmailKind, EmailStatus
+from app.models.enums import EmailKind, EmailStatus, InvitationStatus
 from app.services.email import EmailService
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,8 @@ _CURRENT_ADDRESS_KINDS = (EmailKind.VERIFY_EMAIL, EmailKind.RESET_PASSWORD, Emai
 
 class _SkipError(Exception):
     """The mail must not go out: the address changed, a newer mail of the kind exists (its link
-    would replace theirs), or the password was reset after a reset mail was queued."""
+    would replace theirs), the password was reset after a reset mail was queued, or a TA
+    invitation is no longer pending."""
 
 
 class MailUnavailableError(Exception):
@@ -106,6 +108,7 @@ def send_due_emails(mailer: Mailer, db: Session, *, limit: int = BATCH_SIZE) -> 
             # a savepoint: a failure drops the new token but keeps the row locked until recorded
             with db.begin_nested():
                 token = _token_for(row, db)
+                _start_invitation_expiry(row, db)
                 mailer.send(
                     OutgoingMail(row.to_email, EmailKind(row.template), dict(row.params), token)
                 )
@@ -173,6 +176,27 @@ def _token_for(row: EmailOutbox, db: Session) -> str | None:
         raise _SkipError  # its link would work for 60 minutes after the password changed
     new_email = row.to_email if kind == EmailKind.CHANGE_EMAIL else None  # sent to the new one
     return EmailService.create_token(user, kind, db, new_email=new_email)
+
+
+def _start_invitation_expiry(row: EmailOutbox, db: Session) -> None:
+    """A TA invitation's 7 days count from when its email is sent, as a link token's do.
+
+    Raise _SkipError if the invitation is no longer pending, e.g. the owner cancelled it while
+    its email was queued: the email would ask the invitee to answer an invitation they can't.
+    """
+    if row.template != EmailKind.TA_INVITATION:
+        return
+    started = db.scalar(
+        update(ClassStaffInvitation)
+        .where(
+            ClassStaffInvitation.id == UUID(row.params["invitation_id"]),
+            ClassStaffInvitation.status == InvitationStatus.PENDING,
+        )
+        .values(expires_at=func.now() + INVITATION_TTL)
+        .returning(ClassStaffInvitation.id)
+    )
+    if started is None:
+        raise _SkipError
 
 
 def _newer_mail_exists(row: EmailOutbox, db: Session) -> bool:

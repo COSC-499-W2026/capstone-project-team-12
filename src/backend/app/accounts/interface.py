@@ -10,7 +10,12 @@ from jwt import InvalidTokenError, decode
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.accounts.class_staff import class_role, invite_assistant
+from app.accounts.class_staff import (
+    accept_invitation,
+    class_role,
+    invite_assistant,
+    remove_assistant,
+)
 from app.accounts.export import UserExport, export_user
 from app.accounts.profile import get_profile_classes
 from app.accounts.staff import create_teacher, list_staff_accounts, set_staff_active
@@ -38,6 +43,8 @@ __all__ = [
     "set_staff_active",
     "get_profile_classes",
     "invite_assistant",
+    "remove_assistant",
+    "accept_invitation",
     "export_user",
     "UserExport",
 ]
