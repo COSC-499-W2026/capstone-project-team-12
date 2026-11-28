@@ -55,7 +55,7 @@ from app.engagement.classes import (
     list_staff_classes,
     update_class_settings,
 )
-from app.engagement.daily_challenges import ensure_daily_challenges
+from app.engagement.daily_challenges import ensure_daily_challenges, list_daily_challenges
 from app.engagement.leaderboard import LeaderboardEntry, get_class_leaderboard
 from app.engagement.stats import (
     GameEngagement,
@@ -70,6 +70,7 @@ from app.engagement.streaks import (
     app_calendar_date,
     award_streak_milestones,
     challenge_expiry,
+    get_stored_streak,
     record_active_day,
     visible_streak,
 )
@@ -79,7 +80,6 @@ from app.models.engagement import (
     AccessCode,
     Class,
     ClassEnrollment,
-    DailyChallenge,
     PointsLedger,
     UserLanguageStats,
     UserStats,
@@ -162,23 +162,6 @@ def get_and_report_streak(student_id: UUID, db: Session, *, today: date) -> tupl
     if broken:
         stats.reported_break_date = stats.last_active_date
     return current, stats.best_streak_days, broken
-
-
-def get_stored_streak(student_id: UUID, db: Session) -> UserStats | None:
-    """The student's streak as last stored, or None before their first completed location.
-
-    For the export of their account: unlike get_and_report_streak, it changes nothing.
-    """
-    return db.get(UserStats, student_id)
-
-
-def list_daily_challenges(student_id: UUID, db: Session) -> list[DailyChallenge]:
-    """Every daily challenge the student was given, oldest day first, with its progress.
-
-    For the export of their account: unlike ensure_daily_challenges, it never creates any.
-    """
-    challenges = select(DailyChallenge).where(DailyChallenge.user_id == student_id)
-    return list(db.scalars(challenges.order_by(DailyChallenge.challenge_date, DailyChallenge.slot)))
 
 
 @dataclass(frozen=True)

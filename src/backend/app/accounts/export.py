@@ -142,8 +142,8 @@ class ExportedPointsTotal(_FromRow):
 class ExportedPointsAward(_FromRow):
     source_type: PointsSourceType
     source_ref: str = Field(
-        description="What earned them: the id of a game location, the daily challenge's id or "
-        "the streak milestone in days."
+        description="What earned them: the `id` of a location in `sessions`, the daily "
+        "challenge's id or the streak milestone in days."
     )
     class_id: UUID | None = Field(description="Null for Practice.")
     language: Language
