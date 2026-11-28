@@ -16,7 +16,7 @@ from uuid import UUID
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
-from app.accounts.register import insert_user, is_deleted
+from app.accounts.register import insert_user
 from app.accounts.tokens import revoke_refresh_tokens
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
@@ -28,6 +28,18 @@ from app.services.locks import lock_user
 USER_NOT_FOUND_MESSAGE = "No account has this id."
 DELETED_MESSAGE = "This account was deleted."
 ONLY_STAFF_MESSAGE = "Only staff accounts can be deactivated or reactivated."
+
+
+def deleted_email(user_id: UUID) -> str:
+    """The address a deleted (anonymised) account gets. Nothing can be sent to the reserved
+    .invalid domain, and no one can register an address made from an id or confirm a change to
+    it, so only a deletion gives an account this address."""
+    return f"deleted-{user_id.hex}@deleted.invalid"
+
+
+def is_deleted(user: User) -> bool:
+    """Whether the account was deleted, which can't be undone or repeated."""
+    return user.email == deleted_email(user.id)
 
 
 def create_teacher(

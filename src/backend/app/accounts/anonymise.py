@@ -13,8 +13,12 @@ from uuid import UUID
 from sqlalchemy import case, delete, update
 from sqlalchemy.orm import Session
 
-from app.accounts.register import DELETED_USERNAME_PREFIX, is_deleted
-from app.accounts.staff import DELETED_MESSAGE, USER_NOT_FOUND_MESSAGE
+from app.accounts.staff import (
+    DELETED_MESSAGE,
+    USER_NOT_FOUND_MESSAGE,
+    deleted_email,
+    is_deleted,
+)
 from app.accounts.tokens import revoke_refresh_tokens
 from app.engagement.interface import list_staff_classes
 from app.errors import AppError, ErrorCode
@@ -36,10 +40,8 @@ def anonymise_user(admin_id: UUID, user_id: UUID, typed_username: str, db: Sessi
     removed.
     """
     user = _deletable(lock_user(user_id, db), typed_username, db)
-    # .invalid is a reserved domain, so nothing can ever be sent to the replaced address
-    user.email = f"deleted-{user.id.hex}@deleted.invalid"
-    # 30 characters, the longest a username can be; no one else can choose this prefix
-    user.username = f"{DELETED_USERNAME_PREFIX}user-{user.id.hex[:17]}"
+    user.email = deleted_email(user.id)  # also what marks the account as deleted
+    user.username = f"deleted-user-{user.id.hex[:17]}"  # 30 characters, the most allowed
     user.email_verified_at = None
     user.password_hash = None
     user.can_manage_content = False

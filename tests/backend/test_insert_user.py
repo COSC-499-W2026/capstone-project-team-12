@@ -86,7 +86,6 @@ def test_an_email_or_username_taken_after_the_check_is_still_409(
         ({"username": "ab"}, "username"),
         ({"username": "x" * 31}, "username"),
         ({"username": " padded "}, "username"),
-        ({"username": "Deleted-user-1234"}, "username"),  # deleted accounts' prefix, any case
     ],
 )
 def test_a_badly_formed_field_is_422_with_its_detail(
