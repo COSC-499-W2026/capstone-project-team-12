@@ -278,12 +278,13 @@ def test_the_last_location_completes_the_game(
     assert game.state == SessionState.COMPLETED
 
 
+@pytest.mark.parametrize("key", [KEY, None], ids=["key: read before lock", "no key: after lock"])
 @pytest.mark.parametrize(
-    ("data", "status", "code"),
+    ("data", "code"),
     [
-        (b"GIF89a" + bytes(64), 415, ErrorCode.UNSUPPORTED_MEDIA_TYPE),
-        (b"\xff\xd8\xff not really a photo", 415, ErrorCode.UNSUPPORTED_MEDIA_TYPE),
-        (b"\xff\xd8\xff" + bytes(5 * BYTES_PER_MB), 413, ErrorCode.FILE_TOO_LARGE),
+        (b"GIF89a" + bytes(64), ErrorCode.UNSUPPORTED_MEDIA_TYPE),
+        (b"\xff\xd8\xff not really a photo", ErrorCode.UNSUPPORTED_MEDIA_TYPE),
+        (b"\xff\xd8\xff" + bytes(5 * BYTES_PER_MB), ErrorCode.FILE_TOO_LARGE),
     ],
     ids=["gif", "broken jpeg", "over 5 MB"],
 )
@@ -294,20 +295,19 @@ def test_a_refused_file_uses_no_attempt(
     ocr_reads: Callable[..., list[int]],
     assert_error: Callable[[Response, int, ErrorCode], None],
     data: bytes,
-    status: int,
     code: ErrorCode,
+    key: str | None,
 ) -> None:
     game = verifying_game()
     reads = ocr_reads(("SCI 333", 0.92))
 
-    assert_error(upload(game, data, KEY), status, code)
+    assert_error(upload(game, data, key), STATUS[code], code)
 
-    assert reads == []
     db.expire_all()
-    assert location(game, 1, db).attempts_used == 0
-    assert attempts_of(location(game, 1, db), db) == []
+    row = location(game, 1, db)
+    assert (reads, row.attempts_used, attempts_of(row, db)) == ([], 0, [])
     assert game.last_activity_at == AN_HOUR_AGO  # rolled back: not a game action
-    assert upload(game, key=KEY).json()["attempt"] == 1  # the key can be sent again
+    assert upload(game, key=key).json()["attempt"] == 1  # a key can be sent again
 
 
 # All 409, checked before the file (without a key), so a GIF gets them too. The 6th attempt fails
