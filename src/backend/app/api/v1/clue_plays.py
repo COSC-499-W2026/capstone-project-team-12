@@ -12,7 +12,7 @@ from app.accounts.interface import get_current_user
 from app.api.v1.game_actions import play
 from app.db import get_db
 from app.errors import error_responses
-from app.game.clue_plays import record_clue_play
+from app.game.interface import record_clue_play
 from app.models.accounts import User
 
 clue_plays_router = APIRouter(prefix="/games", tags=["games"])

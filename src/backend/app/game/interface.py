@@ -1,6 +1,7 @@
-"""Public interface of app.game: the only module other components may import.
+"""Public interface of app.game: the only module other components, routes and CLI jobs may
+import.
 
-When another component needs something from game, agree on the signature with its users first,
+When code outside game needs something from it, agree on the signature with its users first,
 then add it here.
 
 end_open_sessions: archiving a class, or a student leaving or being removed, ends their open
@@ -15,6 +16,8 @@ expire_idle_sessions: the expire-sessions job (spec, Scheduled Jobs) ends games 
 idle for the limit.
 
 list_history: GET /me/games reads one page of the student's finished games.
+
+record_clue_play: POST /games/{id}/clue-plays counts one play of the current location's clue.
 """
 
 from datetime import UTC, datetime
@@ -23,6 +26,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.game.clue_plays import record_clue_play
 from app.game.history import list_history
 from app.game.sessions import (
     abandon_sessions,
@@ -39,6 +43,7 @@ __all__ = [
     "expire_idle_sessions",
     "get_open_session_id",
     "list_history",
+    "record_clue_play",
     "refuse_if_game_open",
 ]
 
