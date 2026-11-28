@@ -31,6 +31,8 @@ class RegisterResponse(BaseModel):
 
 EMAIL_TAKEN_MESSAGE = "An account with this email address already exists."
 USERNAME_TAKEN_MESSAGE = "This username is already in use."
+# only deleting an account gives it a username with this prefix (e.g. deleted-user-7f3a...)
+DELETED_USERNAME_PREFIX = "deleted-"
 
 
 def register_account(request: RegisterRequest, db: Session) -> User:
@@ -72,7 +74,8 @@ def insert_user(
             (
                 "username",
                 username_is_valid(username),
-                "Must be 3 to 30 characters with no space at either end.",
+                "Must be 3 to 30 characters with no space at either end, and not start with"
+                f" {DELETED_USERNAME_PREFIX!r}.",
             ),
         )
         if not valid
@@ -115,12 +118,19 @@ def username_exists(username: str, db: Session) -> bool:
 
 
 def username_is_valid(username: str) -> bool:
+    """The prefix of deleted accounts is refused in any case, so no one can look like one."""
     return (
         len(username) >= 3
         and len(username) <= 30
         and not username.endswith(" ")
         and not username.startswith(" ")
+        and not username.lower().startswith(DELETED_USERNAME_PREFIX)
     )
+
+
+def is_deleted(user: User) -> bool:
+    """Whether the account was deleted, which anonymised it: it can't be changed any more."""
+    return user.username.startswith(DELETED_USERNAME_PREFIX)
 
 
 def email_exists(email: str, db: Session) -> bool:

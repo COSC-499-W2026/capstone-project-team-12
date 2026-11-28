@@ -16,7 +16,7 @@ from uuid import UUID
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
-from app.accounts.register import insert_user
+from app.accounts.register import insert_user, is_deleted
 from app.accounts.tokens import revoke_refresh_tokens
 from app.errors import AppError, ErrorCode
 from app.models.accounts import User
@@ -26,6 +26,7 @@ from app.services.email import EmailService
 from app.services.locks import lock_user
 
 USER_NOT_FOUND_MESSAGE = "No account has this id."
+DELETED_MESSAGE = "This account was deleted."
 ONLY_STAFF_MESSAGE = "Only staff accounts can be deactivated or reactivated."
 
 
@@ -104,12 +105,14 @@ def set_staff_active(admin_id: UUID, user_id: UUID, active: bool, db: Session) -
     holds FOR SHARE on it while adding a token, so one in progress commits first and its token
     is revoked too; a later one sees the account is deactivated.
 
-    404 USER_NOT_FOUND for an unknown id, 403 FORBIDDEN_ROLE for an admin or student account;
-    either records nothing, since nothing changed.
+    404 USER_NOT_FOUND for an unknown or deleted account, 403 FORBIDDEN_ROLE for an admin or
+    student account; either records nothing, since nothing changed.
     """
     user = lock_user(user_id, db)
     if user is None:
         raise AppError(ErrorCode.USER_NOT_FOUND, USER_NOT_FOUND_MESSAGE)
+    if is_deleted(user):  # reactivating it would undo part of the deletion
+        raise AppError(ErrorCode.USER_NOT_FOUND, DELETED_MESSAGE)
     if user.role != UserRole.STAFF:
         # admin accounts are managed with the command-line tool; students are not staff
         raise AppError(ErrorCode.FORBIDDEN_ROLE, ONLY_STAFF_MESSAGE)

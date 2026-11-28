@@ -15,9 +15,9 @@ from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.accounts.anonymise import anonymise_user
 from app.accounts.interface import (
     UserExport,
+    anonymise_user,
     create_teacher,
     export_user,
     get_current_user,
@@ -148,8 +148,8 @@ def deactivate_user(
     out on every device; its access tokens get 403 ACCOUNT_DISABLED. Content rights and classes
     are kept. Returns the account.
 
-    403 FORBIDDEN_ROLE for an admin or student account, 404 USER_NOT_FOUND for an unknown id.
-    The change is recorded in the admin audit log as deactivate.
+    403 FORBIDDEN_ROLE for an admin or student account, 404 USER_NOT_FOUND for an unknown or
+    deleted account. The change is recorded in the admin audit log as deactivate.
     """
     return _set_active(user_id, False, admin, db)
 
@@ -236,14 +236,14 @@ def delete_user(
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """Delete a student or staff account, which can't be undone. The account is anonymised: its
-    email address and username are replaced, its password, preferences, email links, emails, GPS
-    positions and photos removed, and it is signed out everywhere. Its games, points and
-    enrolments stay, anonymised.
+    email address and username are replaced, its password, preferences, email links, emails,
+    pending TA invitations, GPS positions and photos removed, and it is signed out everywhere.
+    Its games, points and enrolments stay, anonymised.
 
-    403 FORBIDDEN_ROLE for an admin account, 404 USER_NOT_FOUND, 422 USERNAME_MISMATCH unless
-    `username` matches exactly, 409 OWNS_ACTIVE_CLASS (class ids in details) until each class it
-    owns is transferred or archived. The deletion is recorded in the admin audit log as
-    delete_user.
+    403 FORBIDDEN_ROLE for an admin account, 404 USER_NOT_FOUND for an unknown or already
+    deleted account, 422 USERNAME_MISMATCH unless `username` matches exactly, 409
+    OWNS_ACTIVE_CLASS (class ids in details) until each class it owns is transferred or
+    archived. The deletion is recorded in the admin audit log as delete_user.
     """
     anonymise_user(admin.id, user_id, fields.username, db)
     db.commit()

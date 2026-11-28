@@ -10,6 +10,7 @@ from jwt import InvalidTokenError, decode
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.accounts.anonymise import anonymise_user
 from app.accounts.class_staff import class_role, invite_assistant
 from app.accounts.export import UserExport, export_user
 from app.accounts.profile import get_profile_classes
@@ -40,6 +41,7 @@ __all__ = [
     "invite_assistant",
     "export_user",
     "UserExport",
+    "anonymise_user",
 ]
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
