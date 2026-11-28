@@ -1,6 +1,7 @@
 """Fixtures for the photo verification tests: the photo_attempts factory, a game waiting for its
-sign photo, a fake OCR reader and the photo upload. Registered in conftest.py through
-`pytest_plugins`, next to content_fixtures, because conftest.py is already over 500 lines.
+sign photo, a fake OCR reader, the route's OCR queue and the photo upload. Registered in
+conftest.py through `pytest_plugins`, next to content_fixtures, because conftest.py is already
+over 500 lines.
 
 `jpeg`, `location_at` and `attempts_of` are plain helpers; a test module imports them from here.
 """
@@ -20,12 +21,14 @@ from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.v1 import verification as photo_route
 from app.models.accounts import User
 from app.models.enums import LocationStatus
 from app.models.game import GameSession, SessionLocation
 from app.models.verification import PhotoAttempt
 from app.verification import verify
 from app.verification.matching import TextBox
+from app.verification.ocr_queue import OcrQueue
 
 # the real clock when the tests start (not a frozen NOW): `photo_game`'s last game action
 AN_HOUR_AGO = datetime.now(UTC) - timedelta(hours=1)
@@ -131,13 +134,25 @@ def ocr_reads(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[int]]:
 
 
 @pytest.fixture
+def ocr_queue(monkeypatch: pytest.MonkeyPatch) -> OcrQueue:
+    """The route's OCR queue for this test, new and with one place: one photo read at a time and
+    none waiting. So an upload that kept its place after it ended makes the test's next upload
+    503 OCR_BUSY. A test that sends photos at the same moment needs a bigger one."""
+    queue = OcrQueue(running=1, waiting=0)
+    monkeypatch.setattr(photo_route, "get_ocr_queue", lambda: queue)
+    return queue
+
+
+@pytest.fixture
 def send_photo(
     client: TestClient,
     db: Session,
     auth_headers: Callable[[User], dict[str, str]],
     stored_media_dir: Path,
+    ocr_queue: OcrQueue,
 ) -> Callable[..., Response]:
-    """Sends a photo to a game as its student, with an Idempotency-Key if `key` is given."""
+    """Sends a photo to a game as its student, with an Idempotency-Key if `key` is given,
+    through the one-place `ocr_queue`."""
 
     def send(game: GameSession, data: bytes | None = None, key: str | None = None) -> Response:
         student = db.get(User, game.student_id)

@@ -8,8 +8,11 @@ database lock held while it runs (spec Stage 2, "Retries and concurrency"):
 1. With an Idempotency-Key, first: the game is locked in any state and the file is read and
    checked; a key that already has a result returns that result's stored response. Then the
    current location is locked and checked, the file is read and checked (if not yet), the photo
-   is re-encoded and saved, and the next attempt is reserved as `processing`. Committed.
-2. OCR reads the photo (outside any transaction).
+   is re-encoded, a place in the OCR queue is taken (503 OCR_BUSY if there is none), the photo is
+   saved and the next attempt is reserved as `processing`. Committed.
+2. OCR reads the photo (outside any transaction) once one of the queue's reading slots is free;
+   the place is then given back. An upload still waiting for a slot after the processing timeout
+   gives up (503 OCR_BUSY), as its result would be dropped.
 3. The location is locked again, the result is written to its attempt and counted by the game,
    and the response is stored for replays. Committed.
 
@@ -22,17 +25,23 @@ Proposed, not in the spec (A10 plan Q2, team to confirm): a location that left S
 OCR_BUSY with Retry-After, since the server was too slow and the student may retry. With a key,
 the file is checked (413, 415) before the key is looked up, because the lookup needs the file's
 SHA-256; a refused file can't be the one first sent with the key, since that one was accepted.
-Without a key, the game's state is checked first, as the spec orders it.
+Without a key, the game's state is checked first, as the spec orders it. The OCR queue place
+(`verification.ocr_queue`) is taken once the game, the location and the file are checked and the
+photo is re-encoded, so a replay or a refused file never gets OCR_BUSY, and before the attempt is
+reserved and the photo saved, so OCR_BUSY saves no photo and uses no attempt. Another photo of the
+location still being read (409 UPLOAD_IN_PROGRESS) is found after the place is taken, so with a
+full queue it gets OCR_BUSY instead.
 
-Still to come: the OCR queue (at most 2 reads at once, 503 OCR_BUSY when 10 wait) and fresh audio
-links in a replayed response (plan Q4; a replay returns the stored body as it is). Known costs
-until then: (1) the photo is re-encoded while the user and game are locked (about a second for a
-large PNG), so that user's refresh or login waits; (2) a feedback phrase or clue recording
-removed mid-game makes the audio lookup 404 after OCR, which drops the result and releases the
-attempt, so the location can't be finished until the recording is back.
+Still to come: fresh audio links in a replayed response (plan Q4; a replay returns the stored
+body as it is). Known costs until then: (1) the photo is re-encoded while the user and game are
+locked (about a second for a large PNG), so that user's refresh or login waits, also when the
+queue then turns the upload away; (2) a feedback phrase or clue recording removed mid-game makes
+the audio lookup 404 after OCR, which drops the result and releases the attempt, so the location
+can't be finished until the recording is back.
 """
 
 from collections.abc import Collection
+from contextlib import ExitStack
 from dataclasses import dataclass
 from hashlib import sha256
 from http import HTTPStatus
@@ -48,8 +57,9 @@ from app.accounts.interface import get_current_user
 from app.api.rate_limit import photo_rate_limit
 from app.api.v1.game_actions import play
 from app.api.v1.game_responses import FeedbackResponse, GameSummaryResponse, summary_response
+from app.config import get_settings
 from app.db import get_db
-from app.errors import AppError, ErrorCode, error_responses
+from app.errors import error_responses
 from app.game.current_location import Stage
 from app.game.photo import (
     PhotoProgress,
@@ -75,10 +85,8 @@ from app.verification.attempts import (
 )
 from app.verification.images import PreparedPhoto, prepare_photo, read_photo
 from app.verification.matching import Decision, SignReading
+from app.verification.ocr_queue import OcrPlace, get_ocr_queue, ocr_busy
 from app.verification.verify import read_sign
-
-# Retry-After of the 503 for a run past the timeout (A10 plan Q12, proposed)
-OCR_RETRY_AFTER_SECONDS = 5
 
 verification_router = APIRouter(prefix="/games", tags=["verification"])
 
@@ -129,6 +137,7 @@ class ReservedUpload:
     location_id: UUID
     accepted_answers: Collection[str]
     photo: PreparedPhoto
+    place: OcrPlace
 
 
 @verification_router.post(
@@ -187,7 +196,8 @@ def upload_photo(
     (confirm arrival first). 409 ATTEMPTS_EXHAUSTED if no attempt is left. 409
     UPLOAD_IN_PROGRESS (with Retry-After) while this key, or another photo of the location, is
     still being read. 409 STATE_CHANGED if the location was shuffled while the photo was being
-    read. 503 OCR_BUSY (with Retry-After) if reading the photo took too long. 422
+    read. 503 OCR_BUSY (with Retry-After) if too many photos are being read at the moment, or if
+    reading this one (waiting included) took too long. 422
     IDEMPOTENCY_KEY_REUSED for a key already sent with another file, VALIDATION_ERROR for a
     malformed key. 413 FILE_TOO_LARGE over the size limit. 415 UNSUPPORTED_MEDIA_TYPE for a
     file that isn't a readable JPEG or PNG, or has more than 25 megapixels (by default). 404
@@ -195,21 +205,35 @@ def upload_photo(
     for a disabled account. 429 RATE_LIMITED over 10 uploads a minute (by default), refused
     files included.
     """
-    reserved = play(lambda: _reserve(user.id, game_id, photo, idempotency_key, db), user, db)
-    if isinstance(reserved, JSONResponse):
-        return reserved
-    try:
-        reading = read_sign(reserved.photo, reserved.accepted_answers)
-        return play(lambda: _apply(user.id, game_id, reserved, reading, db), user, db)
-    except Exception:
-        _release(reserved.pending, db)
-        raise
+    # holds the upload's OCR queue place from the first transaction until OCR is done
+    with ExitStack() as queue_place:
+        reserved = play(
+            lambda: _reserve(user.id, game_id, photo, idempotency_key, queue_place, db), user, db
+        )
+        if isinstance(reserved, JSONResponse):
+            return reserved
+        try:
+            reading = reserved.place.read(
+                lambda: read_sign(reserved.photo, reserved.accepted_answers),
+                get_settings().photo_processing_timeout_seconds,
+            )
+            queue_place.close()  # OCR is done: the place is free before the second transaction
+            return play(lambda: _apply(user.id, game_id, reserved, reading, db), user, db)
+        except Exception:
+            _release(reserved.pending, db)
+            raise
 
 
 def _reserve(
-    student_id: UUID, game_id: UUID, photo: UploadFile, key: str | None, db: Session
+    student_id: UUID,
+    game_id: UUID,
+    photo: UploadFile,
+    key: str | None,
+    queue_place: ExitStack,
+    db: Session,
 ) -> ReservedUpload | JSONResponse:
-    """The first transaction: the replay of `key`, or the reserved attempt for a new upload."""
+    """The first transaction: the replay of `key`, or the reserved attempt for a new upload,
+    which takes its OCR queue place into `queue_place`."""
     data = None
     if key is not None:
         # the key is looked up before any state check (spec), and the lookup needs the file
@@ -225,8 +249,10 @@ def _reserve(
     if data is None:
         data = read_photo(photo.file)
     prepared = prepare_photo(data)
+    place = queue_place.enter_context(get_ocr_queue().place())
     pending = reserve_attempt(location, key, sha256(data).hexdigest(), prepared, db)
-    return ReservedUpload(pending, location.id, list(location.accepted_answers_snapshot), prepared)
+    answers = list(location.accepted_answers_snapshot)
+    return ReservedUpload(pending, location.id, answers, prepared, place)
 
 
 def _apply(
@@ -241,11 +267,7 @@ def _apply(
     if attempt is None:
         # past the timeout: play rolls this transaction back, so `_release` releases the attempt
         # again and commits it (and any later read releases a run this old anyway)
-        raise AppError(
-            ErrorCode.OCR_BUSY,
-            "Reading the photo took too long. Try again in a moment.",
-            headers={"Retry-After": str(OCR_RETRY_AFTER_SECONDS)},
-        )
+        raise ocr_busy("Reading the photo took too long. Try again in a moment.")
     matched = reading.decision.result == PhotoResult.MATCH
     progress = apply_photo_result(target, matched, db)
     summary = None
