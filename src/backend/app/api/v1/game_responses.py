@@ -66,8 +66,8 @@ class GameSummaryResponse(GameStatusResponse):
 
     ended_at: datetime | None = Field(
         description=(
-            "When the game was completed, quit or reset; for an expired or class-closed game, "
-            "its last action. Null while it is open."
+            "When the game was completed, quit, reset, expired or closed with its class. "
+            "Null while it is open."
         )
     )
     engagement: GameEngagementResponse

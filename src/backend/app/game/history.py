@@ -46,12 +46,6 @@ class HistoryPage:
     total: int  # finished games matching the filter, on every page
 
 
-# When a game ended. A completed game has completed_at. An abandoned one doesn't, and quit and
-# reset set last_activity_at to the end time; an expired or class-closed game keeps its last
-# real action there, which is when it was last played.
-ENDED_AT = func.coalesce(GameSession.completed_at, GameSession.last_activity_at)
-
-
 def list_history(
     student_id: UUID,
     language: Language | None,
@@ -85,25 +79,27 @@ def list_history(
         .scalar_subquery()
     )
     rows = db.execute(
-        select(GameSession, ENDED_AT, completed)
+        select(GameSession, completed)
         .where(*finished)
-        .order_by(ENDED_AT.desc(), GameSession.id.desc())
+        .order_by(GameSession.ended_at.desc(), GameSession.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
-    items = tuple(
-        HistoryItem(
-            session_id=game.id,
-            started_at=game.started_at,
-            ended_at=ended_at,
-            language=Language(game.target_language),
-            difficulty=Difficulty(game.difficulty),
-            class_id=game.class_id,
-            state=SessionState(game.state),
-            end_reason=SessionEndReason(game.end_reason) if game.end_reason else None,
-            total_score=game.total_score,
-            locations_completed=locations_completed,
-        )
-        for game, ended_at, locations_completed in rows
+    return HistoryPage(items=tuple(_item(game, done) for game, done in rows), total=total)
+
+
+def _item(game: GameSession, locations_completed: int) -> HistoryItem:
+    # every way a game ends sets ended_at, and only finished games are listed
+    assert game.ended_at is not None
+    return HistoryItem(
+        session_id=game.id,
+        started_at=game.started_at,
+        ended_at=game.ended_at,
+        language=Language(game.target_language),
+        difficulty=Difficulty(game.difficulty),
+        class_id=game.class_id,
+        state=SessionState(game.state),
+        end_reason=SessionEndReason(game.end_reason) if game.end_reason else None,
+        total_score=game.total_score,
+        locations_completed=locations_completed,
     )
-    return HistoryPage(items=items, total=total)

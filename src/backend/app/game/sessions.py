@@ -73,14 +73,19 @@ def abandon_sessions(
     can't end every game. Points already earned stay.
 
     `last_activity_at` is for an end the student asked for (quit, reset): it is a game action, so
-    it becomes the last activity. The system reasons (CLASS_CLOSED, EXPIRED) leave it out and keep
-    the old value, since the student did nothing. Doesn't commit.
+    it becomes the last activity, and it is also the end time. The system reasons (CLASS_CLOSED,
+    EXPIRED) leave it out and keep the old value, since the student did nothing. A class-closed
+    game ends now, an expired one at its last action plus the idle limit. Doesn't commit.
     """
     if not where:
         raise ValueError("abandon_sessions needs at least one condition")
+    ended_at: object = last_activity_at or datetime.now(UTC)
+    if reason == SessionEndReason.EXPIRED:
+        ended_at = GameSession.last_activity_at + session_idle_limit()
     values: dict[str, object] = {
         "state": SessionState.ABANDONED,
         "end_reason": reason,
+        "ended_at": ended_at,
         # set only while paused, so it has to be cleared
         "paused_at": None,
     }

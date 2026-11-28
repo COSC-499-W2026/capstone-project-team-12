@@ -504,10 +504,7 @@ class GameHistoryItemResponse(BaseModel):
     session_id: UUID
     started_at: datetime
     ended_at: datetime = Field(
-        description=(
-            "When the game was completed, quit or reset. For an expired or class-closed game, "
-            "its last action."
-        )
+        description="When the game was completed, quit, reset, expired or closed with its class."
     )
     language: Language
     difficulty: Difficulty

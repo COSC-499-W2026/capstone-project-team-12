@@ -385,7 +385,11 @@ def make_enrollment(
 
 @pytest.fixture
 def make_game_session(db: Session, make_user: Callable[..., User]) -> Callable[..., GameSession]:
-    """An active Practice game in Japanese at difficulty 1, for a new student unless given one."""
+    """An active Practice game in Japanese at difficulty 1, for a new student unless given one.
+
+    A finished game ends at completed_at, else last_activity_at, unless ended_at is given (the
+    same rule the migration used for games that had already ended).
+    """
 
     def make(student: User | None = None, **fields: Any) -> GameSession:
         values: dict[str, Any] = {
@@ -393,6 +397,10 @@ def make_game_session(db: Session, make_user: Callable[..., User]) -> Callable[.
             "target_language": Language.JA,
             "difficulty": Difficulty.BASIC,
         }
+        if fields.get("state") in (SessionState.COMPLETED, SessionState.ABANDONED):
+            values["ended_at"] = (
+                fields.get("completed_at") or fields.get("last_activity_at") or datetime.now(UTC)
+            )
         return _add(db, GameSession(**(values | fields)))
 
     return make

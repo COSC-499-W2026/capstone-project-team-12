@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.engagement import interface as engagement
 from app.game.status import GameStatus, load_game, status_of
-from app.models.enums import Language, SessionState
+from app.models.enums import Language
 from app.models.game import GameSession, SessionLocation
 
 
@@ -39,7 +39,7 @@ def summary_of(game: GameSession, db: Session) -> GameSummary:
     ).all()
     return GameSummary(
         status=status_of(game, db),
-        ended_at=_ended_at(game),
+        ended_at=game.ended_at,
         engagement=engagement.get_game_engagement(
             game.student_id,
             Language(game.target_language),
@@ -48,14 +48,3 @@ def summary_of(game: GameSession, db: Session) -> GameSummary:
             db,
         ),
     )
-
-
-def _ended_at(game: GameSession) -> datetime | None:
-    """When the game ended: completed_at for a completed game. An abandoned one has no end
-    column; quit and reset set last_activity_at to the end time, and an expired or class-closed
-    game keeps its last action there."""
-    if game.state == SessionState.COMPLETED:
-        return game.completed_at
-    if game.state == SessionState.ABANDONED:
-        return game.last_activity_at
-    return None
