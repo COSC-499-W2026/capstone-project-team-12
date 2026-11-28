@@ -1,5 +1,6 @@
-"""The game side of a photo result (A10 TC1 and TC2, A8 and A9 notes): locking the location
-before the photo is read, then counting the attempt, scoring and moving on."""
+"""The game side of a photo result (A10 TC1 and TC2, A8 and A9 notes): locking the game for an
+Idempotency-Key lookup and the location before the photo is read, then counting the attempt,
+scoring and moving on."""
 
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
@@ -14,10 +15,24 @@ from app.config import get_settings
 from app.errors import AppError, ErrorCode
 from app.game.control import quit_game
 from app.game.current_location import Stage
-from app.game.photo import PhotoProgress, finish_photo_location, lock_photo_location
+from app.game.photo import (
+    PhotoProgress,
+    apply_photo_result,
+    finish_photo_location,
+    lock_photo_game,
+    lock_photo_location,
+    lock_photographed_location,
+)
 from app.game.shuffle import shuffle_game
 from app.models.engagement import Achievement, PointsLedger, UserAchievement
-from app.models.enums import Difficulty, Language, LocationStatus, SessionState, SkipReason
+from app.models.enums import (
+    Difficulty,
+    Language,
+    LocationStatus,
+    SessionEndReason,
+    SessionState,
+    SkipReason,
+)
 from app.models.game import GameSession, SessionLocation
 
 NOW = datetime(2026, 11, 11, 20, 0, tzinfo=UTC)
@@ -34,14 +49,14 @@ def verifying_game(
     playable_location_ids: Callable[..., list[UUID]],
 ) -> Callable[..., GameSession]:
     """A game with `locations` locations, at the first one, which is in Stage 2; the others are
-    pending. All are playable ja/basic locations, so moving on doesn't skip them. The last game
-    action was an hour ago; the clock is frozen at NOW. Other keywords are for the game."""
+    pending. All are playable ja/basic locations, so moving on doesn't skip them. Last game
+    action an hour ago unless given; clock frozen at NOW. Other keywords are for the game."""
 
     def make(locations: int = 2, attempts_used: int = 0, **fields: Any) -> GameSession:
         freeze_clock(NOW, *CLOCK)
         if fields.get("state") == SessionState.PAUSED:
             fields.setdefault("paused_at", AN_HOUR_AGO)
-        game = make_game_session(last_activity_at=AN_HOUR_AGO, **fields)
+        game = make_game_session(**{"last_activity_at": AN_HOUR_AGO, **fields})
         active = playable_location_ids(Language.JA, Difficulty.BASIC)
         make_session_location(
             game,
@@ -126,11 +141,14 @@ def _first_index(statements: list[str], table: str, lock_clause: str) -> int:
 STEPS: dict[str, Callable[[GameSession, Session], object]] = {
     "lock": lock,
     "finish": lambda game, db: finish(game, True, db),
+    "lock photographed": lambda game, db: lock_photographed_location(
+        game.student_id, game.id, row_at(game, 1, db).id, db
+    ),
 }
 
 
 @pytest.mark.parametrize("step", STEPS.values(), ids=STEPS.keys())
-def test_both_steps_lock_the_user_then_the_game_then_the_location(
+def test_each_step_locks_the_user_then_the_game_then_the_location(
     db: Session,
     verifying_game: Callable[..., GameSession],
     statements: list[str],
@@ -148,15 +166,49 @@ def test_both_steps_lock_the_user_then_the_game_then_the_location(
     assert user < locked_game < location
 
 
-def test_neither_step_commits_or_rolls_back(
+def test_no_step_commits_or_rolls_back(
     db: Session, verifying_game: Callable[..., GameSession], transaction_calls: list[str]
 ) -> None:
     game = verifying_game()
 
-    finish(game, True, db, lock(game, db))
+    lock_photo_game(game.student_id, game.id, db)
+    finish(game, True, db, lock(game, db))  # lock_photographed_location, apply_photo_result
 
     assert "commit" not in transaction_calls
     assert "rollback" not in transaction_calls
+
+
+# lock_photo_game
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},
+        {"state": SessionState.PAUSED},
+        {"state": SessionState.COMPLETED, "completed_at": AN_HOUR_AGO},
+        {"state": SessionState.ABANDONED, "end_reason": SessionEndReason.QUIT},
+        {"last_activity_at": NOW - timedelta(days=3)},  # only a new upload expires it
+    ],
+    ids=["active", "paused", "completed", "abandoned", "idle"],
+)
+def test_the_game_lock_takes_a_game_in_any_state_and_changes_nothing(
+    db: Session,
+    verifying_game: Callable[..., GameSession],
+    statements: list[str],
+    fields: dict[str, Any],
+) -> None:
+    # an Idempotency-Key is looked up before any state check, so a replay works after the end
+    game = verifying_game(**fields)
+    before = (game.state, game.last_activity_at)
+    statements.clear()
+
+    lock_photo_game(game.student_id, game.id, db)
+
+    assert (game.state, game.last_activity_at) == before
+    user = _first_index(statements, "users", "FOR NO KEY UPDATE")
+    assert user < _first_index(statements, "game_sessions", "FOR UPDATE")
+    assert not any("session_locations" in statement for statement in statements)
 
 
 # lock_photo_location
@@ -262,6 +314,21 @@ def test_a_match_on_the_last_attempt_still_completes_the_location(
     game = verifying_game(attempts_used=5)
 
     assert outcome(finish(game, True, db)) == (LocationStatus.COMPLETED, 6, 0, 100)
+
+
+def test_the_lock_step_counts_nothing_and_a_result_is_applied_only_in_stage_2(
+    db: Session, verifying_game: Callable[..., GameSession]
+) -> None:
+    game = verifying_game()  # the route checks the attempt's OCR run between the two steps
+    target = lock_photographed_location(game.student_id, game.id, row_at(game, 1, db).id, db)
+    assert target is not None and (target.game, target.row.attempts_used) == (game, 0)
+
+    apply_photo_result(target, True, db)
+
+    with pytest.raises(ValueError, match="Stage 2"):
+        apply_photo_result(target, True, db)
+    row = target.row
+    assert (row.status, row.attempts_used, game.total_score) == (LocationStatus.COMPLETED, 1, 100)
 
 
 def test_the_attempt_limit_comes_from_the_settings(
@@ -413,9 +480,10 @@ def test_another_students_game_is_never_touched(
     others = row_at(other_game, 1, db)
 
     error = refused(lambda: lock_photo_location(game.student_id, other_game.id, db))
+    game_error = refused(lambda: lock_photo_game(game.student_id, other_game.id, db))
     progress = finish_photo_location(game.student_id, game.id, others.id, True, db)
 
-    assert (error, progress) == (ErrorCode.NOT_FOUND, None)
+    assert (error, game_error, progress) == (ErrorCode.NOT_FOUND, ErrorCode.NOT_FOUND, None)
     assert (others.status, others.attempts_used) == (LocationStatus.VERIFYING, 0)
     assert (other_game.last_activity_at, other_game.total_score) == (AN_HOUR_AGO, 0)
 

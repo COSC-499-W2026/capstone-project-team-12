@@ -29,6 +29,8 @@ from app.models.columns import created_at, in_check, uuid_pk
 from app.models.enums import PhotoAttemptStatus, PhotoResult
 
 NOT_ERROR = text(f"status <> '{PhotoAttemptStatus.ERROR}'")
+# visible ASCII only, and short enough for the unique index; the photo route checks the header
+IDEMPOTENCY_KEY_PATTERN = "^[!-~]{1,128}$"
 
 
 class PhotoAttempt(Base):
@@ -74,8 +76,7 @@ class PhotoAttempt(Base):
         CheckConstraint("ocr_confidence BETWEEN 0 AND 1", name="ocr_confidence"),
         CheckConstraint("processing_ms >= 0", name="processing_ms"),
         CheckConstraint("content_sha256 ~ '^[0-9a-f]{64}$'", name="content_sha256"),
-        # visible ASCII only, and short enough for the unique index
-        CheckConstraint("idempotency_key ~ '^[!-~]{1,128}$'", name="idempotency_key"),
+        CheckConstraint(f"idempotency_key ~ '{IDEMPOTENCY_KEY_PATTERN}'", name="idempotency_key"),
     )
 
     id: Mapped[UUID] = uuid_pk()
