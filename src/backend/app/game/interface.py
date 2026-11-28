@@ -1,6 +1,7 @@
-"""Public interface of app.game: the only module other components may import.
+"""Public interface of app.game: the only module other components, routes and CLI jobs may
+import.
 
-When another component needs something from game, agree on the signature with its users first,
+When code outside game needs something from it, agree on the signature with its users first,
 then add it here.
 
 end_open_sessions: archiving a class, or a student leaving or being removed, ends their open
