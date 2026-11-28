@@ -66,6 +66,11 @@ class GameSession(Base):
             f"(state = '{SessionState.COMPLETED}') = (completed_at IS NOT NULL)",
             name="completed_at_matches_state",
         ),
+        CheckConstraint(
+            f"(state IN ('{SessionState.COMPLETED}', '{SessionState.ABANDONED}'))"
+            " = (ended_at IS NOT NULL)",
+            name="ended_at_matches_state",
+        ),
         # upper limits are settings (locations_per_game, max_shuffles_per_session),
         # so the services check those
         CheckConstraint("current_position >= 1", name="current_position"),

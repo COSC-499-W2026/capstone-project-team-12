@@ -20,6 +20,7 @@ from app.models.game import GameSession, SessionLocation
 def end(game: GameSession, reason: str = SessionEndReason.QUIT) -> None:
     game.state = SessionState.ABANDONED
     game.end_reason = reason
+    game.ended_at = datetime.now(UTC)
 
 
 # game_sessions
@@ -137,6 +138,17 @@ def test_completed_at_is_set_only_when_completed(
     db.rollback()
     with pytest.raises(IntegrityError, match="ck_game_sessions_completed_at_matches_state"):
         make_game_session(completed_at=datetime.now(UTC))
+
+
+def test_ended_at_is_set_only_when_the_game_has_ended(
+    db: Session, make_game_session: Callable[..., GameSession]
+) -> None:
+    now = datetime.now(UTC)
+    with pytest.raises(IntegrityError, match="ck_game_sessions_ended_at_matches_state"):
+        make_game_session(state=SessionState.COMPLETED, completed_at=now, ended_at=None)
+    db.rollback()
+    with pytest.raises(IntegrityError, match="ck_game_sessions_ended_at_matches_state"):
+        make_game_session(ended_at=now)
 
 
 def test_an_abandoned_game_cannot_keep_paused_at(

@@ -331,7 +331,12 @@ def test_a_game_ended_elsewhere_is_not_resumed(
     db.execute(
         update(GameSession)
         .where(GameSession.id == game.id)
-        .values(state=SessionState.ABANDONED, end_reason=SessionEndReason.QUIT, paused_at=None)
+        .values(
+            state=SessionState.ABANDONED,
+            end_reason=SessionEndReason.QUIT,
+            paused_at=None,
+            ended_at=datetime.now(UTC),
+        )
         .execution_options(synchronize_session=False)
     )
 

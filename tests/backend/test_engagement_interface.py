@@ -686,7 +686,7 @@ def test_first_step_badge_is_tracked_per_language(
     )
 
     japanese_game.state = SessionState.COMPLETED
-    japanese_game.completed_at = datetime.now(UTC)
+    japanese_game.completed_at = japanese_game.ended_at = datetime.now(UTC)
     db.flush()
 
     french_game = make_game_session(student=student, target_language=Language.FR)
