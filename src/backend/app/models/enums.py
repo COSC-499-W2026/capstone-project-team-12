@@ -39,9 +39,16 @@ class AchievementCategory(StrEnum):
 
 
 class Difficulty(IntEnum):
-    BASIC = 1  # numbers only
-    ADVANCING = 2  # numbers and a simple description
-    CHALLENGING = 3  # description only
+    """The level a student picks when starting a game; the game plays the clues of that level.
+
+    - 1 Basic: all 5 locations of a game are in one building; the clue says the room number.
+    - 2 Advancing: locations in any building; the clue gives directions to the room.
+    - 3 Challenging: locations in any building; the clue is a short story about the room.
+    """
+
+    BASIC = 1
+    ADVANCING = 2
+    CHALLENGING = 3
 
 
 class DifficultySuggestion(StrEnum):
