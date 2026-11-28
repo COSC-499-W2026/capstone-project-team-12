@@ -113,6 +113,7 @@ __all__ = [
     "get_class_language",
     "is_actively_enrolled",
     "is_class_archived",
+    "lock_open_class",
     "leave_class",
     "list_class_access_codes",
     "remove_student",
@@ -568,6 +569,20 @@ def require_active_enrolment(student_id: UUID, class_id: UUID, db: Session) -> L
     if not is_actively_enrolled(student_id, class_id, db):
         raise not_found
     return language
+
+
+def lock_open_class(class_id: UUID, db: Session) -> str:
+    """Lock and reload a class that isn't archived, and return its name. Lock any user first,
+    as joining and archiving do, so an archive that commits meanwhile is seen.
+
+    Raises 404 NOT_FOUND for an unknown class and 409 CLASS_ARCHIVED for an archived one.
+    """
+    if db.get(Class, class_id) is None:
+        raise AppError(ErrorCode.NOT_FOUND)
+    school_class = _lock_class(class_id, db)
+    if school_class.archived_at is not None:
+        raise AppError(ErrorCode.CLASS_ARCHIVED)
+    return school_class.name
 
 
 def _lock_class(class_id: UUID, db: Session) -> Class:

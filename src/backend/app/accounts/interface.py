@@ -10,6 +10,7 @@ from jwt import InvalidTokenError, decode
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.accounts.class_staff import class_role, invite_assistant
 from app.accounts.profile import get_profile_classes
 from app.accounts.staff import create_teacher, list_staff_accounts, set_staff_active
 from app.accounts.tokens import revoke_refresh_tokens
@@ -17,7 +18,7 @@ from app.config import get_settings
 from app.db import get_db
 from app.engagement.interface import require_active_enrolment
 from app.errors import AppError, ErrorCode
-from app.models.accounts import ClassStaff, User
+from app.models.accounts import User
 from app.models.engagement import AccessCode, Class
 from app.models.enums import ClassStaffRole, UserRole
 
@@ -35,6 +36,7 @@ __all__ = [
     "list_staff_accounts",
     "set_staff_active",
     "get_profile_classes",
+    "invite_assistant",
 ]
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
@@ -108,7 +110,7 @@ def require_class_viewer(
 
     Raises the 404 NOT_FOUND or 409 CLASS_ARCHIVED of require_active_enrolment for others.
     """
-    if _class_role(user.id, class_id, db) is not None:
+    if class_role(user.id, class_id, db) is not None:
         return True
     require_active_enrolment(user.id, class_id, db)
     return False
@@ -117,17 +119,8 @@ def require_class_viewer(
 def _check_class_role(
     user_id: UUID, class_id: UUID, allowed_roles: tuple[ClassStaffRole, ...], db: Session
 ) -> None:
-    if _class_role(user_id, class_id, db) not in allowed_roles:
+    if class_role(user_id, class_id, db) not in allowed_roles:
         raise AppError(ErrorCode.FORBIDDEN_ROLE)
-
-
-def _class_role(user_id: UUID, class_id: UUID, db: Session) -> str | None:
-    """The user's staff role in the class, or None if they aren't staff there."""
-    return db.scalar(
-        select(ClassStaff.role).where(
-            ClassStaff.user_id == user_id, ClassStaff.class_id == class_id
-        )
-    )
 
 
 def require_admin(user: Annotated[User, Depends(get_current_user)]) -> None:
