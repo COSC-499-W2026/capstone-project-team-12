@@ -76,6 +76,12 @@ def test_expire_sessions_batch_cap_defaults_to_20(monkeypatch: pytest.MonkeyPatc
     assert Settings(_env_file=None).expire_sessions_max_batches == 5
 
 
+def test_photo_processing_timeout_defaults_to_120_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert Settings(_env_file=None).photo_processing_timeout_seconds == 120
+    monkeypatch.setenv("PHOTO_PROCESSING_TIMEOUT_SECONDS", "300")
+    assert Settings(_env_file=None).photo_processing_timeout_seconds == 300
+
+
 @pytest.mark.parametrize(
     "variable",
     [
@@ -86,6 +92,7 @@ def test_expire_sessions_batch_cap_defaults_to_20(monkeypatch: pytest.MonkeyPatc
         "MAX_IMPORT_FILES",
         "MAX_PHOTO_MEGAPIXELS",
         "EXPIRE_SESSIONS_MAX_BATCHES",
+        "PHOTO_PROCESSING_TIMEOUT_SECONDS",
     ],
 )
 def test_positive_limits_must_be_positive(monkeypatch: pytest.MonkeyPatch, variable: str) -> None:

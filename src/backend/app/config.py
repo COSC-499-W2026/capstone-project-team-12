@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     # the OCR evaluation photos (spec, Testing & Acceptance)
     ocr_match_confidence: Confidence = 0.60
     ocr_unclear_confidence: Confidence = 0.45
+    # a photo still being read after this long (e.g. after a restart) is an error the next time
+    # its attempt is read, so the attempt is released and the upload can be retried
+    photo_processing_timeout_seconds: PositiveInt = 120
     session_idle_expiry_hours: PositiveInt = 24
     # full batches one expire-sessions run commits before leaving the rest to the next run
     expire_sessions_max_batches: PositiveInt = 20
