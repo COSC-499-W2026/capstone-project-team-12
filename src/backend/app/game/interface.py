@@ -38,12 +38,12 @@ from app.models.game import OPEN_SESSION_STATES, GameSession
 
 __all__ = [
     "archive_class_and_end_games",
-    "leave_class_and_end_games",
-    "remove_student_and_end_games",
     "expire_idle_sessions",
     "get_open_session_id",
+    "leave_class_and_end_games",
     "list_history",
     "refuse_if_game_open",
+    "remove_student_and_end_games",
 ]
 
 
