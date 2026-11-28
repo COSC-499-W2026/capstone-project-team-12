@@ -19,6 +19,7 @@ from app.models.engagement import (
     Class,
 )
 from app.models.enums import ClassStaffRole, Language
+from app.services.locks import lock_user
 
 SEMESTER_PATTERN = re.compile(r"[0-9]{4}(W1|W2|S1|S2)\Z")
 
@@ -96,6 +97,10 @@ def create_class(
 ) -> Class:
     """Create a classroom and assign its teacher as the owner.
 
+    The teacher is locked first, as deactivating or deleting the account does, and must still be
+    active (403 ACCOUNT_DISABLED): a deletion in progress either sees the new class or makes
+    this refuse, so a deleted account never owns an active class.
+
     The caller checks that the teacher is a staff account and owns the transaction; this
     function never commits.
     """
@@ -113,6 +118,10 @@ def create_class(
                 }
             ],
         )
+
+    locked = lock_user(teacher.id, db)
+    if locked is None or not locked.is_active:
+        raise AppError(ErrorCode.ACCOUNT_DISABLED, "Your account has been disabled.")
 
     school_class = Class(
         name=normalized_name,

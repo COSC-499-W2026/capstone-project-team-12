@@ -53,6 +53,9 @@ class ErrorCode(StrEnum):
     UNSUPPORTED_MEDIA_TYPE = "UNSUPPORTED_MEDIA_TYPE"
     RATE_LIMITED = "RATE_LIMITED"
     OCR_BUSY = "OCR_BUSY"
+    # proposed, not in the spec's table: refusals when an admin deletes an account
+    OWNS_ACTIVE_CLASS = "OWNS_ACTIVE_CLASS"
+    USERNAME_MISMATCH = "USERNAME_MISMATCH"
     # generic codes for the status table in api-conventions.md
     VALIDATION_ERROR = "VALIDATION_ERROR"
     NOT_AUTHENTICATED = "NOT_AUTHENTICATED"  # missing, invalid or expired access token
@@ -82,6 +85,7 @@ _CONFLICTS = {
     ErrorCode.CLASS_ARCHIVED,
     ErrorCode.UPLOAD_IN_PROGRESS,
     ErrorCode.ALREADY_REPORTED,
+    ErrorCode.OWNS_ACTIVE_CLASS,
 }
 
 STATUS: dict[ErrorCode, HTTPStatus] = {code: HTTPStatus.CONFLICT for code in _CONFLICTS} | {
@@ -100,6 +104,7 @@ STATUS: dict[ErrorCode, HTTPStatus] = {code: HTTPStatus.CONFLICT for code in _CO
     ErrorCode.UNSUPPORTED_MEDIA_TYPE: HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
     ErrorCode.IDEMPOTENCY_KEY_REUSED: HTTPStatus.UNPROCESSABLE_ENTITY,
     ErrorCode.AUDIO_TOO_LONG: HTTPStatus.UNPROCESSABLE_ENTITY,
+    ErrorCode.USERNAME_MISMATCH: HTTPStatus.UNPROCESSABLE_ENTITY,
     ErrorCode.VALIDATION_ERROR: HTTPStatus.UNPROCESSABLE_ENTITY,
     ErrorCode.RATE_LIMITED: HTTPStatus.TOO_MANY_REQUESTS,
     ErrorCode.INTERNAL_ERROR: HTTPStatus.INTERNAL_SERVER_ERROR,

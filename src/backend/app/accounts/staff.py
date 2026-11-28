@@ -26,7 +26,20 @@ from app.services.email import EmailService
 from app.services.locks import lock_user
 
 USER_NOT_FOUND_MESSAGE = "No account has this id."
+DELETED_MESSAGE = "This account was deleted."
 ONLY_STAFF_MESSAGE = "Only staff accounts can be deactivated or reactivated."
+
+
+def deleted_email(user_id: UUID) -> str:
+    """The address a deleted (anonymised) account gets. Nothing can be sent to the reserved
+    .invalid domain, and no one can register an address made from an id or confirm a change to
+    it, so only a deletion gives an account this address."""
+    return f"deleted-{user_id.hex}@deleted.invalid"
+
+
+def is_deleted(user: User) -> bool:
+    """Whether the account was deleted, which can't be undone or repeated."""
+    return user.email == deleted_email(user.id)
 
 
 def create_teacher(
@@ -104,12 +117,14 @@ def set_staff_active(admin_id: UUID, user_id: UUID, active: bool, db: Session) -
     holds FOR SHARE on it while adding a token, so one in progress commits first and its token
     is revoked too; a later one sees the account is deactivated.
 
-    404 USER_NOT_FOUND for an unknown id, 403 FORBIDDEN_ROLE for an admin or student account;
-    either records nothing, since nothing changed.
+    404 USER_NOT_FOUND for an unknown or deleted account, 403 FORBIDDEN_ROLE for an admin or
+    student account; either records nothing, since nothing changed.
     """
     user = lock_user(user_id, db)
     if user is None:
         raise AppError(ErrorCode.USER_NOT_FOUND, USER_NOT_FOUND_MESSAGE)
+    if is_deleted(user):  # reactivating it would undo part of the deletion
+        raise AppError(ErrorCode.USER_NOT_FOUND, DELETED_MESSAGE)
     if user.role != UserRole.STAFF:
         # admin accounts are managed with the command-line tool; students are not staff
         raise AppError(ErrorCode.FORBIDDEN_ROLE, ONLY_STAFF_MESSAGE)
