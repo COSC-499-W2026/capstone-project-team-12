@@ -761,7 +761,8 @@ def leave_class(student_id: UUID, class_id: UUID, db: Session) -> None:
 
     Preserve the enrolment record so the student can rejoin later.
     If the current class is being left, select another active class
-    or clear the current selection.
+    or clear the current selection. Routes call game.interface.leave_class_and_end_games,
+    which also ends the student's open games in the class.
     """
     student = lock_user(student_id, db)
 
@@ -824,7 +825,11 @@ def _lock_class_enrolment(
 
 
 def remove_student(student_id: UUID, class_id: UUID, db: Session) -> bool:
-    """End an active enrolment and return whether it changed. Does not commit."""
+    """End an active enrolment and return whether it changed. Does not commit.
+
+    Routes call game.interface.remove_student_and_end_games, which also ends the student's open
+    games in the class.
+    """
     student, enrolment = _lock_class_enrolment(student_id, class_id, db)
     if enrolment.end_reason == EnrollmentEndReason.REMOVED:
         return False
@@ -857,7 +862,8 @@ def archive_class(class_id: UUID, db: Session) -> None:
 
     Lock enrolled students before the class, matching join and serializing
     against game start, reset, leave and class selection. A join that committed
-    while these locks were being acquired requires a fresh pass.
+    while these locks were being acquired requires a fresh pass. Routes call
+    game.interface.archive_class_and_end_games, which also ends the class's open games.
     """
     enrolled_students = select(ClassEnrollment.student_id).where(
         ClassEnrollment.class_id == class_id,

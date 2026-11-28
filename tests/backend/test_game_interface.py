@@ -1,19 +1,27 @@
-"""end_open_sessions ends the right games when a class closes; get_open_session_id finds a
-student's open game."""
+"""end_open_sessions ends the right games when a class closes, and the class routes end them in
+the same transaction; get_open_session_id finds a student's open game."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
+from unittest.mock import patch
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.errors import AppError, ErrorCode
 from app.game.interface import end_open_sessions, get_open_session_id, refuse_if_game_open
 from app.game.sessions import session_idle_limit
-from app.models.accounts import User
-from app.models.engagement import Class
-from app.models.enums import LocationStatus, SessionEndReason, SessionState, SkipReason
+from app.models.accounts import ClassStaff, User
+from app.models.engagement import Class, ClassEnrollment
+from app.models.enums import (
+    LocationStatus,
+    SessionEndReason,
+    SessionState,
+    SkipReason,
+    UserRole,
+)
 from app.models.game import GameSession, SessionLocation
 
 
@@ -190,3 +198,50 @@ def test_refuse_if_game_open_ignores_a_game_idle_for_the_expiry_time(
     make_game_session(student, last_activity_at=datetime.now(UTC) - session_idle_limit())
 
     refuse_if_game_open(student.id, db)
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "as_student"),
+    [
+        ("post", "/api/v1/teacher/classes/{class_id}/archive", False),
+        ("delete", "/api/v1/teacher/classes/{class_id}/students/{student_id}", False),
+        ("post", "/api/v1/me/classes/{class_id}/leave", True),
+    ],
+)
+def test_a_class_change_is_not_committed_when_ending_the_games_fails(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+    make_user: Callable[..., User],
+    make_class: Callable[..., Class],
+    make_class_staff: Callable[..., ClassStaff],
+    make_enrollment: Callable[..., ClassEnrollment],
+    auth_headers: Callable[[User], dict[str, str]],
+    method: str,
+    path: str,
+    as_student: bool,
+) -> None:
+    owner, school_class = make_user(role=UserRole.STAFF), make_class()
+    make_class_staff(school_class, owner)
+    student = make_user(current_class_id=school_class.id)
+    make_enrollment(student, school_class)
+    url = path.format(class_id=school_class.id, student_id=student.id)
+    headers = auth_headers(student if as_student else owner)
+    # spy on Session.commit itself: transaction_calls also counts the savepoint that
+    # archive_class releases while locking, which isn't a commit of the request
+    commits: list[str] = []
+    real_commit = db.commit
+
+    def spy_commit() -> None:
+        commits.append("commit")
+        real_commit()
+
+    monkeypatch.setattr(db, "commit", spy_commit)
+
+    with (
+        patch("app.game.interface.end_open_sessions", side_effect=RuntimeError("cleanup failed")),
+        pytest.raises(RuntimeError, match="cleanup failed"),
+    ):
+        client.request(method, url, headers=headers)
+
+    assert commits == []

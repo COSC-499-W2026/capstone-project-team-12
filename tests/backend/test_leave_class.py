@@ -2,10 +2,8 @@
 
 from collections.abc import Callable
 from typing import Any
-from unittest.mock import patch
 from uuid import uuid4
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -214,39 +212,3 @@ def test_leave_service_does_not_commit(
     transaction_calls.clear()
     leave_class(student.id, school_class.id, db)
     assert "commit" not in transaction_calls
-
-
-def test_leave_rolls_back_when_game_cleanup_fails(
-    client: TestClient,
-    db: Session,
-    make_user: Callable[..., User],
-    make_class: Callable[..., Class],
-    make_enrollment: Callable[..., ClassEnrollment],
-    auth_headers: Callable[[User], dict[str, str]],
-    transaction_calls: list[str],
-    leave_as: Callable[..., Any],
-) -> None:
-    """A game cleanup failure must not persist the student's departure."""
-    school_class = make_class()
-    student = make_user(current_class_id=school_class.id)
-    enrollment = make_enrollment(student, school_class)
-    db.commit()
-    transaction_calls.clear()
-
-    with (
-        patch(
-            "app.api.v1.me.end_open_sessions",
-            side_effect=RuntimeError("Game cleanup failed"),
-        ),
-        pytest.raises(RuntimeError, match="Game cleanup failed"),
-    ):
-        leave_as(client, student, str(school_class.id), auth_headers)
-
-    assert "rollback" in transaction_calls
-    assert "commit" not in transaction_calls
-    db.refresh(enrollment)
-    db.refresh(student)
-    assert enrollment.is_active is True
-    assert enrollment.end_reason is None
-    assert enrollment.left_at is None
-    assert student.current_class_id == school_class.id

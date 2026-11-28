@@ -126,7 +126,7 @@ Functions in a component's `interface.py` and in the shared services (`app/servi
 ```python
 location_snapshot(location_id, language, difficulty, db)
 require_active_enrolment(student_id, class_id, db)
-end_open_sessions(class_id, db, student_id=None)
+get_and_report_streak(student_id, db, today=today)
 ```
 
 ## Pagination

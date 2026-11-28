@@ -23,7 +23,6 @@ from app.accounts.interface import (
 from app.api.pagination import Page, PageParams, page_params
 from app.db import get_db
 from app.engagement.interface import (
-    archive_class,
     create_class,
     deactivate_access_code,
     generate_access_code,
@@ -33,12 +32,11 @@ from app.engagement.interface import (
     get_class_student_analytics,
     list_class_access_codes,
     list_staff_classes,
-    remove_student,
     restore_student,
     update_class_settings,
 )
 from app.errors import AppError, ErrorCode, error_responses
-from app.game.interface import end_open_sessions
+from app.game.interface import archive_class_and_end_games, remove_student_and_end_games
 from app.models.accounts import User
 from app.models.engagement import Class
 from app.models.enums import ClassStaffRole, Difficulty, DifficultySuggestion, Language
@@ -688,13 +686,8 @@ def archive_class_endpoint(
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """Archive the classroom and end its games in one transaction."""
-    try:
-        archive_class(class_id, db)
-        end_open_sessions(class_id, db)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
+    archive_class_and_end_games(class_id, db)
+    db.commit()
 
 
 @teacher_classes_router.delete(
@@ -717,13 +710,8 @@ def remove_class_student_endpoint(
     student_id: UUID,
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
-    try:
-        if remove_student(student_id, class_id, db):
-            end_open_sessions(class_id, db, student_id=student_id)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
+    remove_student_and_end_games(student_id, class_id, db)
+    db.commit()
 
 
 @teacher_classes_router.post(
@@ -747,9 +735,5 @@ def restore_class_student_endpoint(
     student_id: UUID,
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
-    try:
-        restore_student(student_id, class_id, db)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
+    restore_student(student_id, class_id, db)
+    db.commit()
