@@ -100,6 +100,23 @@ class Decision:
         return FEEDBACK[self.result]
 
 
+@dataclass(frozen=True)
+class SignReading:
+    """What OCR made of a photo (`verify.read_sign`): the decision, plus what its attempt record
+    keeps. Defined here, not in `verify`, so the attempt records don't import the OCR modules.
+
+    `raw_text` is server-side only (it may contain the room number): one line per read (the
+    second read only if there was one), each the read's boxes in the reader's order, joined by
+    spaces. A record of what OCR saw, not a way to decide again: confidences are not kept, and
+    the OCR evaluation reads the stored photo again instead. `processing_ms` is the time the
+    reads and decisions took.
+    """
+
+    decision: Decision
+    raw_text: str = field(repr=False)
+    processing_ms: int
+
+
 def decide(
     boxes: Sequence[TextBox], accepted_answers: Collection[str], thresholds: MatchThresholds
 ) -> Decision:

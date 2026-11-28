@@ -1,5 +1,6 @@
-"""Unit tests for the photo pipeline (app/verification/verify.py): the checks, the OCR reads and
-the second pass. A fake `read_text` returns fixed text boxes, so no model is loaded."""
+"""Unit tests for the photo pipeline (app/verification/verify.py): the checks, the OCR reads, the
+second pass and what the attempt record keeps. A fake `read_text` returns fixed text boxes, so no
+model is loaded."""
 
 import io
 from collections.abc import Callable, Sequence
@@ -11,8 +12,9 @@ from app.errors import AppError, ErrorCode
 from app.models.enums import PhotoResult
 from app.services.uploads import BYTES_PER_MB
 from app.verification import verify
+from app.verification.images import prepare_photo
 from app.verification.matching import Candidate, TextBox
-from app.verification.verify import verify_photo
+from app.verification.verify import read_sign, verify_photo
 
 ANSWERS = ["SCI333"]
 Reads = Callable[..., list[Image.Image]]
@@ -79,6 +81,43 @@ def test_a_read_with_no_candidate_is_not_read_again(
     seen = reads(first)
     assert verify_photo(photo(), ANSWERS).result == PhotoResult.NO_MATCH
     assert len(seen) == 1
+
+
+@pytest.mark.parametrize(
+    ("results", "raw_text"),
+    [
+        ([[]], ""),
+        ([[("SCI 333", 0.9), ("ROOM", 0.5)]], "SCI 333 ROOM"),
+        (
+            [[("SCI 334", 0.7), ("", 0.1), ("LAB", 0.6)], [("SCI 333", 0.8)]],
+            "SCI 334  LAB\nSCI 333",
+        ),
+        ([[("SCI 334", 0.7)], []], "SCI 334\n"),
+    ],
+    ids=["nothing-read", "one-read", "two-reads", "empty-second-read"],
+)
+def test_the_reading_keeps_every_box_of_every_read(
+    reads: Reads, results: list[list[tuple[str, float]]], raw_text: str
+) -> None:
+    reads(*results)
+    reading = read_sign(prepare_photo(photo().getvalue()), ANSWERS)
+    # one line per read, so the reads can be told apart even when a box or a read is empty
+    assert reading.raw_text == raw_text
+    assert len(reading.raw_text.split("\n")) == len(results)
+    assert "raw_text" not in repr(reading)  # kept out of logs and tracebacks
+
+
+def test_the_reading_times_the_reads_in_milliseconds(
+    reads: Reads, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads([("SCI 334", 0.7)], [("SCI 333", 0.8)])
+    clock = iter([12.0, 12.3456])
+    monkeypatch.setattr(verify, "perf_counter", lambda: next(clock))
+
+    reading = read_sign(prepare_photo(photo().getvalue()), ANSWERS)
+
+    assert reading.processing_ms == 346
+    assert reading.decision.candidate == Candidate("SCI333", 0.8)
 
 
 @pytest.mark.parametrize(
