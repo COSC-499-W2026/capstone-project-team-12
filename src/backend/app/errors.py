@@ -59,6 +59,7 @@ class ErrorCode(StrEnum):
     FORBIDDEN = "FORBIDDEN"  # e.g. a tampered or expired media link
     NOT_FOUND = "NOT_FOUND"
     METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"
+    REQUEST_TOO_LARGE = "REQUEST_TOO_LARGE"  # a body over MAX_REQUEST_BODY_MB that is not a file
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -97,6 +98,7 @@ STATUS: dict[ErrorCode, HTTPStatus] = {code: HTTPStatus.CONFLICT for code in _CO
     ErrorCode.NOT_FOUND: HTTPStatus.NOT_FOUND,
     ErrorCode.METHOD_NOT_ALLOWED: HTTPStatus.METHOD_NOT_ALLOWED,
     ErrorCode.FILE_TOO_LARGE: HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+    ErrorCode.REQUEST_TOO_LARGE: HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
     ErrorCode.UNSUPPORTED_MEDIA_TYPE: HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
     ErrorCode.IDEMPOTENCY_KEY_REUSED: HTTPStatus.UNPROCESSABLE_ENTITY,
     ErrorCode.AUDIO_TOO_LONG: HTTPStatus.UNPROCESSABLE_ENTITY,
@@ -133,6 +135,15 @@ class AppError(Exception):
 
     def body(self) -> dict[str, Any]:
         return {"error": {"code": self.code, "message": self.message, "details": self.details}}
+
+
+class AppHTTPException(StarletteHTTPException):
+    """An AppError raised while FastAPI reads a request body, which turns any exception other
+    than an HTTPException into a 400 (app.api.body_limit). The handler answers with the AppError."""
+
+    def __init__(self, error: AppError) -> None:
+        super().__init__(error.status, error.message, error.headers)
+        self.error = error
 
 
 class ErrorBody(BaseModel):
@@ -186,6 +197,8 @@ async def _validation_error(request: Request, exc: Exception) -> JSONResponse:
 
 async def _http_error(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, StarletteHTTPException)
+    if isinstance(exc, AppHTTPException):
+        return _response(exc.error)
     code = _FRAMEWORK_CODES.get(HTTPStatus(exc.status_code))
     if code is None:
         # a status we have no code for (e.g. a plain HTTPException(403)): keep the status and
