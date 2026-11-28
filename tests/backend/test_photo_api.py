@@ -1,17 +1,17 @@
 """POST /games/{id}/verification/photo over HTTP (A10 TC1 to TC3, the refusals, no answer leaks,
 results dropped during OCR).
 
-OCR is replaced by a fake `read_text` that returns fixed text boxes, so no model is loaded; it can
-also change the game while it "reads", as another request would between the two transactions.
-The game rows are committed before each request, so a refusal's rollback only undoes the request.
+The fixtures and helpers are in verification_fixtures.py, so other photo tests can use them. OCR
+is replaced by a fake `read_text` (`ocr_reads`) that returns fixed text boxes, so no model is
+loaded; it can also change the game while it "reads", as another request would between the two
+transactions. The game rows are committed before each request, so a refusal's rollback only
+undoes the request.
 """
 
-import io
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from hashlib import sha256
 from pathlib import Path
-from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +19,7 @@ from httpx2 import Response
 from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from verification_fixtures import AN_HOUR_AGO, attempts_of, jpeg, location_at
 
 from app.api.v1 import verification as photo_route
 from app.config import get_settings
@@ -32,9 +33,7 @@ from app.models.game import GameSession, SessionLocation
 from app.models.verification import PhotoAttempt
 from app.services.uploads import BYTES_PER_MB
 from app.verification import verify
-from app.verification.matching import TextBox
 
-AN_HOUR_AGO = datetime.now(UTC) - timedelta(hours=1)
 KEY = "photo-" + "1" * 122  # the longest key allowed, 128 characters
 RESULT_FIELDS = {"result", "attempt", "attempts_remaining", "feedback"} | {
     "location_result",
@@ -44,106 +43,9 @@ RESULT_FIELDS = {"result", "attempt", "attempts_remaining", "feedback"} | {
 }
 
 
-def jpeg(colour: str = "white", camera: str | None = None) -> bytes:
-    """A small JPEG; `camera` is written as its EXIF Make tag."""
-    exif = Image.Exif()
-    exif.update({} if camera is None else {0x010F: camera})
-    data = io.BytesIO()
-    Image.new("RGB", (64, 48), colour).save(data, "JPEG", exif=exif)
-    return data.getvalue()
-
-
-@pytest.fixture
-def verifying_game(
-    db: Session,
-    make_user: Callable[..., User],
-    make_game_session: Callable[..., GameSession],
-    make_session_location: Callable[..., SessionLocation],
-    playable_location_ids: Callable[..., list[UUID]],
-    fixed_daily_challenge_targets: None,
-) -> Callable[..., GameSession]:
-    """A saved game with `locations` playable locations, at the first one, which is in Stage
-    2 (or `status`) with the answer SCI333; the others are pending. The last game action was an
-    hour ago. Other keywords are for the game."""
-
-    def make(
-        locations: int = 2,
-        status: LocationStatus = LocationStatus.VERIFYING,
-        attempts_used: int = 0,
-        **fields: object,
-    ) -> GameSession:
-        game = make_game_session(make_user(), last_activity_at=AN_HOUR_AGO, **fields)
-        active = playable_location_ids(count=locations)
-        for position in range(1, locations + 1):
-            make_session_location(game, position, location_id=active[position - 1])
-        first = location(game, 1, db)
-        first.status, first.started_at = status, AN_HOUR_AGO
-        first.attempts_used = attempts_used
-        if status == LocationStatus.VERIFYING:
-            first.arrived_at = AN_HOUR_AGO
-        db.commit()
-        return game
-
-    return make
-
-
-@pytest.fixture
-def ocr_reads(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[int]]:
-    """Makes every OCR read return these boxes, after calling `during` (to change the game while
-    the photo is read); returns a list that grows by one per read."""
-
-    def read_as(*boxes: tuple[str, float], during: Callable[[], object] = list) -> list[int]:
-        reads: list[int] = []
-
-        def read_text(_image: Image.Image) -> list[TextBox]:
-            reads.append(1)
-            during()
-            return [TextBox(text, confidence) for text, confidence in boxes]
-
-        monkeypatch.setattr(verify, "read_text", read_text)
-        return reads
-
-    return read_as
-
-
-@pytest.fixture
-def upload(
-    client: TestClient,
-    db: Session,
-    auth_headers: Callable[[User], dict[str, str]],
-    stored_media_dir: Path,
-) -> Callable[..., Response]:
-    """Sends a photo to a game as its student, with an Idempotency-Key if `key` is given."""
-
-    def send(game: GameSession, data: bytes | None = None, key: str | None = None) -> Response:
-        student = db.get(User, game.student_id)
-        assert student is not None
-        key_header = {} if key is None else {"Idempotency-Key": key}
-        return client.post(
-            f"/api/v1/games/{game.id}/verification/photo",
-            files={"photo": ("sign.jpg", jpeg() if data is None else data, "image/jpeg")},
-            headers=auth_headers(student) | key_header,
-        )
-
-    return send
-
-
-def location(game: GameSession, position: int, db: Session) -> SessionLocation:
-    return db.scalars(
-        select(SessionLocation).where(
-            SessionLocation.session_id == game.id, SessionLocation.position == position
-        )
-    ).one()
-
-
 def ledger_points(row: SessionLocation, db: Session) -> list[int]:
     awards = db.scalars(select(PointsLedger.points).where(PointsLedger.source_ref == str(row.id)))
     return list(awards)
-
-
-def attempts_of(row: SessionLocation, db: Session) -> list[PhotoAttempt]:
-    query = select(PhotoAttempt).where(PhotoAttempt.session_location_id == row.id)
-    return list(db.scalars(query.order_by(PhotoAttempt.created_at)))
 
 
 def codes(body: dict[str, object]) -> list[str]:
@@ -155,15 +57,15 @@ def codes(body: dict[str, object]) -> list[str]:
 
 def test_a_photo_of_the_right_sign_completes_the_location(
     db: Session,
-    upload: Callable[..., Response],
-    verifying_game: Callable[..., GameSession],
+    send_photo: Callable[..., Response],
+    photo_game: Callable[..., GameSession],
     ocr_reads: Callable[..., list[int]],
     stored_media_dir: Path,
 ) -> None:
-    game = verifying_game()
+    game = photo_game()
     reads = ocr_reads(("SCI 333", 0.92))
 
-    response = upload(game, jpeg(camera="PhoneMaker"))
+    response = send_photo(game, jpeg(camera="PhoneMaker"))
 
     assert response.status_code == 200, response.text
     body = response.json()
@@ -177,7 +79,7 @@ def test_a_photo_of_the_right_sign_completes_the_location(
     assert "SCI333" not in response.text and "SCI 333" not in response.text
     assert len(reads) == 1
     db.expire_all()
-    first = location(game, 1, db)
+    first = location_at(game, 1, db)
     assert (first.status, first.attempts_used) == (LocationStatus.COMPLETED, 1)
     assert ledger_points(first, db) == [100]
     assert (game.total_score, game.current_position) == (100, 2)
@@ -190,16 +92,16 @@ def test_a_photo_of_the_right_sign_completes_the_location(
 
 def test_six_photos_of_another_room_fail_the_location(
     db: Session,
-    upload: Callable[..., Response],
-    verifying_game: Callable[..., GameSession],
+    send_photo: Callable[..., Response],
+    photo_game: Callable[..., GameSession],
     ocr_reads: Callable[..., list[int]],
     assert_error: Callable[[Response, int, ErrorCode], None],
 ) -> None:
-    game = verifying_game()
+    game = photo_game()
     ocr_reads(("LIB 312", 0.95))
 
     for attempt in range(1, 6):
-        body = upload(game).json()
+        body = send_photo(game).json()
         assert (body["result"], body["attempt"], body["attempts_remaining"]) == (
             "no_match",
             attempt,
@@ -208,7 +110,7 @@ def test_six_photos_of_another_room_fail_the_location(
         assert codes(body) == ["VERIFY_NO_MATCH"]
         assert body["location_result"] is body["engagement"] is body["next"] is None
         assert body["summary"] is None
-    response = upload(game)
+    response = send_photo(game)
     body = response.json()
 
     assert "LIB312" not in response.text and "LIB 312" not in response.text
@@ -218,25 +120,25 @@ def test_six_photos_of_another_room_fail_the_location(
     assert body["engagement"]["total_points"] == 0
     assert body["next"]["position"] == 2 and body["summary"] is None
     db.expire_all()
-    assert ledger_points(location(game, 1, db), db) == []
-    assert_error(upload(game), 409, ErrorCode.INVALID_STAGE)  # the game has moved on
+    assert ledger_points(location_at(game, 1, db), db) == []
+    assert_error(send_photo(game), 409, ErrorCode.INVALID_STAGE)  # the game has moved on
 
 
 def test_an_unclear_photo_uses_an_attempt(
     db: Session,
-    upload: Callable[..., Response],
-    verifying_game: Callable[..., GameSession],
+    send_photo: Callable[..., Response],
+    photo_game: Callable[..., GameSession],
     ocr_reads: Callable[..., list[int]],
 ) -> None:
-    game = verifying_game()
+    game = photo_game()
     ocr_reads(("SCI 334", 0.9))
 
-    body = upload(game).json()
+    body = send_photo(game).json()
 
     assert (body["result"], body["attempt"], codes(body)) == ("unclear", 1, ["VERIFY_UNCLEAR"])
     assert body["location_result"] is body["next"] is None
     db.expire_all()
-    first = location(game, 1, db)
+    first = location_at(game, 1, db)
     assert (first.status, first.attempts_used) == (LocationStatus.VERIFYING, 1)
 
 
@@ -252,8 +154,8 @@ def test_the_last_location_completes_the_game(
     db: Session,
     client: TestClient,
     auth_headers: Callable[[User], dict[str, str]],
-    upload: Callable[..., Response],
-    verifying_game: Callable[..., GameSession],
+    send_photo: Callable[..., Response],
+    photo_game: Callable[..., GameSession],
     ocr_reads: Callable[..., list[int]],
     sign: str,
     attempts_used: int,
@@ -261,10 +163,10 @@ def test_the_last_location_completes_the_game(
     status: str,
     points: int,
 ) -> None:
-    game = verifying_game(locations=1, attempts_used=attempts_used)
+    game = photo_game(locations=1, attempts_used=attempts_used)
     ocr_reads((sign, 0.92))
 
-    body = upload(game).json()
+    body = send_photo(game).json()
 
     assert codes(body) == [phrase, "SESSION_COMPLETE"]
     assert body["location_result"] == {"status": status, "points_awarded": points}
@@ -290,24 +192,24 @@ def test_the_last_location_completes_the_game(
 )
 def test_a_refused_file_uses_no_attempt(
     db: Session,
-    upload: Callable[..., Response],
-    verifying_game: Callable[..., GameSession],
+    send_photo: Callable[..., Response],
+    photo_game: Callable[..., GameSession],
     ocr_reads: Callable[..., list[int]],
     assert_error: Callable[[Response, int, ErrorCode], None],
     data: bytes,
     code: ErrorCode,
     key: str | None,
 ) -> None:
-    game = verifying_game()
+    game = photo_game()
     reads = ocr_reads(("SCI 333", 0.92))
 
-    assert_error(upload(game, data, key), STATUS[code], code)
+    assert_error(send_photo(game, data, key), STATUS[code], code)
 
     db.expire_all()
-    row = location(game, 1, db)
+    row = location_at(game, 1, db)
     assert (reads, row.attempts_used, attempts_of(row, db)) == ([], 0, [])
     assert game.last_activity_at == AN_HOUR_AGO  # rolled back: not a game action
-    assert upload(game, key=key).json()["attempt"] == 1  # a key can be sent again
+    assert send_photo(game, key=key).json()["attempt"] == 1  # a key can be sent again
 
 
 # All 409, checked before the file (without a key), so a GIF gets them too. The 6th attempt fails
@@ -325,17 +227,17 @@ def test_a_refused_file_uses_no_attempt(
     ],
 )
 def test_a_photo_out_of_turn_is_refused_before_ocr(
-    upload: Callable[..., Response],
-    verifying_game: Callable[..., GameSession],
+    send_photo: Callable[..., Response],
+    photo_game: Callable[..., GameSession],
     ocr_reads: Callable[..., list[int]],
     assert_error: Callable[[Response, int, ErrorCode], None],
     game_fields: dict[str, object],
     code: ErrorCode,
 ) -> None:
-    game = verifying_game(**game_fields)
+    game = photo_game(**game_fields)
     reads = ocr_reads(("SCI 333", 0.92))
 
-    assert_error(upload(game, b"GIF89a" + bytes(64)), 409, code)
+    assert_error(send_photo(game, b"GIF89a" + bytes(64)), 409, code)
 
     assert reads == []
 
@@ -347,26 +249,26 @@ def test_a_photo_out_of_turn_is_refused_before_ocr(
 )
 def test_a_repeated_key_returns_the_first_response_and_uses_no_attempt(
     db: Session,
-    upload: Callable[..., Response],
-    verifying_game: Callable[..., GameSession],
+    send_photo: Callable[..., Response],
+    photo_game: Callable[..., GameSession],
     ocr_reads: Callable[..., list[int]],
     assert_error: Callable[[Response, int, ErrorCode], None],
     locations: int,
     sign: str,
     attempts_used: int,
 ) -> None:
-    game = verifying_game(locations=locations, attempts_used=attempts_used)
+    game = photo_game(locations=locations, attempts_used=attempts_used)
     reads = ocr_reads((sign, 0.92))
-    first = upload(game, key=KEY)
+    first = send_photo(game, key=KEY)
     reads.clear()
 
-    again = upload(game, key=KEY)
+    again = send_photo(game, key=KEY)
 
     assert (first.status_code, again.status_code, reads) == (200, 200, [])  # no OCR again
     assert again.json() == first.json()
-    assert_error(upload(game, jpeg("black"), KEY), 422, ErrorCode.IDEMPOTENCY_KEY_REUSED)
+    assert_error(send_photo(game, jpeg("black"), KEY), 422, ErrorCode.IDEMPOTENCY_KEY_REUSED)
     db.expire_all()
-    row = location(game, 1, db)
+    row = location_at(game, 1, db)
     assert row.attempts_used == attempts_used + 1 and len(attempts_of(row, db)) == 1
     assert ledger_points(row, db) == ([100] if sign == "SCI 333" else [])
 
@@ -374,20 +276,20 @@ def test_a_repeated_key_returns_the_first_response_and_uses_no_attempt(
 @pytest.mark.parametrize("key", [KEY, "another-photo", None], ids=["same key", "other", "none"])
 def test_an_upload_while_a_photo_of_the_location_is_read_is_refused(
     db: Session,
-    upload: Callable[..., Response],
-    verifying_game: Callable[..., GameSession],
+    send_photo: Callable[..., Response],
+    photo_game: Callable[..., GameSession],
     ocr_reads: Callable[..., list[int]],
     make_photo_attempt: Callable[..., PhotoAttempt],
     assert_error: Callable[[Response, int, ErrorCode], None],
     key: str | None,
 ) -> None:
-    game = verifying_game()
+    game = photo_game()
     reads = ocr_reads(("SCI 333", 0.92))
     file_sha256 = sha256(jpeg()).hexdigest()
-    make_photo_attempt(location(game, 1, db), idempotency_key=KEY, content_sha256=file_sha256)
+    make_photo_attempt(location_at(game, 1, db), idempotency_key=KEY, content_sha256=file_sha256)
     db.commit()
 
-    response = upload(game, key=key)
+    response = send_photo(game, key=key)
 
     assert_error(response, 409, ErrorCode.UPLOAD_IN_PROGRESS)
     assert response.headers["Retry-After"] == "2" and reads == []
@@ -395,27 +297,27 @@ def test_an_upload_while_a_photo_of_the_location_is_read_is_refused(
 
 @pytest.mark.parametrize("key", ["", "k" * 129, "two words"], ids=["empty", "too long", "space"])
 def test_a_malformed_key_is_refused(
-    upload: Callable[..., Response],
-    verifying_game: Callable[..., GameSession],
+    send_photo: Callable[..., Response],
+    photo_game: Callable[..., GameSession],
     ocr_reads: Callable[..., list[int]],
     assert_error: Callable[[Response, int, ErrorCode], None],
     key: str,
 ) -> None:
-    game = verifying_game()
+    game = photo_game()
     ocr_reads(("SCI 333", 0.92))
 
-    assert_error(upload(game, key=key), 422, ErrorCode.VALIDATION_ERROR)
+    assert_error(send_photo(game, key=key), 422, ErrorCode.VALIDATION_ERROR)
 
 
 def test_the_attempt_is_committed_before_the_photo_is_read(
     db: Session,
-    upload: Callable[..., Response],
-    verifying_game: Callable[..., GameSession],
+    send_photo: Callable[..., Response],
+    photo_game: Callable[..., GameSession],
     ocr_reads: Callable[..., list[int]],
     transaction_calls: list[str],
 ) -> None:
-    game = verifying_game()
-    row = location(game, 1, db)
+    game = photo_game()
+    row = location_at(game, 1, db)
     commits = transaction_calls.count("commit")
     seen: list[tuple[int, str]] = []
 
@@ -424,13 +326,13 @@ def test_the_attempt_is_committed_before_the_photo_is_read(
 
     ocr_reads(("SCI 333", 0.92), during=look)
 
-    assert upload(game).status_code == 200
+    assert send_photo(game).status_code == 200
     assert seen == [(1, PhotoAttemptStatus.PROCESSING)]
 
 
 def age_the_attempt(game: GameSession, db: Session) -> None:  # as old as the timeout
     timeout = timedelta(seconds=get_settings().photo_processing_timeout_seconds)
-    for attempt in attempts_of(location(game, 1, db), db):
+    for attempt in attempts_of(location_at(game, 1, db), db):
         attempt.created_at -= timeout
 
 
@@ -445,18 +347,18 @@ def age_the_attempt(game: GameSession, db: Session) -> None:  # as old as the ti
 )
 def test_a_result_is_dropped_when_the_location_changed_during_ocr(
     db: Session,
-    upload: Callable[..., Response],
-    verifying_game: Callable[..., GameSession],
+    send_photo: Callable[..., Response],
+    photo_game: Callable[..., GameSession],
     ocr_reads: Callable[..., list[int]],
     assert_error: Callable[[Response, int, ErrorCode], None],
     change: Callable[[GameSession, Session], object],
     code: ErrorCode,
 ) -> None:
-    game = verifying_game()
-    row = location(game, 1, db)
+    game = photo_game()
+    row = location_at(game, 1, db)
     ocr_reads(("SCI 333", 0.92), during=lambda: (change(game, db), db.commit()))
 
-    response = upload(game, key=KEY)
+    response = send_photo(game, key=KEY)
 
     assert_error(response, STATUS[code], code)
     assert response.headers.get("Retry-After") == ("5" if code == ErrorCode.OCR_BUSY else None)
@@ -476,24 +378,24 @@ def fail(*_args: object) -> None:
 )
 def test_a_server_error_releases_the_attempt(
     db: Session,
-    upload: Callable[..., Response],
-    verifying_game: Callable[..., GameSession],
+    send_photo: Callable[..., Response],
+    photo_game: Callable[..., GameSession],
     ocr_reads: Callable[..., list[int]],
     monkeypatch: pytest.MonkeyPatch,
     module: object,
     step: str,
 ) -> None:
-    game = verifying_game()
+    game = photo_game()
     ocr_reads(("SCI 333", 0.92))
     monkeypatch.setattr(module, step, fail)
 
     with pytest.raises(RuntimeError, match="server error"):
-        upload(game, key=KEY)
+        send_photo(game, key=KEY)
 
     db.expire_all()
-    row = location(game, 1, db)
+    row = location_at(game, 1, db)
     assert (row.attempts_used, ledger_points(row, db)) == (0, [])  # nothing counted is kept
     assert [attempt.status for attempt in attempts_of(row, db)] == [PhotoAttemptStatus.ERROR]
     monkeypatch.undo()
     ocr_reads(("SCI 333", 0.92))
-    assert upload(game, key=KEY).json()["attempt"] == 1  # the key can be sent again
+    assert send_photo(game, key=KEY).json()["attempt"] == 1  # the key can be sent again
