@@ -55,7 +55,7 @@ from app.engagement.classes import (
     list_staff_classes,
     update_class_settings,
 )
-from app.engagement.daily_challenges import ensure_daily_challenges
+from app.engagement.daily_challenges import ensure_daily_challenges, list_daily_challenges
 from app.engagement.leaderboard import LeaderboardEntry, get_class_leaderboard
 from app.engagement.stats import (
     GameEngagement,
@@ -70,6 +70,7 @@ from app.engagement.streaks import (
     app_calendar_date,
     award_streak_milestones,
     challenge_expiry,
+    get_stored_streak,
     record_active_day,
     visible_streak,
 )
@@ -100,6 +101,8 @@ __all__ = [
     "challenge_expiry",
     "ensure_daily_challenges",
     "get_and_report_streak",
+    "get_stored_streak",
+    "list_daily_challenges",
     "visible_streak",
     "EngagementResult",
     "apply_location_result",

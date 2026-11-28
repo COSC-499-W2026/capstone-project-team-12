@@ -42,6 +42,14 @@ def visible_streak(stats: UserStats | None, *, today: date | None = None) -> int
     )
 
 
+def get_stored_streak(student_id: UUID, db: Session) -> UserStats | None:
+    """The student's streak as last stored, or None before their first completed location.
+
+    For the export of their account: unlike get_and_report_streak, it changes nothing.
+    """
+    return db.get(UserStats, student_id)
+
+
 def challenge_expiry(challenge_date: date) -> datetime:
     """Return the UTC instant when this local challenge day ends."""
     zone = ZoneInfo(get_settings().app_timezone)

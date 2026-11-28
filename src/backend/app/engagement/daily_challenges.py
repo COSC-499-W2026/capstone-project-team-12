@@ -141,3 +141,12 @@ def ensure_daily_challenges(
     db.add_all(new_challenges)
     db.flush()
     return tuple(by_slot[slot] for slot in (1, 2, 3))
+
+
+def list_daily_challenges(student_id: UUID, db: Session) -> list[DailyChallenge]:
+    """Every daily challenge the student was given, oldest day first, with its progress.
+
+    For the export of their account: unlike ensure_daily_challenges, it never creates any.
+    """
+    challenges = select(DailyChallenge).where(DailyChallenge.user_id == student_id)
+    return list(db.scalars(challenges.order_by(DailyChallenge.challenge_date, DailyChallenge.slot)))
