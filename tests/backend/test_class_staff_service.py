@@ -17,7 +17,14 @@ from app.errors import AppError, ErrorCode
 from app.models.accounts import INVITATION_TTL, ClassStaff, ClassStaffInvitation, User
 from app.models.email import EmailOutbox
 from app.models.engagement import ACCESS_CODE_ALPHABET, AccessCode, Class, ClassEnrollment
-from app.models.enums import ClassStaffRole, EmailKind, InvitationStatus, Language, UserRole
+from app.models.enums import (
+    ClassStaffRole,
+    EmailKind,
+    EmailStatus,
+    InvitationStatus,
+    Language,
+    UserRole,
+)
 from app.services.email_sender import OutgoingMail, send_due_emails
 
 
@@ -95,22 +102,44 @@ def test_inviting_again_while_pending_returns_the_same_invitation(
     assert len(invitation_emails(db, teacher)) == 1
 
 
-class _NoMailer:
+class _Mailer:
+    def __init__(self) -> None:
+        self.sent: list[OutgoingMail] = []
+
     def send(self, mail: OutgoingMail) -> None:
-        pass
+        self.sent.append(mail)
 
 
-def test_the_7_days_start_when_the_invitation_email_is_sent(
+def test_the_invitation_email_has_no_link_and_the_7_days_start_when_it_is_sent(
     db: Session, make_user: Callable[..., User], school_class: Class, owner: User
 ) -> None:
-    invitation = invite_assistant(school_class.id, owner.id, make_user().email, db)
+    student = make_user()
+    invitation = invite_assistant(school_class.id, owner.id, student.email, db)
     invitation.expires_at = datetime.now(UTC) + timedelta(days=1)  # as if queued 6 days ago
     db.flush()
+    mailer = _Mailer()
 
-    send_due_emails(_NoMailer(), db)
+    send_due_emails(mailer, db)
 
+    [mail] = mailer.sent
+    assert (mail.to_email, mail.kind, mail.token) == (student.email, EmailKind.TA_INVITATION, None)
     db.refresh(invitation)
     assert invitation.expires_at > datetime.now(UTC) + INVITATION_TTL - timedelta(minutes=1)
+
+
+def test_an_invitation_cancelled_before_its_email_is_sent_gets_no_email(
+    db: Session, make_user: Callable[..., User], school_class: Class, owner: User
+) -> None:
+    student = make_user()
+    invite_assistant(school_class.id, owner.id, student.email, db)
+    remove_assistant(school_class.id, student.email, db)
+    mailer = _Mailer()
+
+    send_due_emails(mailer, db)
+
+    assert mailer.sent == []
+    [email] = invitation_emails(db, student)
+    assert email.status == EmailStatus.FAILED  # given up, so the job won't try it again
 
 
 def test_only_staff_and_student_accounts_outside_the_class_staff_can_be_invited(
